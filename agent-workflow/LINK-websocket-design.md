@@ -1,45 +1,85 @@
-# Design proposal (not built): the relay over a WebSocket to a Durable Object
+# Agents Hub WebSocket design — 2026-10-09
 
-Status: draft for the user's review, 2026-10-09. Nothing here is implemented.
+Status: implementation in progress. Deployment and acceptance evidence are recorded separately.
 
-## Why
+## Architecture and boundaries
 
-The current relay is a D1 queue the Mac polls. It works, but every request waits for the next poll (0–3 s), each
-poll is a Worker request, and the queue needs expiry, cleanup and a heartbeat table. Cloudflare's supported shape for
-"a client that stays connected" is a WebSocket to a Durable Object (DO) with hibernation: the connection costs
-nothing while idle, and the DO can push a request the moment it arrives.
+ChatGPT/Dot → Access OAuth → Worker MCP → SQLite Durable Object AgentRelay ← outbound WebSocket ← foreground Mac Terminal.
+D1 snapshots remain the offline fallback. The current App identity, tools, schemas and dashboard remain.
+No launchd/login service, automatic polling fallback or additional allowed agents. Local shell-free execution,
+sandbox/remote guard, off switch, request journal, confirmation codes and redaction remain authoritative.
+Hibernation avoids idle duration charges; requests, storage and snapshot traffic are not cost-free.
 
-## Shape
+## Identity and durability
 
-```
-ChatGPT / Dot / claude.ai ──OAuth (Access)──▶ Worker /mcp ──▶ Durable Object "relay" ──WebSocket──▶ agent link serve (Mac)
-                                                    │                                    (outbound, foreground Terminal)
-                                                    └─ D1 snapshots (unchanged, offline fallback)
-```
+Logical identity is request_id + operation + canonical semantic arguments. Version-2 SHA-256 fingerprints sort
+object keys recursively, preserve array order/values, and exclude request_id and confirmation credentials.
+Transport attempt IDs, socket/process sessions and expiry are separate. Explicit retries have a fresh 20-second
+attempt; concurrent duplicates share a pending attempt. This is a command deadline, not an agent lifetime.
+start_run promptly returns run_id; later calls retrieve its output.
 
-- `agent link serve` opens one outbound WebSocket to `/relay/connect` with the separate relay token (unchanged
-  credential split). One connection at a time; a new one replaces the old.
-- The Worker forwards each relay tool call to the DO, which sends `{id, operation, args, deadline}` over the socket
-  and awaits `{id, result}` (deadline 20 s). "Mac online" = a socket is connected; no heartbeat table.
-- Everything the Mac enforces stays the same and stays on the Mac: allowlist, off switch, shell-free remote agents,
-  remote guard, request-id journal (at-most-once), confirmation codes, redaction, size limits.
-- The DO keeps nothing durable except, optionally, the last few results for request-id replay (in DO storage, with
-  an alarm to delete them after 5 min) — replacing the D1 `relay_jobs` table and the cron.
+Legacy receipts verify their original JSON.stringify hash first, then atomically add the canonical fingerprint.
+Without the original argument ordering, an unupgraded legacy hash cannot safely be reconstructed: fail closed.
+Never discard an old claim. Both bridge and WebSocket clients read both formats.
 
-## What it removes / adds
+At-most-once mutation execution holds per stable request identity while the authoritative local journal remains
+intact. It is neither exactly-once delivery nor guaranteed completion. Durable dispatch precedes sending;
+durable completion precedes acknowledgement. Late results do not need an in-memory waiter. Validate against
+retained dispatch records and session/socket fencing. Transport ambiguity, interrupted local claims and terminal
+results are distinct; only actual terminal results are cached as completed.
 
-- Removes: `relay_jobs`, `relay_status`, migration 0002, the minutely cron, poll loop and backoff.
-- Adds: one DO class (~80 lines), a WebSocket client in `link.mjs` with reconnect (exponential backoff, capped).
-- Unchanged: OAuth, tools and schemas (`relay-contract.mjs`), dashboard, snapshot publishing.
+Retain cloud request/attempt records until five minutes after the first attempt deadline. Retries do not extend
+that record's anchor. The local journal remains authoritative after cloud eviction. Do not durably store args.
+Use the single DO alarm for the earliest expiry; cleanup is idempotent and stops when no records remain.
 
-## Open questions for the user
+## Sessions and protocol
 
-1. Is the extra Cloudflare piece (a Durable Object) acceptable? DOs with WebSocket hibernation are on the free plan.
-2. Keep D1 as a fallback transport, or remove it once the DO version is verified?
-3. Same foreground-only rule (`agent link serve` in a visible Terminal) — assumed yes.
+GET /relay/connect requires the existing machine bearer token in an Authorization header. Authenticate and
+validate the versioned ownership/status handshake before evicting any healthy connection. The handshake is
+carried in x-relay-hello so rejection happens before upgrade. Server hello acknowledges the socket identity.
 
-## Verification plan
+Each process has one random session ID and sends acquire at most once. Ordinary reconnects send resume, accepted
+only for the durable current owner. A superseded session stops even if it missed the replacement close frame.
+Lost acquisition acknowledgement is recovered by resume of the same session, never automatic reacquisition.
+A fresh manual process start can acquire. Each socket receives a new ID; fence every message by both identities.
 
-Unit tests with a fake socket; a live test: start a `helper` run from the hosted panel, kill and restart
-`agent link serve` mid-request (expect "may have completed; retry with the same request_id" and a journal replay),
-and check Worker request counts for an idle hour.
+Version 1 messages: server hello/request/ack; Mac status/result. Request fields retain id, operation, args, expires,
+plus attempt/session/socket. Results distinguish terminal, interrupted, and rejected errors.
+
+Constants: 10s HTTP/hello handshake; 20s attempt; 32 outstanding operations; 262144 UTF-8 bytes per complete message;
+230000 bytes per serialized result; 10s Mac keepalive; 30s freshness; jittered exponential reconnect 1–30s.
+ws explicitly disables redirects and compression and sets handshakeTimeout/maxPayload. Bound full messages, not
+character counts. Serialize commands on the Mac; expiry is checked again before executing a queued command.
+
+Mac timer → static ping → setWebSocketAutoResponse. Hosted freshness uses getWebSocketAutoResponseTimestamp on
+demand. No DO heartbeat timer or D1 heartbeat writes. Attachments restore socket state after hibernation; only
+active command waiters use timers. Snapshot publication stays independent and runs every minute. Local config
+changes send status updates; every command rereads config. Ctrl-C closes the socket, cancels timers and drops
+unstarted commands; already started agents may finish.
+
+## Bridge rollout and recovery
+
+1. Deploy/verify a polling bridge containing the DO class/binding plus compatible local journal handling. Record
+   the deployed version, matching polling-client commit and configuration. Keep the D1 cleanup trigger.
+2. Deploy the WebSocket transport without another DO lifecycle change. Stop admission, drain/classify commands,
+   stop the visible polling client, and start the visible WebSocket client. Verify hosted helper execution.
+3. Remove active polling routes/queries and cron; keep migration 0002 and empty obsolete table schemas.
+
+Rollback must target the bridge, not a pre-DO version: Cloudflare blocks rollback across DO lifecycle changes.
+Resource data is not rolled back. Restore matching polling client and explicitly verify/reinstate cleanup cron.
+Rehearse the actual cf commands on an isolated Worker. If rollback is unavailable, forward-deploy bridge logic
+with unchanged DO declarations. Never replay ambiguous mutations automatically. Preserve local journal data.
+
+## Acceptance
+
+Real Workers-runtime coverage: storage ordering; late results after timeout; fresh retry deadlines; canonical and
+legacy receipts; conflicts; interrupted claims; restart/hibernation; ownership replacement including lost close;
+invalid clients cannot evict; duplicate alarms; saturation; UTF-8 limits; handshake timeout/redirect rejection.
+Local client tests cover serialized commands, acknowledgements, backoff, Ctrl-C, configuration refresh and expiry.
+Run existing suites, a hosted helper test and inspect its local receipt. Do not resend the user's pending Dot test.
+Rehearse WebSocket → bridge → WebSocket including cleanup triggers. Idle measurements exclude intentional minute
+snapshots: target zero relay polling and D1 heartbeat writes, not zero Worker requests.
+
+References: https://developers.cloudflare.com/durable-objects/best-practices/websockets/
+https://developers.cloudflare.com/durable-objects/concepts/durable-object-lifecycle/
+https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/

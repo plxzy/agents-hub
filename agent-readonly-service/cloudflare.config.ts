@@ -1,4 +1,4 @@
-import { bindings, defineConfig, triggers } from "cf/config";
+import { bindings, defineConfig, triggers, exports } from "cf/config";
 
 // HUB_NAME / HUB_ACCESS_AUD deploy a second copy (e.g. agents-hub-next) behind its own Access application.
 const name = process.env.HUB_NAME ?? "agents-hub";
@@ -10,8 +10,10 @@ export default defineConfig({
 		compatibilityDate: "2026-10-01",
 		compatibilityFlags: ["global_fetch_strictly_public"],
 		entrypoint: "src/worker.mjs",
+		exports: { AgentRelay: exports.durableObject({ storage: "sqlite" }) },
 		triggers: [triggers.scheduled({ schedule: "* * * * *" })],
 		env: {
+			RELAY: bindings.durableObject({ worker: name, exportName: "AgentRelay" }),
 			ACCESS_ISSUER: bindings.text("https://YOUR-TEAM.cloudflareaccess.com"),
 			ACCESS_AUD: bindings.text(accessAud),
 			STALE_AFTER_MS: bindings.text("900000"),

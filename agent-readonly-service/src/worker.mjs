@@ -1,3 +1,4 @@
+export { AgentRelay } from './agent-relay.mjs';
 import dashboardHtml from 'virtual:agents-hub-dashboard';
 import { hubFetch } from './worker-core.mjs';
 

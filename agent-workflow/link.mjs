@@ -9,6 +9,7 @@ import { callOp, defaultContext, dashboardData } from './ops.mjs';
 import { getAgent } from './agent.mjs';
 import { RELAY_OPS, validateRelay } from './relay-contract.mjs';
 import { containsSecret } from '../agent-readonly-service/src/snapshot.mjs';
+import { fingerprintText, encode, WIRE } from './relay-wire.mjs';
 import { publish } from '../agent-readonly-service/publisher.mjs';
 
 export const LINK_DIR = path.join(os.homedir(), '.config/agent-readonly');
@@ -19,11 +20,16 @@ export function readLink(file = LINK_CONFIG) {
   if (!Array.isArray(c.agents) || c.agents.some((a) => typeof a !== 'string')) throw new Error('Invalid remote allowlist');
   return c;
 }
+function syncDirectory(dir) {
+  const fd = fs.openSync(dir, 'r');
+  try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+}
 function save(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const temp = file + '.tmp';
-  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+  fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flush: true });
   fs.renameSync(temp, file);
+  syncDirectory(path.dirname(file));
 }
 // Best-effort redaction supplements the agent sandbox. No raw event/transcript files cross the relay.
 function scrub(value) {
@@ -64,25 +70,26 @@ export async function executeJob(job, { config, ctx = defaultContext(), journal 
   const { request_id, confirm, ...args } = job.args;
   const op = RELAY_OPS[job.operation];
   if (!op.read && request_id !== job.id) throw new Error('Request id mismatch');
+  const fingerprint = createHash('sha256').update(job.operation + '\n' + JSON.stringify(job.args)).digest('hex');
+  const fingerprintV2 = createHash('sha256').update(fingerprintText(job.operation, job.args)).digest('hex');
+  const receipt = path.join(journal, job.id + '.json');
+  if (!op.read && fs.existsSync(receipt)) {
+    const old = JSON.parse(fs.readFileSync(receipt, 'utf8'));
+    if (old.fingerprintV2 ? old.fingerprintV2 !== fingerprintV2 : old.fingerprint !== fingerprint) throw new Error('Request id conflict (legacy receipts require original argument ordering)');
+    if (!old.fingerprintV2) save(receipt, { ...old, fingerprintV2 });
+    if (old.state !== 'done') throw new Error('Previous attempt interrupted; inspect local runs/reviews. It will not be executed again.');
+    return old.value;
+  }
   if (job.operation === 'start_run') {
     if (config.enabled !== true || !config.agents.includes(args.agent)) throw new Error('Remote runs disabled or agent not allowed on this Mac');
     const agent = getAgent(args.agent, ctx.root);
     if (agent.workspace === 'here') throw new Error('Remote workspace: here agents are not supported yet');
     if (!remoteSafe(agent)) throw new Error('Agents with a shell or file-changing tools cannot be started remotely');
   }
-  const fingerprint = createHash('sha256').update(job.operation + '\n' + JSON.stringify(job.args)).digest('hex');
-  const receipt = path.join(journal, job.id + '.json');
   if (!op.read) {
     fs.mkdirSync(journal, { recursive: true, mode: 0o700 });
-    try {
-      fs.writeFileSync(receipt, JSON.stringify({ fingerprint, state: 'claimed' }), { flag: 'wx', mode: 0o600 });
-    } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
-      const old = JSON.parse(fs.readFileSync(receipt, 'utf8'));
-      if (old.fingerprint !== fingerprint) throw new Error('Request id conflict');
-      if (old.state !== 'done') throw new Error('Previous attempt interrupted; inspect local runs/reviews. It will not be executed again.');
-      return old.value;
-    }
+    fs.writeFileSync(receipt, JSON.stringify({ fingerprint, fingerprintV2, state: 'claimed' }), { flag: 'wx', mode: 0o600, flush: true });
+    syncDirectory(journal);
   }
   try {
     if (job.operation === 'review_decide') redeem(confirm, 'review', args.id);
@@ -108,8 +115,8 @@ export async function executeJob(job, { config, ctx = defaultContext(), journal 
     if (job.operation === 'start_run') save(path.join(journal, 'runs', value.run_id + '.json'), { request_id: job.id });
   }
   value = scrub(value);
-  if (JSON.stringify(value).length > 230000) throw new Error('Result too large for relay; inspect it locally');
-  if (!op.read) save(receipt, { fingerprint, state: 'done', value });
+  encode(value, WIRE.resultBytes);
+  if (!op.read) save(receipt, { fingerprint, fingerprintV2, state: 'done', value });
   return value;
 }
 

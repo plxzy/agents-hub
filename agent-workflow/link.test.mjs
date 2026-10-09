@@ -72,3 +72,33 @@ test('decisions need a one-time code that only panel_data hands out', async (t) 
   confirmations.set('d'.repeat(24), { kind: 'rate', target: 'p-1', expires: Date.now() + 60000 });
   await assert.rejects(decide('request-kind', 'd'.repeat(24)), /click in the Agents Hub panel/); // wrong kind
 });
+
+test('canonical receipts ignore property order and transport expiry; semantic conflicts fail', async (t) => {
+  const f = fixture(t); let calls = 0; f.execute = async () => { calls++; return { run_id: 'r-canonical' }; };
+  const first = job('canonical-123'); await executeJob(first, f);
+  const retry = { ...first, expires: Date.now() + 20000, args: { task: first.args.task, request_id: first.id, agent: 'helper' } };
+  assert.deepEqual(await executeJob(retry, f), { run_id: 'r-canonical' });
+  assert.equal(calls, 1);
+  await assert.rejects(executeJob({ ...retry, args: { ...retry.args, task: 'changed' } }, f), /conflict/);
+});
+test('legacy receipts upgrade only after their original hash matches; claims never rerun', async (t) => {
+  const f = fixture(t); const { createHash } = await import('node:crypto');
+  const first = job('legacy-123');
+  const fingerprint = createHash('sha256').update(first.operation + '\n' + JSON.stringify(first.args)).digest('hex');
+  fs.mkdirSync(f.journal, { recursive: true });
+  const file = path.join(f.journal, first.id + '.json');
+  fs.writeFileSync(file, JSON.stringify({ fingerprint, state: 'done', value: { run_id: 'r-legacy' } }));
+  f.execute = () => { throw new Error('must not execute'); };
+  const reordered = { ...first, args: { task: first.args.task, agent: 'helper', request_id: first.id } };
+  await assert.rejects(executeJob(reordered, f), /legacy receipts/);
+  assert.deepEqual(await executeJob(first, f), { run_id: 'r-legacy' });
+  assert.deepEqual(await executeJob(reordered, f), { run_id: 'r-legacy' });
+  const upgraded = JSON.parse(fs.readFileSync(file)); assert.equal(upgraded.fingerprint, fingerprint); assert.ok(upgraded.fingerprintV2);
+  fs.writeFileSync(file, JSON.stringify({ fingerprint, state: 'claimed' }));
+  await assert.rejects(executeJob(first, f), /will not be executed again/);
+});
+test('a completed receipt remains recoverable when remote starts are subsequently disabled', async (t) => {
+  const f = fixture(t); f.execute = async () => ({ run_id: 'r-done' });
+  await executeJob(job('off-replay'), f);
+  assert.deepEqual(await executeJob(job('off-replay'), { ...f, config: { enabled: false, agents: [] } }), { run_id: 'r-done' });
+});
