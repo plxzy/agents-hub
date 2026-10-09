@@ -1,6 +1,5 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +24,10 @@ export function freezeLinuxTools(state) {
 
 export function linuxPolicy(agent, state) {
   const workspace = fs.realpathSync(agent.workspace);
+  // A whole-workspace mount must never broaden a here_write or read-only agent.
+  if (!(agent.writePaths ?? []).some(p => {
+    try { return inside(fs.realpathSync(p), workspace); } catch { return false; }
+  })) throw new Error('Linux execution requires an explicitly writable whole workspace');
   const { dir, revision } = freezeLinuxTools(state);
   if (inside(workspace, dir)) throw new Error('Trusted tool release must be outside the workspace');
   const result = spawnSync('sh', ['-c', 'command -v pi'], { encoding: 'utf8' });
@@ -43,6 +46,7 @@ export function linuxPolicy(agent, state) {
   for (const name of ['space-mirror', '.context']) protectedPaths.push(path.join(workspace, name));
   return { workspace, release: dir, release_revision: revision, runtime,
     sdk: path.join(packageDir, 'dist/index.js'), timeout_ms: 600_000, output_bytes: 1_048_576,
+    readonly: (agent.skills === 'none' ? [] : agent.skills ?? []).map(p => fs.realpathSync(p)).filter(p => !inside(workspace, p)),
     protected: protectedPaths.filter(p => fs.existsSync(p)).map(p => fs.realpathSync(p)).filter(p => inside(workspace, p)) };
 }
 
@@ -55,6 +59,7 @@ export function sandboxArgs(policy) {
     '--dev', '/dev', '--dir', '/proc', '--tmpfs', '/tmp', '--dir', '/tmp/home',
     '--bind', policy.workspace, policy.workspace,
     '--ro-bind', policy.release, policy.release, '--ro-bind', policy.runtime, policy.runtime,
+    ...(policy.readonly ?? []).flatMap(p => ['--ro-bind', p, p]),
     ...policy.protected.flatMap(p => ['--ro-bind', p, p]),
     '--setenv', 'HOME', '/tmp/home', '--setenv', 'TMPDIR', '/tmp',
     '--setenv', 'PATH', '/opt/node-vm/bin:/usr/local/bin:/usr/bin:/bin',

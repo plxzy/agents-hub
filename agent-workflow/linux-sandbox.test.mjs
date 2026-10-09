@@ -22,7 +22,9 @@ test('real Linux tools isolate secrets, protect files, support loopback and kill
   const secret = path.join(base, 'synthetic-secret'); fs.writeFileSync(secret, 'SYNTHETIC_MARKER');
   fs.symlinkSync(secret, path.join(workspace, 'escape'));
   const protectedFile = path.join(workspace, 'protected'); fs.writeFileSync(protectedFile, 'original');
-  const p = linuxPolicy({ workspace, protectPaths: [protectedFile] }, path.join(base, 'state'));
+  assert.throws(() => linuxPolicy({ workspace, writePaths: [] }, path.join(base, 'state')), /explicitly writable/);
+  assert.throws(() => linuxPolicy({ workspace, writePaths: [protectedFile] }, path.join(base, 'state')), /explicitly writable/);
+  const p = linuxPolicy({ workspace, writePaths: [workspace], protectPaths: [protectedFile] }, path.join(base, 'state'));
   const write = await sandboxExecute(p, 'write', { path: 'file.txt', content: 'hello' });
   assert.ok(write.content);
   assert.match(JSON.stringify(await sandboxExecute(p, 'read', { path: 'file.txt' })), /hello/);

@@ -267,6 +267,7 @@ export function rejectCandidate(id, { root = ROOT, reason } = {}) {
 
 export function buildSystemPrompt(agent, memories) {
   const parts = [`# Agent: ${agent.name}\n\n${agent.instructions}`];
+  if (agent.linuxPolicy) parts.push(`## Current host boundary (dok-dev)\nThis is the Linux development executor. The only writable project is ${agent.workspace}. Reviewed knowledge and skills are versioned read-only snapshots. Mac paths and activity in historical notes describe the Mac, not this host. Do not infer Mac activity or live Space state. Use the explicit skill paths supplied here. Changes to agent definitions must be proposed in the project for operator review; the active knowledge snapshot cannot be changed. Shell networking is isolated except sandbox-local loopback. Model inference uses the selected provider. Installing or activating supervisor changes is an operator action.`);
   if (memories.length) {
     parts.push('## Remembered (reviewed by the user)\n\nThese notes are your long-term memory; they are already here, so answer questions about your memory from this list without searching files.\n\n' + memories
       .map((m) => `- [${m.meta.id}] (${m.meta.scope}) ${m.body.replace(/\n+/g, ' ')}`).join('\n'));
