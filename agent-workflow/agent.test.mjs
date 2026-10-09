@@ -7,7 +7,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
-  acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
+  agentEnv, assertSandboxAllowed, commitHome, piCommand, acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
   loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent, formatAgentListEntry, resolveWorkspace, sessionDirectory, sandboxProfile,
 } from './agent.mjs';
 
@@ -42,6 +42,45 @@ const reply = (text) => [
   { type: 'tool_execution_start', toolName: 'ls' },
   { type: 'message_end', message: { role: 'assistant', provider: 'p', model: 'm', content: [{ type: 'text', text }], usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.001 } } } },
 ];
+
+test('nested sandbox launches fail before spawning or writing run state', async (t) => {
+  const { root, state } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const original = process.env.AGENT_SANDBOXED;
+  t.after(() => { if (original === undefined) delete process.env.AGENT_SANDBOXED; else process.env.AGENT_SANDBOXED = original; });
+  const agent = loadAgents(root)[0];
+  agent.writePaths = [root];
+  assert.equal(agentEnv(agent).AGENT_SANDBOXED, '1');
+  assertSandboxAllowed(agent, 'agent chat demo', {});
+  process.env.AGENT_SANDBOXED = '1';
+  assert.throws(() => piCommand(agent, []), /cannot start a sandboxed agent from inside a sandbox/);
+  assert.throws(() => assertSandboxAllowed(agent, 'agent chat demo'), /ask the user to run: agent chat demo/);
+  assert.deepEqual(piCommand({ ...agent, writePaths: null }, []), ['pi', []]);
+  fs.writeFileSync(agent.file, `---\nname: demo\nworkspace: ${root}\nwrite_paths: ${root}\n---\nBe brief.\n`);
+  await assert.rejects(runAgent('demo', 'q', { root, state, spawn: () => assert.fail('must not spawn') }), /ask the user to run: agent run demo "q"/);
+  assert.equal(fs.existsSync(state), false);
+});
+
+test('commitHome excludes pending candidates, including already staged changes', (t) => {
+  const { root } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+  git('init', '-q');
+  git('config', 'user.name', 'test'); git('config', 'user.email', 'test@example.com');
+  fs.mkdirSync(path.join(root, 'memory/candidates'), { recursive: true });
+  const candidate = path.join(root, 'memory/candidates/pending.md');
+  fs.writeFileSync(candidate, 'old');
+  git('add', '-A'); git('commit', '-qm', 'initial');
+  fs.writeFileSync(candidate, 'pending');
+  fs.writeFileSync(path.join(root, 'memory/candidates/new.md'), 'new');
+  git('add', '-A');
+  fs.appendFileSync(path.join(root, 'agents/demo.md'), 'Changed.\n');
+  assert.equal(commitHome('definition only', root), true);
+  assert.equal(git('show', 'HEAD:memory/candidates/pending.md').stdout, 'old');
+  assert.notEqual(git('show', 'HEAD:memory/candidates/new.md').status, 0);
+  assert.equal(fs.readFileSync(candidate, 'utf8'), 'pending');
+  assert.equal(git('diff', '--cached', '--name-only').stdout, '');
+});
 
 test('parses frontmatter lists and scalars', () => {
   const { meta, body } = parseFrontmatter('---\na: 1\nb: [x, y]\n---\nhello\n');

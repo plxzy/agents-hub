@@ -7,6 +7,7 @@ import path from 'node:path';
 import {
   ROOT, STATE, acceptCandidate, commitHome, extractRemember, formatFrontmatter, getAgent, list,
   listCandidates, listRuns, loadMemory, newId, parseFrontmatter, rejectCandidate, runAgent, saveCandidates, summarize,
+  assertSandboxAllowed, resolveWorkspace,
 } from './agent.mjs';
 
 // ---------- feedback ----------
@@ -39,9 +40,11 @@ export function addEval(agent, question, { include = [], exclude = [], run = [],
   const id = newId('e');
   const dir = evalDir(agent, root);
   fs.mkdirSync(dir, { recursive: true });
-  const meta = { id, agent, must_include: include.length ? include.join(', ') : undefined,
-    must_not_include: exclude.length ? exclude.join(', ') : undefined, must_run: run.length ? run.join(', ') : undefined,
-    must_not_run: notRun.length ? notRun.join(', ') : undefined, max_tools: maxTools ?? undefined, why };
+  // JSON arrays preserve regex commas and escapes; legacy comma-list files still load.
+  const patterns = (values) => values.length ? JSON.stringify(values) : undefined;
+  const meta = { id, agent, must_include: patterns(include),
+    must_not_include: patterns(exclude), must_run: patterns(run),
+    must_not_run: patterns(notRun), max_tools: maxTools ?? undefined, why };
   fs.writeFileSync(path.join(dir, `${id}.md`), formatFrontmatter(meta, question));
   return id;
 }
@@ -63,6 +66,7 @@ export function checkCase(c, { output, toolCalls, commands = [] }) {
 
 export async function runEvals(name, { root = ROOT, state = STATE, run = runAgent } = {}) {
   const agent = getAgent(name, root);
+  assertSandboxAllowed(resolveWorkspace(agent), `agent eval ${name}`);
   const cases = loadEvals(name, root);
   if (!cases.length) throw new Error(`no eval cases for ${name}; add one with: agent eval add ${name} "<question>" --include ...`);
   const results = [];
@@ -272,6 +276,16 @@ export function rejectProposal(id, reason, { root = ROOT } = {}) {
 
 const flag = (args, name) => { const i = args.indexOf(name); return i === -1 ? undefined : args.splice(i, 2)[1]; };
 
+export function regexFlags(args, name) {
+  const values = [];
+  while (args.includes(name)) {
+    const i = args.indexOf(name);
+    if (args[i + 1] === undefined || args[i + 1].startsWith('--')) throw new Error(`${name} requires a regex`);
+    values.push(args.splice(i, 2)[1]);
+  }
+  return values.length === 1 && !values[0].includes('{') ? list(values[0]) : values;
+}
+
 export async function cli(cmd, args) {
   if (cmd === 'feedback') {
     const [ref, rating, ...comment] = args;
@@ -279,8 +293,8 @@ export async function cli(cmd, args) {
     console.log(`${run.run_id} rated ${rating}. The coach sees this on the next: agent reflect ${run.agent}`);
   } else if (cmd === 'eval' && args[0] === 'add') {
     const rest = args.slice(1);
-    const include = list(flag(rest, '--include')); const exclude = list(flag(rest, '--exclude')); const max = flag(rest, '--max-tools');
-    const run = list(flag(rest, '--run')); const notRun = list(flag(rest, '--not-run'));
+    const include = regexFlags(rest, '--include'); const exclude = regexFlags(rest, '--exclude'); const max = flag(rest, '--max-tools');
+    const run = regexFlags(rest, '--run'); const notRun = regexFlags(rest, '--not-run');
     const [agent, ...q] = rest;
     getAgent(agent);
     console.log(addEval(agent, q.join(' '), { include, exclude, run, notRun, maxTools: max === undefined ? null : Number(max) }));

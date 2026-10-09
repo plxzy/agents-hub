@@ -23,9 +23,10 @@ export function parseFrontmatter(text) {
     const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
     if (!kv) continue;
     const raw = kv[2].trim();
-    meta[kv[1]] = raw.startsWith('[') && raw.endsWith(']')
-      ? raw.slice(1, -1).split(',').map((s) => s.trim()).filter(Boolean)
-      : raw;
+    if (raw.startsWith('[') && raw.endsWith(']')) {
+      try { meta[kv[1]] = JSON.parse(raw); }
+      catch { meta[kv[1]] = raw.slice(1, -1).split(',').map((s) => s.trim()).filter(Boolean); }
+    } else meta[kv[1]] = raw;
   }
   return { meta, body: match[2].trim() };
 }
@@ -131,7 +132,9 @@ export function sessionDirectory(agent, state = STATE, kind = 'task') {
 export function commitHome(message, root = ROOT) {
   if (!fs.existsSync(path.join(root, '.git'))) return false;
   const git = (...a) => spawnSync('git', ['-C', root, ...a], { encoding: 'utf8' });
-  git('add', '-A');
+  git('add', '-A', '--', '.', ':(exclude)memory/candidates/');
+  // Pending notes are user-owned, even if a caller already staged them.
+  git('reset', '-q', 'HEAD', '--', 'memory/candidates/');
   return git('commit', '-q', '-m', message).status === 0;
 }
 
@@ -246,6 +249,7 @@ const guardArgs = (agent) => (agent.guard ? ['-e', path.join(GUARDS, `${agent.gu
 /** Environment for the Pi process: guards read the allowed sudo prefixes and protected paths from it. */
 export const agentEnv = (agent, root = ROOT) => ({
   ...process.env,
+  ...(agent.writePaths ? { AGENT_SANDBOXED: '1' } : {}),
   AGENT_SUDO_ALLOW: JSON.stringify(agent.sudoAllow.map((p) => `sudo -n ${p}`)),
   // Never editable by an agent: its own definition, the user's accepted memory and past decisions.
   AGENT_PROTECTED: JSON.stringify([agent.file, ...['shared', 'projects', 'agents', 'rejected'].map((d) => path.join(root, 'memory', d)),
@@ -267,7 +271,16 @@ export function sandboxProfile(agent, { home = os.homedir(), state = STATE } = {
 }
 
 /** [command, args] that starts Pi for this agent, inside the sandbox when the agent has write_paths. */
-export const piCommand = (agent, args) => (agent.writePaths ? ['sandbox-exec', ['-p', sandboxProfile(agent), 'pi', ...args]] : ['pi', args]);
+export function assertSandboxAllowed(agent, command = `agent run ${agent.name} "<task>"`, env = process.env) {
+  if (agent.writePaths && env.AGENT_SANDBOXED === '1') {
+    throw new Error(`cannot start a sandboxed agent from inside a sandbox; ask the user to run: ${command}`);
+  }
+}
+
+export const piCommand = (agent, args) => {
+  assertSandboxAllowed(agent);
+  return agent.writePaths ? ['sandbox-exec', ['-p', sandboxProfile(agent), 'pi', ...args]] : ['pi', args];
+};
 
 export function piArgs(agent, { task, prompt, sessionDir, resume }) {
   return [
@@ -317,6 +330,7 @@ export function summarize(events) {
 
 export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd() } = {}) {
   const agent = resolveWorkspace(getAgent(name, root), cwd);
+  assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
   const memories = useMemory ? loadMemory(agent.memory, root) : [];
   const runId = newId('r');
   const runsDir = path.join(state, 'runs');
@@ -431,7 +445,8 @@ const USAGE = `usage:
 improving over time:
   agent feedback <run_id|last> good|bad [comment...]
   agent eval <agent>                  run the agent's test cases, compare with last time
-  agent eval add <agent> [--include a,b] [--exclude c] [--run cmd-regex] [--not-run cmd-regex] [--max-tools n] "<question>"
+  agent eval add <agent> [--include regex] [--exclude regex] [--run regex] [--not-run regex] [--max-tools n] "<question>"
+    Regex flags are repeatable (one per regex). Legacy comma lists: only a single flag value without '{'.
   agent reflect <agent> [--runs n]    coach reviews recent runs + feedback, writes proposals
   agent review                        everything waiting for your decision
   agent review show <id>              one proposal (instruction edits as a diff)
@@ -462,6 +477,7 @@ async function main(argv) {
     const name = args.find((a) => a !== '--continue');
     if (!name) throw new Error(USAGE);
     const agent = resolveWorkspace(getAgent(name));
+    assertSandboxAllowed(agent, `agent chat ${name}${resume ? ' --continue' : ''}`);
     const memories = loadMemory(agent.memory);
     const sessionDir = sessionDirectory(agent);
     fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });

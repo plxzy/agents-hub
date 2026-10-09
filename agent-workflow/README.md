@@ -33,11 +33,17 @@ agent run → agent feedback <run|last> good|bad "why" → agent reflect <agent>
 - **Test cases** live in `~/.agents/evals/<agent>/*.md`: a question plus `must_include` / `must_not_include`
   (case-insensitive regexes) and an optional `max_tools`. `agent eval` records each score with the agent's
   version hash and the memory it used, and prints the previous score next to it.
+  Add patterns with repeatable flags, one per regex:
+  `agent eval add helper --include 'a{1,3}' --include 'hello, world' --exclude 'wrong' --run 'git status' --not-run 'sudo' "Question"`.
+  `--include`, `--exclude`, `--run`, and `--not-run` all repeat. For compatibility, a flag appearing
+  only once splits its value on commas unless it contains `{`; repeated values are always kept intact.
+  New cases store JSON arrays so regex commas survive saving and loading; old comma-list cases still work.
 - **The coach** (`agent reflect`) is a no-tools Pi call that sees the definition, reviewed memory, recent
   task runs with your ratings, and the latest test results. It may propose notes, new test cases, and at
   most one instruction rewrite; it may not add tools or permissions. Its input and output are kept in
   `~/.local/state/agent-workflow/reflections/`.
-- **Versions:** `~/.agents` is a git repo (only `agents/`, `memory/`, `evals/`, `proposals/` are tracked), so
+- **Versions:** `~/.agents` is a git repo for definitions, skills, reviewed memory, evals and proposals.
+  Pending `memory/candidates/` is ignored and excluded from automatic commits (even if staged).
   `git -C ~/.agents log -p agents/helper.md` is the agent's history and `git revert` undoes a change.
   An instruction proposal is refused if the agent changed after the coach saw it.
 
@@ -114,6 +120,9 @@ tells the model to give the user the command instead. Blocked attempts are recor
 - **Sandbox (hard):** with `write_paths:` in the agent file, `agent` starts Pi under macOS `sandbox-exec`. Writes in the
   home folder are denied except in `write_paths` and Pi's own folders; credential stores (`~/.ssh`, keychains, cookies,
   `~/.codex/auth.json`, …) can't be read. Verified: a write to `~` fails with "Operation not permitted".
+  The launcher marks sandboxed children with `AGENT_SANDBOXED=1`. Nested sandboxed run/chat/eval
+  invocations fail early with a command for the user to run from an unsandboxed terminal, rather than
+  Pi exiting with code 71; evals abort instead of reporting a misleading 0/N score.
 - **Guard (policy):** `guards/workspace-bash.ts` blocks sudo, process kills, system/app settings, installs outside the
   project, git push and history rewrites, mentions of credential files, and the user's own decisions (`agent memory`,
   `agent feedback`, `agent review accept|reject`). `edit`/`write`/bash file changes to protected paths are blocked:

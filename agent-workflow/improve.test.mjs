@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { getAgent } from './agent.mjs';
-import { acceptProposal, addEval, checkCase, parseProposals, pending, recordFeedback, rejectProposal, replaceInstructions, runEvals } from './improve.mjs';
+import { loadEvals, regexFlags, acceptProposal, addEval, checkCase, parseProposals, pending, recordFeedback, rejectProposal, replaceInstructions, runEvals } from './improve.mjs';
 
 function home() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-home-'));
@@ -16,6 +16,38 @@ function home() {
   spawnSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'init']);
   return { root, state: path.join(root, '.state') };
 }
+
+test('regex flags repeat and preserve commas, with single-value legacy compatibility', (t) => {
+  const { root } = home();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const flag of ['--include', '--exclude', '--run', '--not-run']) {
+    const args = ['demo', flag, 'hello, world', flag, 'a{1,3}', 'question'];
+    assert.deepEqual(regexFlags(args, flag), ['hello, world', 'a{1,3}']);
+    assert.deepEqual(args, ['demo', 'question']);
+    assert.deepEqual(regexFlags([flag, 'a, b'], flag), ['a', 'b']);
+    assert.deepEqual(regexFlags([flag, 'a{1,3}'], flag), ['a{1,3}']);
+    assert.deepEqual(regexFlags([], flag), []);
+    assert.throws(() => regexFlags([flag], flag), /requires a regex/);
+  }
+  const patterns = ['hello, world', 'a{1,3}', '\\bword\\b', '[a,b]'];
+  addEval('demo', 'Q', { root, include: patterns, exclude: patterns, run: patterns, notRun: patterns });
+  const [c] = loadEvals('demo', root);
+  for (const key of ['include', 'exclude', 'run', 'notRun']) assert.deepEqual(c[key], patterns);
+  fs.writeFileSync(path.join(root, 'evals/demo/legacy.md'), '---\nmust_include: a, b\n---\nOld question\n');
+  assert.deepEqual(loadEvals('demo', root).find((c) => c.id === 'legacy').include, ['a', 'b']);
+});
+
+test('sandboxed evals abort with an actionable message instead of a score', async (t) => {
+  const { root, state } = home();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const original = process.env.AGENT_SANDBOXED;
+  t.after(() => { if (original === undefined) delete process.env.AGENT_SANDBOXED; else process.env.AGENT_SANDBOXED = original; });
+  process.env.AGENT_SANDBOXED = '1';
+  fs.writeFileSync(path.join(root, 'agents/demo.md'), `---\nname: demo\nwrite_paths: ${root}\n---\nBe brief.\n`);
+  addEval('demo', 'Q', { root });
+  await assert.rejects(runEvals('demo', { root, state, run: () => assert.fail('must not run') }), /ask the user to run: agent eval demo/);
+  assert.equal(fs.existsSync(path.join(state, 'evals')), false);
+});
 
 test('checkCase applies include, exclude and tool budget', () => {
   const c = { include: ['codex', 'fall ?back'], exclude: ['guarantee'], maxTools: 1 };
