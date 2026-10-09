@@ -47,8 +47,8 @@ A private remote plugin for the read-only Cloudflare service. It connects to
 `https://YOUR-HUB.workers.dev/mcp` using native OAuth and owner-only Cloudflare Access.
 
 Private plugin: https://chatgpt.com/plugins/plugins_6ac8a29d576c8191aa112562b4131771
-Package version in this folder: `0.3.2` (display name "Agents Hub (read-only)"). The live ChatGPT release is still
-`0.3.1` ("Agents Hub") until this folder is uploaded again.
+Package and published ChatGPT version: `0.3.2` (display name "Agents Hub (read-only)").
+Release: `pluginrel_6ac8a7a5a1f881919e655f6e7e456380`. Published 2026-10-09; both manifests and the unchanged MCP connection were read back and verified.
 
 ## Which one to use (two plugins on purpose)
 

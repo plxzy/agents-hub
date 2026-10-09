@@ -10,7 +10,7 @@
     "com.openai": {
       "interface": {
         "displayName": "Agents Hub (read-only)",
-        "shortDescription": "Published agents and runs, from anywhere",
+        "shortDescription": "Published agents and runs",
         "longDescription": "Open the read-only Agents Hub dashboard and inspect published agents, runs and approved context. Uses Cloudflare Access and native OAuth. Running agents and mutations are unavailable on this hosted connection.",
         "developerName": "dev-workflow",
         "category": "Productivity",
