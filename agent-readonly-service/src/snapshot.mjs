@@ -64,8 +64,8 @@ export function sanitizeSnapshot(input) {
     id: x.id, title: safeText(x.title, 200), source: typeof x.source === 'string' ? x.source.slice(0, 100) : 'unknown',
     sequence: Number.isInteger(x.sequence) ? x.sequence : null, updated_at: typeof x.updated_at === 'string' ? x.updated_at : null,
   })).slice(0, 100) : [];
-  return { schema_version: 2, generated_at: typeof input?.generated_at === 'string' ? input.generated_at : new Date().toISOString(), agents, runs, context,
-    capabilities: { discovery: true, status: true, context: true, execute: false, mutate: false } };
+  return { schema_version: 3, generated_at: typeof input?.generated_at === 'string' ? input.generated_at : new Date().toISOString(), agents, runs, context,
+    capabilities: { discovery: true, status: true, context: true, run: false, mutate: false } };
 }
 
 export function page(items, cursor, limit = 20) {

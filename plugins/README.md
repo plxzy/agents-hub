@@ -10,8 +10,8 @@ One plugin folder, `agents/`, for every app that can load it. It holds no logic:
 | Pi | `package.json` `"pi"` → `pi/agents.ts`: registers the MCP server, `/agents`, footer status | `pi install ~/Development/dev-workflow/plugins/agents` |
 | Claude Desktop | its own config entry (chat ignores a plugin's local MCP servers) | already set up: `agents` in `claude_desktop_config.json` |
 
-The dashboard (`open_dashboard`) renders in hosts that support MCP Apps: Claude Desktop, claude.ai, ChatGPT and the
-Codex app. Claude Code and Pi get the same tools as text. Without any app: `agent ui`.
+The **Agents Hub** dashboard (`open_dashboard`) renders in hosts that support MCP Apps: Claude Desktop, claude.ai,
+ChatGPT and the Codex app. Claude Code and Pi get the same tools as text. Without any app: `agent ui`.
 
 Paths in `.mcp.json`/`mcp.json` are absolute because Claude Code and Codex copy installed plugins into a cache,
 from where `${CLAUDE_PLUGIN_ROOT}` cannot reach this repo. Pi loads the package in place, so `pi/agents.ts`

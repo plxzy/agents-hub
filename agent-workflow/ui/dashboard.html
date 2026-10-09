@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agents</title>
+<title>Agents Hub</title>
 <style>
   /* Defaults; a host's own theme variables (set inline on <html>) win over these. */
   :root {
@@ -82,11 +82,11 @@
 <body>
 <div class="app">
   <header>
-    <h1>Agents</h1>
+    <h1>Agents Hub</h1>
     <div class="chips" id="chips"></div>
     <button id="refresh" title="Refresh">Refresh</button>
     <button id="expand" title="Full screen" hidden>Expand</button>
-    <button id="new" class="primary">Run…</button>
+    <button id="new" class="primary" hidden>Run…</button>
   </header>
   <nav role="tablist" id="tabs"></nav>
   <main id="view"><div class="empty">Loading…</div></main>
@@ -161,10 +161,12 @@ function chips() {
     h('span', { class: `chip${st.running ? ' on' : ''}` }, `${st.running} running`),
     h('span', { class: `chip${review ? ' attn' : ''}` }, `${review} to review`)];
 }
+const canRun = () => S.data?.capabilities?.run === true;
+const canDecide = () => S.data?.capabilities?.mutate === true;
 
 function tabs() {
   const review = S.data ? S.data.pending.length : 0;
-  return [['runs', 'Runs'], ['agents', 'Agents'], ['review', 'Review']].map(([id, label]) =>
+  return [['runs', 'Runs'], ['agents', 'Agents'], ...(canDecide() ? [['review', 'Review']] : [])].map(([id, label]) =>
     h('button', { role: 'tab', 'aria-selected': String(S.tab === id), onclick: () => { S.tab = id; S.detail = null; S.form = null; render(); } },
       label, id === 'review' && review ? h('span', { class: 'badge' }, review) : null));
 }
@@ -175,7 +177,7 @@ function agentsView() {
     h('div', { class: 'line' },
       h('span', { class: 'name' }, a.name), h('span', { class: 'grow muted ell' }, a.description),
       a.last_run ? h('span', { class: `pill ${a.last_run.status}` }, a.last_run.status) : null,
-      h('button', { onclick: () => { S.form = { agent: a.name }; render(); } }, 'Run…')),
+      canRun() ? h('button', { onclick: () => { S.form = { agent: a.name }; render(); } }, 'Run…') : null),
     h('div', { class: 'meta' }, [a.model, a.guard && `guard: ${a.guard}`, a.workspace === 'here' ? 'works in the folder it is started in' : home(a.workspace),
       a.tools?.length ? `tools: ${a.tools.join(', ')}` : 'no tools', a.last_run && `last run ${ago(a.last_run.started)}`].filter(Boolean).join(' · ')))));
 }
@@ -198,7 +200,7 @@ function detailView() {
   const r = S.detail;
   const back = h('button', { class: 'back', onclick: () => { S.detail = null; render(); } }, '← All runs');
   if (!r.agent) return h('div', {}, back, h('div', { class: 'empty' }, 'Loading…'));
-  const rateable = r.status !== 'running' && ['task', 'chat'].includes(r.kind ?? 'task');
+  const rateable = canDecide() && r.status !== 'running' && ['task', 'chat'].includes(r.kind ?? 'task');
   const rate = (rating) => act(`rate-${r.run_id}`, async () => {
     const comment = document.getElementById('rate-why')?.value || undefined;
     await call('rate_run', { run_id: r.run_id, rating, comment });
@@ -224,6 +226,7 @@ function detailView() {
 }
 
 function reviewView() {
+  if (!canDecide()) return h('div', { class: 'empty' }, 'Review actions are available only in the local Agents Hub.');
   if (!S.data.pending.length) return h('div', { class: 'empty' }, 'Nothing waiting for your review.');
   return h('div', { class: 'list' }, S.data.pending.map((p) => {
     const key = `review-${p.id}`;
@@ -244,6 +247,7 @@ function reviewView() {
 }
 
 function formView() {
+  if (!canRun()) return h('div', { class: 'empty' }, 'Running agents is unavailable on this hosted read-only surface.');
   const agents = S.data.agents;
   const chosen = agents.find((a) => a.name === S.form.agent) ?? agents[0];
   const submit = (e) => {
@@ -277,6 +281,7 @@ document.addEventListener('focusout', () => setTimeout(() => { if (S.stale && !e
 function render({ passive = false } = {}) {
   document.getElementById('chips').replaceChildren(...chips());
   document.getElementById('tabs').replaceChildren(...tabs());
+  document.getElementById('new').hidden = !canRun();
   if (!S.data) return;
   if (passive && (editing() || S.form)) { S.stale = true; return; } // the form never needs live data
   const view = S.form ? formView() : S.detail ? detailView() : S.tab === 'agents' ? agentsView() : S.tab === 'review' ? reviewView() : runsView();

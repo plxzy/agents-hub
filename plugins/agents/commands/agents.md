@@ -1,5 +1,5 @@
 ---
-description: Show your agents — status, recent runs and what waits for your review (dashboard where supported)
+description: Show Agents Hub — status, recent runs and what waits for your review (dashboard where supported)
 argument-hint: "[agent name or question]"
 ---
 

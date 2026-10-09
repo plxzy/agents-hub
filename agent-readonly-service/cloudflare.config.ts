@@ -2,7 +2,7 @@ import { bindings, defineConfig } from "cf/config";
 
 export default defineConfig({
 	worker: {
-		name: "agent-readonly",
+		name: "agents-hub",
 		compatibilityDate: "2026-10-01",
 		entrypoint: "src/worker.mjs",
 		env: {
@@ -10,6 +10,9 @@ export default defineConfig({
 			DB: bindings.d1({
 				name: "agent-readonly",
 				id: "00000000-0000-0000-0000-000000000000",
+			}),
+			OAUTH_KV: bindings.kv({
+				id: "KV-NAMESPACE-ID",
 			}),
 		},
 	},

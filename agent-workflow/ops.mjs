@@ -14,7 +14,7 @@ import {
 } from './agent.mjs';
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
 
-export const DASHBOARD_URI = 'ui://agents/dashboard.html';
+export const DASHBOARD_URI = 'ui://agents-hub/dashboard.html';
 const AGENT_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent.mjs');
 
 const brief = (r) => ({
@@ -75,7 +75,7 @@ const AGENT_ARGS = {
 
 export const OPS = [
   {
-    name: 'open_dashboard', access: 'read', ui: DASHBOARD_URI, title: 'Agents dashboard',
+    name: 'open_dashboard', access: 'read', ui: DASHBOARD_URI, title: 'Agents Hub dashboard',
     description: 'Open the interactive agents dashboard: agents, recent runs, items waiting for the user\'s review, and a form to start a run. '
       + 'Use when the user wants to see, check on or manage their agents.',
     input: { type: 'object', properties: {}, additionalProperties: false },
@@ -210,6 +210,7 @@ export function dashboardData(ctx) {
   const runs = listRuns(ctx.state, { running: true });
   return {
     generated_at: new Date().toISOString(),
+    capabilities: { discovery: true, status: true, context: true, run: true, mutate: true },
     status: status(ctx),
     agents: loadAgents(ctx.root).map((a) => agentSummary(a, runs)),
     runs: runs.slice(-50).map(brief),

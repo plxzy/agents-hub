@@ -33,7 +33,7 @@ export function createServer({ ctx = defaultContext(), ops = OPS, html = () => i
     const reply = (result) => ({ jsonrpc: '2.0', id, result });
     if (method === 'initialize') {
       return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18',
-        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'agents', version: '0.2.0' },
+        capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.3.0' },
         instructions: "The user's own agents (Pi, local). Use run_agent to delegate to a matching agent; list_agents shows what exists; "
           + 'open_dashboard shows everything at a glance. Ratings and proposal decisions belong to the user: only pass them on when the user states them.' });
     }

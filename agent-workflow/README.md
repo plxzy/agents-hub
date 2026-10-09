@@ -158,13 +158,13 @@ the dashboard, the Pi package in `../plugins/agents/`, and later the hosted hub.
   process died without a receipt). Plain `listRuns` still returns finished receipts only.
 - `run_agent`/`start_run` accept an optional absolute `cwd` for agents whose `workspace` is `here`; calling apps
   should pass their project folder. Passing `cwd` for a fixed-workspace agent is an error.
-- **Dashboard** (`ui/dashboard.html`): runs (detail, live status, rating), agents, review queue (accept/reject),
+- **Agents Hub dashboard** (`ui/dashboard.html`): runs (detail, live status, rating), agents, review queue (accept/reject),
   run form. `open_dashboard` points MCP App hosts at `ui://agents/dashboard.html` (`text/html;profile=mcp-app`,
   plus the `openai/outputTemplate` alias); the ext-apps bridge is vendored in `ui/vendor/` and inlined.
   `agent ui` serves the same page on 127.0.0.1 with a per-launch token while the command runs.
 - Pi processes started for an agent get `AGENT_RUN=1`, so the Pi package leaves them alone.
 
-Hosted ChatGPT and Dots use a separate read-only Worker instead (`../agent-readonly-service/`): `agent` publishes a
+Hosted ChatGPT and Dots use the read-only Agents Hub Worker (`../agent-readonly-service/`): `agent` publishes a
 sanitized snapshot after each run and chat when `~/.config/agent-readonly/publish.env` exists.
 
 Registered (2026-10-09) in Claude Code (`claude mcp add -s user agents -- node .../mcp.mjs`), Codex

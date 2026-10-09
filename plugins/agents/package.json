@@ -2,7 +2,7 @@
   "name": "agents-pi",
   "version": "0.1.0",
   "private": true,
-  "description": "Pi package of the agents plugin: the agents MCP server and an /agents command.",
+  "description": "Pi package of the Agents Hub MCP server and an /agents command.",
   "keywords": ["pi-package"],
   "type": "module",
   "pi": {
