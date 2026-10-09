@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { RELAY_OPS, validateRelay } from '../../agent-workflow/relay-contract.mjs';
+import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { WIRE, PING, PONG, encode, decode, validId, validateStatus, fingerprint } from '../../agent-workflow/relay-wire.mjs';
 const offline = () => ({ online: false, enabled: false, agents: [] });
 const uncertain = (id) => ({ ok: false, kind: 'transport', error: `Relay response unavailable; action may have completed. Retry with the SAME request_id: ${id}` });

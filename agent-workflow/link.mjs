@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { setTimeout as sleep } from 'node:timers/promises';
+import { serveSocket } from './link-socket.mjs';
 import { callOp, defaultContext, dashboardData } from './ops.mjs';
 import { getAgent } from './agent.mjs';
 import { RELAY_OPS, validateRelay } from './relay-contract.mjs';
@@ -120,14 +120,6 @@ export async function executeJob(job, { config, ctx = defaultContext(), journal 
   return value;
 }
 
-async function post(config, route, body) {
-  const r = await fetch(config.endpoint.replace(/\/$/, '') + '/relay/' + route, {
-    method: 'POST', headers: { authorization: 'Bearer ' + config.token, 'content-type': 'application/json' },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(12000), redirect: 'error',
-  });
-  if (!r.ok) throw new Error(`Relay HTTP ${r.status}`);
-  return r.json();
-}
 export async function serveLink({ configFile = LINK_CONFIG, signal } = {}) {
   const lock = path.join(path.dirname(configFile), 'link.lock');
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
@@ -138,29 +130,20 @@ export async function serveLink({ configFile = LINK_CONFIG, signal } = {}) {
     fs.unlinkSync(lock);
   }
   fs.writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
-  let published = 0;
-  let busyUntil = 0;
   try {
-    while (!signal?.aborted) {
-      try {
-        const config = readLink(configFile);
-        const { job } = await post(config, 'poll', { enabled: config.enabled === true, agents: config.agents });
-        if (job) {
-          busyUntil = Date.now() + 30000;
-          let result;
-          try { result = { ok: true, value: await executeJob(job, { config: readLink(configFile) }) }; }
-          catch (e) { result = { ok: false, error: e.message }; }
-          // Retrying result delivery cannot repeat the operation; execution has already been journalled.
-          for (let n = 0; n < 3; n++) { try { await post(config, 'complete', { id: job.id, result }); break; } catch (e) { if (n === 2) throw e; } }
+    await serveSocket({ readConfig: () => readLink(configFile), signal, publish,
+      execute: async (job, config) => {
+        try { return { ok: true, value: await executeJob(job, { config }) }; }
+        catch (e) {
+          const receipt = path.join(LINK_DIR, 'relay-journal', job.id + '.json');
+          const interrupted = fs.existsSync(receipt) && JSON.parse(fs.readFileSync(receipt, 'utf8')).state === 'claimed';
+          return { ok: false, kind: interrupted ? 'interrupted' : 'rejected', error: scrub(e.message) };
         }
-        if (Date.now() - published > 60000) { await publish(); published = Date.now(); }
-      } catch (e) { console.error(new Date().toISOString(), e.message); }
-      // Right after a job (a panel usually asks for more) poll again at once, then every 1 s for 30 s, then every 3 s.
-      const pause = busyUntil - Date.now() > 29500 ? 0 : Date.now() < busyUntil ? 1000 : 3000;
-      try { if (pause) await sleep(pause, undefined, { signal }); } catch (e) { if (e.name !== 'AbortError') throw e; }
-    }
+      },
+    });
   } finally { fs.unlinkSync(lock); }
 }
+
 export async function linkMain(args) {
   const [command = 'status'] = args;
   if (command === 'serve') {

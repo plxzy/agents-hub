@@ -5,11 +5,13 @@ Claude Code, Codex, Pi and standalone `agent ui`, but no longer advertises a sec
 
 ## Design and boundaries
 
-- The Mac makes outbound HTTPS polls to the existing Worker; no inbound port, tunnel or public local server.
+- The Mac makes one outbound WebSocket connection to the existing Worker; no inbound port, tunnel or public local server.
 - Cloudflare Access Managed OAuth still authenticates App/MCP callers. A separate machine credential authenticates
-  only `/relay/poll` and `/relay/complete`; it cannot authenticate `/mcp` or publish snapshots.
-- A small D1 queue holds short-lived requests/results. Queue depth is bounded, unclaimed requests expire after
-  20 seconds, and a timed-out caller cancels unclaimed work. Claimed work is never automatically requeued.
+  only `/relay/connect`; it cannot authenticate `/mcp` or publish snapshots.
+- A SQLite-backed Durable Object routes commands immediately over the connection. Up to 32 commands may be
+  outstanding; each transport attempt expires after 20 seconds. This is not the agent lifetime: start returns
+  a run ID promptly, and fetching completion is a separate operation. Disconnected work is not automatically
+  replayed. Explicit retries reuse the logical request ID with a fresh attempt deadline.
 - The Mac validates every operation and its inputs. Its private config is authoritative for the remote-start
   allowlist and off switch. Only **helper and network** were authorized by the user. `workspace: here` is refused
   remotely until an explicit project-folder policy is designed.
@@ -31,9 +33,17 @@ Claude Code, Codex, Pi and standalone `agent ui`, but no longer advertises a sec
   app-only visibility. Codes live in the `agent link serve` process (30 min); restarting it voids them.
 - Live panel reads include full run details and review content, with best-effort secret redaction and bounded
   output. Those details pass through the user's hosted hub/ChatGPT. Raw events and transcripts are excluded.
-  D1 request/result payloads are cleaned five minutes after expiry by the Worker's minutely schedule; scheduled
-  delivery can lag. Polling: immediately after a job, every 1 s for 30 s, then every 3 s; the heartbeat row is
-  rewritten only on change or every 5 s. Local run receipts and mutation-journal records remain on the Mac.
+  Cloud request/dispatch/result records expire five minutes after the first attempt deadline; retries do not
+  extend that retention. An idempotent DO alarm targets the earliest expiry, then stops when nothing remains.
+  Request arguments are not durably stored. Local run receipts and mutation journals remain on the Mac.
+- Version-2 journal fingerprints use canonical semantic arguments, independent of transport deadlines and
+  confirmation credentials. Legacy receipts require their original argument ordering for the first replay;
+  that verified match adds a canonical fingerprint without discarding the original hash or claim state.
+- Each foreground process acquires ownership once. Reconnects resume that process session; a replaced session
+  cannot reacquire automatically. If the Terminal reports a replaced/rejected session, restart manually.
+- The Mac sends a static keepalive every 10 seconds. Cloudflare answers with setWebSocketAutoResponse without
+  waking the DO; status uses its timestamp and a 30-second freshness window. There is no heartbeat table or
+  cloud heartbeat timer. Hibernation avoids idle duration charges, not request/storage costs.
 - Offline hub access falls back to the sanitized snapshot with no Run/Review controls. While linked, snapshots
   publish every minute as well as after runs. Turning remote starts off does not terminate an already-started run
   or disable read/review access; stop the link to disconnect all live access.
@@ -42,7 +52,8 @@ Claude Code, Codex, Pi and standalone `agent ui`, but no longer advertises a sec
 
 Private config: `~/.config/agent-readonly/link.json` (0600), containing `endpoint`, a separate `token`, `enabled`
 and `agents`. Never put it in git or print it. The Worker secret is `RELAY_TOKEN`; publisher credentials are
-separate. Apply `agent-readonly-service/migrations/0002_relay.sql` before enabling the relay.
+separate. Install local client dependencies with `npm ci --prefix agent-workflow`.
+The historical D1 migration and empty relay tables remain for rollback; active transport uses the DO.
 
 ```
 agent link status      # safe: no credentials printed
@@ -60,7 +71,24 @@ uninstall is required.
 ## Verification
 
 `node --test agent-workflow/ agent-readonly-service/test/` covers the Mac allowlist, off switch, deadlines,
-credential sandbox profile, protocol schemas, atomic queue claims, result replay, conflicting IDs, interrupted
-mutations, app-only visibility, and the existing agent/Worker tests. D1 queue tests execute actual SQLite SQL.
+credential sandbox profile, protocol schemas, durable dispatch, result replay, conflicting IDs, interrupted
+mutations, app-only visibility, and the existing agent/Worker tests. Runtime tests use Miniflare/workerd with real SQLite DO storage and WebSocket hibernation.
 Deployment uses the existing `cf deploy` workflow. Do not claim a live relay or real remote run works
 from unit tests alone; verify foreground process status and a hosted-client receipt separately.
+
+## Rollback
+
+The compatible polling bridge is commit `fd94411`, deployed Worker version
+`WORKER-VERSION-ID`. Never target a pre-DO version. Cloudflare rejects rollback across DO
+lifecycle changes, and resource data/triggers do not roll back with code.
+
+Stop new calls, drain/classify outstanding commands, then stop the visible client. Restore the bridge Worker
+with `cf workers deployments create --worker agents-hub --strategy percentage --versions
+'[{"version_id":"WORKER-VERSION-ID","percentage":100}]'` (one command). In an isolated checkout
+of `fd94411`, run `cf workers triggers deploy` from `agent-readonly-service` to restore the minute cleanup.
+Verify the schedule through `tools/cloudflare-cron/schedules.mjs`; this version-pinned helper also explicitly
+removes the schedule on WebSocket cutover because cf beta.13 leaves existing schedules when the list is empty.
+Run the matching bridge `agent.mjs link serve` in the visible Terminal, preserving private config and journal.
+Verify the selected version is serving before starting the client; deployment propagation can reject a first
+acquisition, requiring a fresh manual start. A forward deploy of bridge code must preserve the DO declaration.
+See `LINK-websocket-design.md` for protocol details and the dated evidence directory for rehearsal results.

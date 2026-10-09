@@ -12,7 +12,7 @@ Live: `https://YOUR-HUB.workers.dev`
 | `GET /health` | none | Liveness and capabilities (`execute: false, mutate: false`) |
 | `POST /mcp` | OAuth 2.1 bearer token | MCP + Agents Hub dashboard resource: `open_dashboard`, `list_agents`, `list_runs`, `get_run`, `get_status`, `resolve_context` |
 | `GET /mcp/v1/agents[/:name]`, `/mcp/v1/runs[/:id]`, `/mcp/v1/context` | OAuth 2.1 bearer token | The same data as REST, beneath the `/mcp` resource |
-| `POST /relay/poll`, `/relay/complete` | Separate machine token | Foreground Mac relay transport |
+| `GET /relay/connect` (WebSocket upgrade) | Separate machine token | Foreground Mac relay transport |
 | `POST /v1/snapshots` | Bearer publish token | Used only by `publisher.mjs`; keeps the newest 20 snapshots |
 
 **What is published** (`src/snapshot.mjs`): agent name, description, model, tools, skill names, guard, workspace (with
@@ -42,6 +42,6 @@ The former OAuth KV namespace was deleted on 2026-10-09.
 Tests: `npm test`. Deploy: `cf deploy` (check with `cf deploy --dry-run` first).
 
 With `RELAY_TOKEN` configured, MCP also advertises `start_run`, `get_remote_run` and app-only `panel_data`,
-`panel_run`, `rate_run`, `review_decide`. `/relay/poll` and `/relay/complete` use the separate machine credential,
+`panel_run`, `rate_run`, `review_decide`. `/relay/connect` uses the separate machine credential,
 outside Access, and the Worker still requires a verified Access assertion for every user MCP call. The minutely
 scheduled handler removes expired transient relay payloads. Apply `migrations/0002_relay.sql` before activation.
