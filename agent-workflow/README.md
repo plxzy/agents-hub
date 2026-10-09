@@ -90,3 +90,15 @@ redirections, launchctl, network/VPN/DNS changes, installs, sudo outside `sudo_a
 tells the model to give the user the command instead. Blocked attempts are recorded in run receipts as
 `blocked` and shown to the coach. Tests: `node --test agent-workflow/guards/`.
 
+## Using agents from other apps (`mcp.mjs`)
+
+A dependency-free local stdio MCP server over the same code: `list_agents`, `run_agent`, `list_runs`, `get_run`,
+`rate_run`, `list_pending`, `review_decide`, `run_eval`. Ratings and proposal decisions are described to the
+calling model as the user's to give.
+
+Registered (2026-10-09) in Claude Code (`claude mcp add -s user agents -- node .../mcp.mjs`) and Codex
+(`codex mcp add agents -- node .../mcp.mjs`). Verified: Claude Code `-p` ran `network` through `run_agent` and relayed
+its answer; Codex `exec` used the read-only tools, while `run_agent` was refused by Codex's headless approval
+policy (`never`); interactive Codex asks for approval instead. Test by hand:
+`echo "ask the network agent if my VPN is on" | claude -p --allowedTools mcp__agents__run_agent`.
+
