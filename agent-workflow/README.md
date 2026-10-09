@@ -174,3 +174,15 @@ its answer; Codex `exec` used the read-only tools, while `run_agent` was refused
 policy (`never`); interactive Codex asks for approval instead. Test by hand:
 `echo "ask the network agent if my VPN is on" | claude -p --allowedTools mcp__agents__run_agent`.
 
+
+### model gateway in sandboxed agents (2026-10-09)
+
+`agent chat` and `agent run` resolve the installed `private-gateway-provider` package
+and start its authenticated loopback broker outside the agent sandbox. model gateway
+starts only on the first model gateway request, so it can use the user's Keychain for
+its own authentication. Pi retains the existing filesystem and credential-store
+restrictions. The broker and gateway stop when the Pi child exits; temporary
+credentials remain in memory. Restart an existing chat after launcher updates
+(`agent chat workflow --continue` resumes it); `/reload` alone cannot create a
+broker in an already running launcher. Ordinary unsandboxed Pi uses its direct
+gateway as before. This requires the provider package's `broker.mjs` support.

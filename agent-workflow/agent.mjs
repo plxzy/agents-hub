@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { modelGateway } from './model gateway.mjs';
 
 export const ROOT = process.env.AGENT_HOME ?? path.join(os.homedir(), '.agents');
 export const STATE = process.env.AGENT_WORKFLOW_STATE ?? path.join(os.homedir(), '.local/state/agent-workflow');
@@ -396,24 +397,29 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   const marker = path.join(runsDir, `${runId}.running`);
   const rawFile = path.join(runsDir, `${runId}.jsonl`);
 
-  const { events, exitCode, timedOut } = await new Promise((resolve, reject) => {
-    const child = spawn(...piCommand(agent, piArgs(agent, { task, prompt, sessionDir, resume })), { cwd: agent.workspace, env: agentEnv(agent, root), stdio: ['ignore', 'pipe', 'pipe'] });
-    const raw = fs.createWriteStream(rawFile, { mode: 0o600 });
-    const events = [];
-    let buf = '';
-    let timedOut = false;
-    child.stdout.on('data', (chunk) => {
-      raw.write(chunk);
-      buf += chunk;
-      const lines = buf.split('\n');
-      buf = lines.pop();
-      for (const l of lines) if (l.trim()) { try { events.push(JSON.parse(l)); } catch { /* keep raw only */ } }
+  const gateway = await modelGateway(agent);
+  let result;
+  try {
+    result = await new Promise((resolve, reject) => {
+      const child = spawn(...piCommand(agent, piArgs(agent, { task, prompt, sessionDir, resume })), { cwd: agent.workspace, env: { ...agentEnv(agent, root), ...gateway.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+      const raw = fs.createWriteStream(rawFile, { mode: 0o600 });
+      const events = [];
+      let buf = '';
+      let timedOut = false;
+      child.stdout.on('data', (chunk) => {
+        raw.write(chunk);
+        buf += chunk;
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const l of lines) if (l.trim()) { try { events.push(JSON.parse(l)); } catch { /* keep raw only */ } }
+      });
+      child.stderr.on('data', () => {});
+      child.on('error', (e) => { fs.rmSync(marker, { force: true }); reject(e); });
+      const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
+      child.on('close', (code) => { clearTimeout(timer); raw.end(); resolve({ events, exitCode: code, timedOut }); });
     });
-    child.stderr.on('data', () => {});
-    child.on('error', (e) => { fs.rmSync(marker, { force: true }); reject(e); });
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
-    child.on('close', (code) => { clearTimeout(timer); raw.end(); resolve({ events, exitCode: code, timedOut }); });
-  });
+  } finally { await gateway.close(); }
+  const { events, exitCode, timedOut } = result;
 
   const summary = summarize(events);
   const status = timedOut ? 'unknown' : exitCode === 0 && !summary.error ? 'completed' : 'failed';
@@ -571,8 +577,11 @@ async function main(argv) {
     console.log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
     console.log('When you exit, this chat is saved as a run you can rate (agent feedback last good|bad) and the coach can learn from.\n');
     const startedAt = Date.now() - 1000;
-    const child = nodeSpawn(...piCommand(agent, chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume })), { cwd: agent.workspace, env: agentEnv(agent), stdio: 'inherit' });
-    await new Promise((resolve) => child.on('close', resolve));
+    const gateway = await modelGateway(agent);
+    try {
+      const child = nodeSpawn(...piCommand(agent, chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume })), { cwd: agent.workspace, env: { ...agentEnv(agent), ...gateway.env }, stdio: 'inherit' });
+      await new Promise((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });
+    } finally { await gateway.close(); }
     const runsDir = path.join(STATE, 'runs');
     fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
     for (const f of fs.readdirSync(sessionDir).filter((x) => x.endsWith('.jsonl'))) {
