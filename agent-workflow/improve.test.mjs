@@ -27,7 +27,7 @@ test('checkCase applies include, exclude and tool budget', () => {
 
 test('parseProposals reads eval and instruction blocks with headers', () => {
   const p = parseProposals('x\n```eval\nwhy: w\nmust_include: a, b\nmax_tools: 2\nWhat is a?\n```\n```instructions\nwhy: too long\nBe brief.\nCite files.\n```');
-  assert.deepEqual(p.evals, [{ why: 'w', include: ['a', 'b'], exclude: [], maxTools: 2, question: 'What is a?' }]);
+  assert.deepEqual(p.evals, [{ why: 'w', include: ['a', 'b'], exclude: [], run: [], notRun: [], maxTools: 2, question: 'What is a?' }]);
   assert.deepEqual(p.instructions, [{ why: 'too long', body: 'Be brief.\nCite files.' }]);
 });
 
@@ -78,4 +78,10 @@ test('feedback is stored on the run receipt', () => {
   fs.writeFileSync(path.join(state, 'runs/r-1.json'), JSON.stringify({ run_id: 'r-1', agent: 'demo', kind: 'task' }));
   recordFeedback('last', 'bad', 'too long', { state });
   assert.equal(JSON.parse(fs.readFileSync(path.join(state, 'runs/r-1.json'), 'utf8')).feedback.rating, 'bad');
+});
+
+test('checkCase can require or forbid commands', () => {
+  const c = { include: [], exclude: [], run: ['traffic\\.py'], notRun: ['\\bsudo\\b'], maxTools: null };
+  assert.equal(checkCase(c, { output: '', toolCalls: 1, commands: ['traffic.py 5'] }).pass, true);
+  assert.deepEqual(checkCase(c, { output: '', toolCalls: 1, commands: ['sudo lsof'] }).problems, ['did not run /traffic\\.py/', 'ran /\\bsudo\\b/']);
 });

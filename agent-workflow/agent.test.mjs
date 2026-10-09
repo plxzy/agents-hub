@@ -6,7 +6,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
-  acceptCandidate, addMemory, chatArgs, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
+  acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
   loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent,
 } from './agent.mjs';
 
@@ -116,4 +116,16 @@ test('user-written notes are active immediately; chat args mirror run args', () 
   const args = chatArgs(agent, { prompt: 'p', sessionDir: '/s', resume: false });
   assert.ok(!args.includes('-p') && !args.includes('--mode'));
   assert.deepEqual(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2), ['--tools', 'read,ls']);
+});
+
+test('a chat session file becomes a rateable run', () => {
+  const lines = [
+    { type: 'session', id: 's' },
+    { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'hi' }], timestamp: 1 } },
+    { type: 'message', message: { role: 'assistant', provider: 'p', model: 'm', timestamp: 2, usage: { totalTokens: 5, cost: { total: 0.01 } },
+      content: [{ type: 'toolCall', name: 'bash', arguments: { command: 'ls' } }, { type: 'text', text: 'hello' }] } },
+  ].map((x) => JSON.stringify(x)).join('\n');
+  const r = receiptFromSession(lines, { agent: { name: 'demo', tools: [], version: 'v' } });
+  assert.equal(r.kind, 'chat'); assert.equal(r.task, 'hi'); assert.equal(r.output, 'hello');
+  assert.deepEqual(r.commands, ['ls']); assert.equal(r.usage.cost, 0.01);
 });

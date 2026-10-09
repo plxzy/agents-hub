@@ -64,8 +64,10 @@ export function loadAgents(root = ROOT) {
       workspace: expandHome(meta.workspace ?? process.cwd()),
       // Own key so it does not clash with the `memory:` field of pi-subagents extensions.
       memory: meta.memory_scopes ? list(meta.memory_scopes) : [`agent:${name}`],
-      // Skills by name from AGENT_HOME/skills/<name>/ (Pi reads SKILL.md on demand).
-      skills: meta.skills === 'none' ? 'none' : list(meta.skills).map((n) => path.join(root, 'skills', n)),
+      // By name: AGENT_HOME/agent-skills/<name>/ (only agents that list it) or AGENT_HOME/skills/<name>/ (shared;
+      // Pi also loads those for every agent on its own).
+      skills: meta.skills === 'none' ? 'none' : list(meta.skills).map((n) =>
+        [path.join(root, 'agent-skills', n), path.join(root, 'skills', n)].find((d) => fs.existsSync(d)) ?? path.join(root, 'agent-skills', n)),
       instructions: body,
     };
   });
@@ -221,6 +223,7 @@ export function summarize(events) {
     output: final?.content?.filter((p) => p.type === 'text').map((p) => p.text).join('\n') ?? null,
     error: final?.errorMessage ?? null,
     tool_calls: events.filter((e) => e.type === 'tool_execution_start').map((e) => e.toolName),
+    commands: events.filter((e) => e.type === 'tool_execution_start' && e.toolName === 'bash').map((e) => e.args?.command ?? ''),
     model_calls: assistant.length,
     usage,
   };
@@ -284,6 +287,37 @@ export function chatArgs(agent, { prompt, sessionDir, resume }) {
   ];
 }
 
+/** Builds a run receipt from a Pi session file written by `agent chat`, so chats can be rated and reflected on. */
+export function receiptFromSession(text, { agent, memories = [], file } = {}) {
+  const msgs = text.split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } })
+    .filter((e) => e?.type === 'message').map((e) => e.message);
+  const textOf = (m) => (Array.isArray(m.content) ? m.content.filter((p) => p.type === 'text').map((p) => p.text).join('\n') : String(m.content ?? ''));
+  const users = msgs.filter((m) => m.role === 'user');
+  const assistants = msgs.filter((m) => m.role === 'assistant');
+  if (!users.length) return null;
+  const calls = assistants.flatMap((m) => (m.content ?? []).filter((p) => p.type === 'toolCall'));
+  const usage = { input: 0, output: 0, totalTokens: 0, cost: 0 };
+  for (const m of assistants) {
+    usage.input += m.usage?.input ?? 0; usage.output += m.usage?.output ?? 0;
+    usage.totalTokens += m.usage?.totalTokens ?? 0; usage.cost += m.usage?.cost?.total ?? 0;
+  }
+  const last = assistants.filter((m) => textOf(m).trim()).at(-1);
+  const transcript = msgs.filter((m) => (m.role === 'user' || m.role === 'assistant') && textOf(m).trim())
+    .map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${textOf(m).slice(0, 800)}`).join('\n\n');
+  return {
+    run_id: newId('c'), agent: agent.name, kind: 'chat', agent_version: agent.version, status: 'completed',
+    task: textOf(users[0]).slice(0, 500), turns: users.length, workspace: agent.workspace, tools: agent.tools,
+    started: users[0].timestamp ? new Date(users[0].timestamp).toISOString() : null,
+    ended: last?.timestamp ? new Date(last.timestamp).toISOString() : null,
+    memory_supplied: memories.map((m) => m.meta.id), memory_proposed: [],
+    model: last ? `${last.provider}/${last.model}` : null, output: last ? textOf(last) : null,
+    transcript: transcript.length > 8000 ? `...${transcript.slice(-8000)}` : transcript,
+    all_text: assistants.map(textOf).join('\n'),
+    tool_calls: calls.map((c) => c.name), commands: calls.filter((c) => c.name === 'bash').map((c) => c.arguments?.command ?? ''),
+    model_calls: assistants.length, usage, session_file: file,
+  };
+}
+
 export function listRuns(state = STATE) {
   const dir = path.join(state, 'runs');
   if (!fs.existsSync(dir)) return [];
@@ -307,7 +341,7 @@ const USAGE = `usage:
 improving over time:
   agent feedback <run_id|last> good|bad [comment...]
   agent eval <agent>                  run the agent's test cases, compare with last time
-  agent eval add <agent> "<question>" [--include a,b] [--exclude c] [--max-tools n]
+  agent eval add <agent> [--include a,b] [--exclude c] [--run cmd-regex] [--not-run cmd-regex] [--max-tools n] "<question>"
   agent reflect <agent> [--runs n]    coach reviews recent runs + feedback, writes proposals
   agent review                        everything waiting for your decision
   agent review show <id>              one proposal (instruction edits as a diff)
@@ -342,9 +376,22 @@ async function main(argv) {
     const sessionDir = path.join(STATE, 'sessions', agent.name);
     fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     console.log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
-    console.log('To keep something, ask it to propose a note, then copy it into: agent memory add <scope> "<text>"\n');
+    console.log('When you exit, this chat is saved as a run you can rate (agent feedback last good|bad) and the coach can learn from.\n');
+    const startedAt = Date.now() - 1000;
     const child = nodeSpawn('pi', chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume }), { cwd: agent.workspace, stdio: 'inherit' });
     await new Promise((resolve) => child.on('close', resolve));
+    const runsDir = path.join(STATE, 'runs');
+    fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+    for (const f of fs.readdirSync(sessionDir).filter((x) => x.endsWith('.jsonl'))) {
+      const file = path.join(sessionDir, f);
+      if (fs.statSync(file).mtimeMs < startedAt) continue;
+      const receipt = receiptFromSession(fs.readFileSync(file, 'utf8'), { agent, memories, file });
+      if (!receipt) continue;
+      receipt.memory_proposed = saveCandidates(extractRemember(receipt.all_text, agent), { agent, runId: receipt.run_id });
+      delete receipt.all_text;
+      fs.writeFileSync(path.join(runsDir, `${receipt.run_id}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
+      console.log(`\nsaved chat as ${receipt.run_id} (${receipt.turns} message(s), $${receipt.usage.cost.toFixed(4)})${receipt.memory_proposed.length ? `, ${receipt.memory_proposed.length} memory proposal(s)` : ''}. Rate it: agent feedback last good|bad "why"`);
+    }
   } else if (cmd === 'runs') {
     for (const r of listRuns().slice(-(Number(args[0]) || 10))) {
       const fb = r.feedback ? ` [${r.feedback.rating}]` : '';
