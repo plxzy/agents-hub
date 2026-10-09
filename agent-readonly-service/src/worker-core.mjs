@@ -111,41 +111,12 @@ export async function apiFetch(request, env, dashboardHtml = '') {
   return json({ error: 'not_found' }, 404);
 }
 
-function escape(value) { return String(value).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';'); }
-
 export async function defaultFetch(request, env) {
   const url = new URL(request.url);
   if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true, service: 'agents-hub', capabilities: CAPABILITIES });
-  if (url.pathname === '/authorize') {
-    if (!['GET', 'POST'].includes(request.method)) return json({ error: 'method_not_allowed' }, 405, { allow: 'GET, POST' });
-    const oauth = env.OAUTH_PROVIDER;
-    const userId = await accessSubject(request, env);
-    if (!userId) return json({ error: 'login_required', message: 'Sign in through Cloudflare Access before authorizing Agents Hub.' }, 401);
-    try {
-      if (request.method === 'GET') {
-        const authRequest = await oauth.parseAuthRequest(request);
-        const details = await oauth.describeConsent(authRequest);
-        const consent = await oauth.beginConsent(authRequest);
-        const publisher = details.clientDomain ? 'Published by ' + escape(details.clientDomain) : 'This app registered itself; its name is not verified.';
-        const html = '<!doctype html><meta charset="utf-8"><title>Authorize Agents Hub</title><h1>Allow ' + escape(details.clientName) + ' to read Agents Hub?</h1><p>' + publisher + '</p><p>Redirect: ' + escape(details.redirectHost) + '</p><p>Permission: agents.read — read your published agents and runs.</p>' + (details.redirectIsLoopback ? '<p>Continue only if you just started signing in from an app on your computer.</p>' : '') + '<form method="post" action="/authorize"><input type="hidden" name="handle" value="' + escape(consent.handle) + '"><button name="decision" value="approve">Allow</button><button name="decision" value="deny">Deny</button></form>';
-        consent.headers.set('content-type', 'text/html; charset=utf-8');
-        return new Response(html, { headers: consent.headers });
-      }
-      const form = await request.formData();
-      if (form.get('decision') !== 'approve') {
-        const denied = await oauth.denyConsent(request, String(form.get('handle')));
-        denied.headers.set('location', denied.redirectTo);
-        return new Response(null, { status: 302, headers: denied.headers });
-      }
-      const approved = await oauth.approveConsent(request, String(form.get('handle')), { scope: ['agents.read'] });
-      const completed = await oauth.completeAuthorization({ request: approved.request, userId, metadata: {}, scope: ['agents.read'], props: { userId } });
-      approved.headers.set('location', completed.redirectTo);
-      return new Response(null, { status: 302, headers: approved.headers });
-    } catch (e) {
-      if (e?.name === 'AuthorizationError' && e.redirectTo) return Response.redirect(e.redirectTo, 302);
-      if (['AuthorizationError', 'CimdFetchError'].includes(e?.name)) return json({ error: 'invalid_authorization_request' }, 400);
-      throw e;
-    }
+  // Access points clients at its own metadata in the 401; this answers clients that look in the standard place.
+  if (request.method === 'GET' && ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'].includes(url.pathname)) {
+    return json({ resource: url.origin + '/mcp', authorization_servers: [env.ACCESS_ISSUER], bearer_methods_supported: ['header'], resource_name: 'Agents Hub' });
   }
   if (request.method === 'POST' && url.pathname === '/v1/snapshots') {
     const token = request.headers.get('authorization');
@@ -161,3 +132,18 @@ export async function defaultFetch(request, env) {
   return json({ error: 'not_found' }, 404);
 }
 
+
+/**
+ * The whole Worker. Cloudflare Access (an Access application on /mcp with Managed OAuth) is the OAuth server: it
+ * signs the user in, registers clients and issues tokens, then forwards each request with a signed
+ * Cf-Access-Jwt-Assertion. The Worker checks that assertion itself too, so a request that reached it some other way
+ * (a preview URL, a missing Access application) is refused. /health and the publisher's /v1/snapshots stay outside.
+ */
+export async function hubFetch(request, env, dashboardHtml = '', keys) {
+  const { pathname } = new URL(request.url);
+  if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
+    if (!(await accessSubject(request, env, keys))) return unauthorized();
+    return apiFetch(request, env, dashboardHtml);
+  }
+  return defaultFetch(request, env);
+}

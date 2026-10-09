@@ -13,11 +13,10 @@ test('Agents Hub dashboard has one canonical tracked source', () => {
   assert.match(fs.readFileSync(path.join(root, 'agent-readonly-service/vite.config.ts'), 'utf8'), /agent-workflow\/ui\/dashboard\.mjs/);
 });
 
-test('hosted worker delegates OAuth protocol handling to Cloudflare provider', () => {
+test('hosted worker leaves OAuth to Cloudflare Access (no OAuth server of its own)', () => {
   const source = fs.readFileSync(path.join(root, 'agent-readonly-service/src/worker.mjs'), 'utf8');
-  assert.match(source, /@cloudflare\/workers-oauth-provider/);
-  assert.doesNotMatch(source, /startsWith\('\/mcp\/'\)/);
-  assert.doesNotMatch(source, /READ_TOKEN/);
+  assert.doesNotMatch(source, /workers-oauth-provider|READ_TOKEN/);
+  assert.match(source, /hubFetch/);
 });
 
 test('the hosted page gets the MCP Apps bridge inlined, like the local one', async () => {

@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPair, SignJWT, exportJWK } from 'jose';
+import { generateKeyPair, SignJWT } from 'jose';
 import { accessSubject } from '../src/access.mjs';
-import { defaultFetch } from '../src/worker-core.mjs';
+import { hubFetch } from '../src/worker-core.mjs';
 
 const env = { ACCESS_ISSUER: 'https://test.cloudflareaccess.com', ACCESS_AUD: 'hub-audience' };
-const request = (token) => new Request('https://hub.test/authorize', { headers: token ? { 'cf-access-jwt-assertion': token } : {} });
+const request = (token) => new Request('https://hub.test/mcp', { headers: token ? { 'cf-access-jwt-assertion': token } : {} });
 
 test('Access identity requires a valid signature, issuer, audience and lifetime', async () => {
   const keys = await generateKeyPair('RS256');
@@ -19,41 +19,17 @@ test('Access identity requires a valid signature, issuer, audience and lifetime'
   assert.equal(await accessSubject(request(await sign()), {}, keys.publicKey), null);
 });
 
-test('authorization rejects an unverified identity before touching OAuth storage', async () => {
-  const result = await defaultFetch(request('e30.eyJzdWIiOiJvd25lciJ9.fake'), env);
-  assert.equal(result.status, 401);
-});
-
-
-test('consent approval and denial consume the stored handle without reparsing form data', async () => {
-  const { publicKey, privateKey } = await generateKeyPair('RS256');
-  const jwk = { ...await exportJWK(publicKey), kid: 'test-key', alg: 'RS256', use: 'sig' };
-  const token = await new SignJWT({ sub: 'owner' }).setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).setIssuer(env.ACCESS_ISSUER).setAudience(env.ACCESS_AUD).setIssuedAt().setExpirationTime('1m').sign(privateKey);
-  const savedFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({ keys: [jwk] });
-  let parses = 0;
-  const storedRequest = { scope: ['agents.read'] };
-  const oauth = {
-    async parseAuthRequest() { parses++; return storedRequest; },
-    async describeConsent() { return { clientName: '<script>bad</script>', clientDomain: 'client.test', redirectHost: 'client.test', scope: ['agents.read'] }; },
-    async beginConsent() { return { handle: 'stored-handle', headers: new Headers() }; },
-    async approveConsent(req, handle) { assert.equal(handle, 'stored-handle'); return { request: storedRequest, headers: new Headers() }; },
-    async completeAuthorization(options) { assert.equal(options.userId, 'owner'); assert.equal(options.request, storedRequest); return { redirectTo: 'https://client.test/callback' }; },
-    async denyConsent(req, handle) { assert.equal(handle, 'stored-handle'); return { redirectTo: 'https://client.test/callback?error=access_denied', headers: new Headers() }; },
-  };
-  try {
-    const bindings = { ...env, OAUTH_PROVIDER: oauth };
-    const get = await defaultFetch(request(token), bindings);
-    assert.equal(get.status, 200);
-    const html = await get.text();
-    assert.ok(html.includes('agents.read'));
-    assert.ok(!html.includes('<script>'));
-    for (const decision of ['approve', 'deny']) {
-      const req = new Request('https://hub.test/authorize', { method: 'POST', headers: { 'cf-access-jwt-assertion': token }, body: new URLSearchParams({ handle: 'stored-handle', decision }) });
-      const response = await defaultFetch(req, bindings);
-      assert.equal(response.status, 302);
-      assert.equal(response.headers.get('location'), 'https://client.test/callback' + (decision === 'deny' ? '?error=access_denied' : ''));
-    }
-    assert.equal(parses, 1);
-  } finally { globalThis.fetch = savedFetch; }
+test('/mcp answers only with a valid Access assertion; health and publishing stay outside', async () => {
+  const keys = await generateKeyPair('RS256');
+  const token = await new SignJWT({ sub: 'owner' }).setProtectedHeader({ alg: 'RS256' }).setIssuer(env.ACCESS_ISSUER).setAudience(env.ACCESS_AUD).setIssuedAt().setExpirationTime('1m').sign(keys.privateKey);
+  const db = { prepare: () => ({ first: async () => null }) };
+  const call = (path, headers = {}) => hubFetch(new Request('https://hub.test' + path, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: '{"jsonrpc":"2.0","id":1,"method":"ping"}' }), { ...env, DB: db }, '', keys.publicKey);
+  assert.equal((await call('/mcp')).status, 401);
+  assert.equal((await call('/mcp', { 'cf-access-jwt-assertion': 'e30.eyJzdWIiOiJvd25lciJ9.fake' })).status, 401);
+  assert.equal((await call('/mcp/v1/agents', {})).status, 401);
+  assert.equal((await call('/mcp', { 'cf-access-jwt-assertion': token })).status, 503); // authorized; no snapshot in this fake DB
+  assert.equal((await hubFetch(new Request('https://hub.test/health'), env)).status, 200);
+  assert.equal((await hubFetch(new Request('https://hub.test/authorize'), env)).status, 404);
+  const prm = await (await hubFetch(new Request('https://hub.test/.well-known/oauth-protected-resource/mcp'), env)).json();
+  assert.deepEqual([prm.resource, prm.authorization_servers], ['https://hub.test/mcp', [env.ACCESS_ISSUER]]);
 });

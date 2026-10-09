@@ -29,25 +29,12 @@ both. Hosted results add `snapshot: { published_at, generated_at, stale }`; revi
 `~/.local/state/agent-workflow/publish.log`). By hand: `node publisher.mjs` or `node publisher.mjs --dry-run` to see
 exactly what would be sent. Set `AGENT_PUBLISH=0` to skip.
 
-OAuth state and grants live in the bound Workers KV namespace. The publisher credential remains only in
-`~/.config/agent-readonly/` (mode 600); the agent sandbox cannot read that folder and the workspace guard blocks it.
-The former read token and URL-token route are retired during the Agents Hub cutover.
-
-Cloudflare Access protects only `/authorize`, with an owner-only email policy. Discovery, registration,
-token exchange and publishing remain outside Access. The Worker verifies the Access JWT signature,
-issuer, audience and expiry before presenting OAuth consent. `ACCESS_ISSUER` and `ACCESS_AUD` must
-match the Access application. Consent is required on each authorization. The canonical OAuth resource
-and hosted connector URL is `https://YOUR-HUB.workers.dev/mcp`; the old root-level
-REST read paths return 404. The bundled clients use the new paths.
-
-**Authentication, and what would be simpler.** The Worker runs its own OAuth server (`workers-oauth-provider`, KV
-grants, our consent page) with Access only in front of `/authorize`. Cloudflare Access can instead be the OAuth
-server itself ("Managed OAuth" on an Access application): clients get a 401 with discovery metadata, register,
-sign in through Access, and every `/mcp` request arrives with a `Cf-Access-Jwt-Assertion` the Worker already knows
-how to verify (`src/access.mjs`). That would remove the OAuth library, the KV namespace and the consent page. Not
-switched yet; open questions to test on a second Worker first: workers.dev support, ChatGPT/Claude/Dots client
-compatibility (needs RFC 8707 resource indicators; CIMD isn't documented), keeping `/v1/snapshots` and `/health`
-outside the Access application, and whether the per-tool split (read vs. app-only decide) the relay phase needs still
-fits. vm's MCP Portal pattern fits managed backends with a fixed tool list, less a Worker of our own.
+**Sign-in:** Cloudflare Access is the OAuth server (Managed OAuth on the "Agents Hub MCP" Access application, path
+`/mcp`, owner-only policy): clients get a 401 with Access's metadata, register themselves (redirects limited to
+chatgpt.com, claude.ai, claude.com and loopback), sign in with the Access email code and get a 15-minute token
+(refresh for 30 days). The Worker has no OAuth code; it verifies the `Cf-Access-Jwt-Assertion` on every `/mcp`
+request (`src/access.mjs`), so preview URLs or a missing Access app fail closed. `/health` and `/v1/snapshots`
+(publisher token in `~/.config/agent-readonly/`) are outside Access. Evidence: `evidence/2026-10-09-agents-hub-managed-oauth/`.
+The old OAuth KV namespace is no longer bound and can be deleted.
 
 Tests: `npm test`. Deploy: `cf deploy` (check with `cf deploy --dry-run` first).
