@@ -1,0 +1,15 @@
+{
+  "name": "agents-hub",
+  "version": "0.1.0",
+  "private": false,
+  "description": "A small read-only dashboard contract and fixture demo for agent runs.",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "demo": "node demo/server.mjs",
+    "demo:build": "node cloudflare/build.mjs",
+    "check": "npm test"
+  },
+  "dependencies": {}
+}
