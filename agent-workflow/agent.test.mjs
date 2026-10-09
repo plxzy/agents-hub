@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
   acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
-  loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent, formatAgentListEntry, resolveWorkspace, sessionDirectory,
+  loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent, formatAgentListEntry, resolveWorkspace, sessionDirectory, sandboxProfile,
 } from './agent.mjs';
 
 function fixture() {
@@ -59,10 +60,11 @@ test('loads agent definitions', () => {
 test('agent list entry includes optional guard, skill names, and write paths compactly', () => {
   const { root } = fixture();
   fs.writeFileSync(path.join(root, 'agents/demo.md'),
-    `---\nname: demo\ndescription: test agent\ntools: read, ls\nmemory_scopes: shared\nguard: readonly\nskills: helper, network\nwrite_paths: ~/Development/demo\n---\nBe brief.\n`);
+    `---\nname: demo\ndescription: test agent\ntools: read, ls\nmemory_scopes: shared\nguard: readonly\nskills: helper, network\nwrite_paths: ~/Development/demo\nhere_write: AGENTS.md, .agents\n---\nBe brief.\n`);
   const entry = formatAgentListEntry(loadAgents(root)[0]);
   assert.match(entry, /guard=readonly/);
   assert.match(entry, /skills=helper,network/);
+  assert.match(entry, /here_write=AGENTS\.md,\.agents/);
   assert.ok(entry.includes('writes=') && entry.includes('/Development/demo'));
   assert.equal((entry.match(/\n/g) ?? []).length, 1);
 });
@@ -171,6 +173,62 @@ test('here workspaces are canonical, bounded by home, and have run-local permiss
   assert.equal(resolveWorkspace(fixed, '/ignored'), fixed);
   assert.equal(sessionDirectory(fixed, '/state'), '/state/sessions/demo');
 });
+
+test('here_write parses lists, restricts run-local grants, and rejects escaping paths', (t) => {
+  const { root } = fixture();
+  const dir = projectFixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(root, 'agents/demo.md');
+  const define = (value) => fs.writeFileSync(file, `---\nname: demo\nworkspace: here\nwrite_paths: /other\nhere_write: ${value}\n---\nBe brief.\n`);
+  for (const value of ['AGENTS.md, .agents', '[AGENTS.md, .agents]']) {
+    define(value);
+    const agent = loadAgents(root)[0];
+    assert.deepEqual(agent.hereWrite, ['AGENTS.md', '.agents']);
+    assert.deepEqual(resolveWorkspace(agent, dir).writePaths,
+      ['/other', path.join(dir, 'AGENTS.md'), path.join(dir, '.agents')]);
+    assert.deepEqual(agent.writePaths, ['/other']);
+    const fixed = { ...agent, workspace: dir };
+    assert.equal(resolveWorkspace(fixed), fixed);
+  }
+  for (const value of ['/absolute', '..', '../outside', '.agents/../../outside']) {
+    define(value);
+    assert.throws(() => loadAgents(root), /here_write.*relative.*inside/);
+    assert.throws(() => resolveWorkspace({ workspace: 'here', hereWrite: [value] }, dir), /here_write/);
+  }
+  define('');
+  const empty = loadAgents(root)[0];
+  assert.deepEqual(resolveWorkspace(empty, dir).writePaths, ['/other']);
+  assert.match(formatAgentListEntry(empty), /here_write=none/);
+});
+
+test('here_write sandbox permits new exact files and directories but denies unlisted writes',
+  { skip: process.platform !== 'darwin' }, (t) => {
+    // This fixture is inside home: /tmp would not exercise the home-folder write denial.
+    const dir = projectFixture();
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const agent = resolveWorkspace({ workspace: 'here', hereWrite: ['AGENTS.md', '.agents'] }, dir);
+    const profile = sandboxProfile(agent);
+    const run = (script, ...args) => spawnSync('sandbox-exec', ['-p', profile, process.execPath, '-e', script, ...args],
+      { encoding: 'utf8' });
+    const file = path.join(dir, 'AGENTS.md');
+    assert.equal(fs.existsSync(file), false);
+    const allowed = run("const fs = require('node:fs'); fs.writeFileSync(process.argv[1], 'new'); fs.mkdirSync(process.argv[2]); fs.writeFileSync(process.argv[2] + '/skill.md', 'nested');",
+      file, path.join(dir, '.agents'));
+    if (allowed.status === 71 && allowed.stderr.includes('sandbox_apply: Operation not permitted')) {
+      t.skip('this environment prohibits sandbox-exec; run from an unsandboxed terminal');
+      return;
+    }
+    assert.equal(allowed.status, 0, allowed.stderr);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'new');
+    assert.equal(fs.readFileSync(path.join(dir, '.agents/skill.md'), 'utf8'), 'nested');
+    for (const name of ['other.md', 'AGENTS.md-extra', '.agents-extra']) {
+      const denied = run("require('node:fs').writeFileSync(process.argv[1], 'denied')", path.join(dir, name));
+      assert.notEqual(denied.status, 0);
+      assert.match(denied.stderr, /EPERM|EACCES|Operation not permitted/);
+      assert.equal(fs.existsSync(path.join(dir, name)), false);
+    }
+  });
 
 test('here runs sandbox the actual folder, record it, and continue only its history', async (t) => {
   const { root, state } = fixture();

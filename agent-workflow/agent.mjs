@@ -44,6 +44,16 @@ export const newId = (prefix) => `${prefix}-${stamp()}-${randomBytes(3).toString
 
 // ---------- agents ----------
 
+function hereWritePaths(value) {
+  return list(value).map((p) => {
+    const normalized = path.normalize(p);
+    if (path.isAbsolute(p) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+      throw new Error(`here_write paths must be relative and stay inside the start folder: ${p}`);
+    }
+    return p;
+  });
+}
+
 export function loadAgents(root = ROOT) {
   const dir = path.join(root, 'agents');
   if (!fs.existsSync(dir)) return [];
@@ -62,6 +72,7 @@ export function loadAgents(root = ROOT) {
       // `tools: read, grep` (the format pi extensions use) or `tools: [read, grep]`.
       tools: list(meta.tools),
       workspace: expandHome(meta.workspace ?? process.cwd()),
+      hereWrite: meta.here_write === undefined ? null : hereWritePaths(meta.here_write),
       // Own key so it does not clash with the `memory:` field of pi-subagents extensions.
       memory: meta.memory_scopes ? list(meta.memory_scopes) : [`agent:${name}`],
       // By name: AGENT_HOME/agent-skills/<name>/ (only agents that list it) or AGENT_HOME/skills/<name>/ (shared;
@@ -85,6 +96,7 @@ export function formatAgentListEntry(a) {
   if (a.guard) details.push(`guard=${a.guard}`);
   if (a.skills !== 'none' && a.skills.length) details.push(`skills=${a.skills.map((s) => path.basename(s)).join(',')}`);
   if (a.writePaths?.length) details.push(`writes=${a.writePaths.join(',')}`);
+  if (a.hereWrite != null) details.push(`here_write=${a.hereWrite.join(',') || 'none'}`);
   return `${a.name.padEnd(14)} ${a.description}\n${''.padEnd(14)} ${details.join(' ')}`;
 }
 
@@ -105,7 +117,8 @@ export function resolveWorkspace(agent, cwd = process.cwd()) {
   }
   if (!fs.statSync(workspace).isDirectory()) throw new Error('workspace: here requires a directory');
   return { ...agent, workspace, workspaceId: createHash('sha256').update(workspace).digest('hex').slice(0, 12),
-    writePaths: [...(agent.writePaths ?? []), workspace] };
+    writePaths: [...(agent.writePaths ?? []), ...(agent.hereWrite == null ? [workspace]
+      : hereWritePaths(agent.hereWrite).map((p) => path.resolve(workspace, p)))] };
 }
 
 /** Task and chat share history; other run kinds stay separate, as do folders for `here` agents. */

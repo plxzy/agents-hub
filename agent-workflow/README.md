@@ -52,12 +52,18 @@ agent run → agent feedback <run|last> good|bad "why" → agent reflect <agent>
 | `~/.local/state/agent-workflow/` (`AGENT_WORKFLOW_STATE`) | Run receipts, raw Pi events, Pi sessions per agent | Private |
 
 Agent file fields: `name`, `description`, `model`, `thinking`, `tools`, `workspace`, `memory_scopes`,
-`skills`, `guard`, `sudo_allow`, `write_paths`, `protect_paths` (lists accept comma-separated values or `[a, b]`).
+`skills`, `guard`, `sudo_allow`, `write_paths`, `here_write`, `protect_paths` (lists accept comma-separated values or `[a, b]`).
 `workspace` accepts a fixed folder (`~/...` is expanded) or `here`. With `workspace: here`, `agent run`
 and `agent chat` use the folder they are started from; `runAgent` accepts an optional `cwd`, defaulting to
 `process.cwd()`, used only for `here` agents. The folder is symlink-resolved and must be a directory
-strictly inside home, not home itself. It is added to `write_paths` for that invocation only, enabling
-the macOS sandbox even when no `write_paths` were specified. Receipts record the resolved folder.
+strictly inside home, not home itself. By default it is added to `write_paths` for that invocation only.
+With `here_write: AGENTS.md, CLAUDE.md, .agents, .claude, .codex`, only those paths relative to the
+start folder are added instead: listed directories include their descendants, and listed files can be
+created even if they do not exist yet. Absolute paths and paths that escape the folder via `..` are
+rejected. An empty `here_write` adds no paths; omitting it preserves whole-folder write access.
+`here_write` has no effect on fixed-workspace agents; explicit `write_paths` remain additional grants.
+Either way, `workspace: here` enables the macOS sandbox even when no `write_paths` were specified.
+`agent list` shows `here_write` when set. Receipts record the resolved folder.
 Sessions include a stable short hash of that folder: `--continue` shares task/chat history in the same
 project, never another project; symlink aliases share history. Fixed-workspace agents keep their existing
 session paths and permissions.
