@@ -124,6 +124,16 @@ test('default sandbox doctor does not access private config/history or call muta
   assert.equal(h.allowlist.configured, null); assert.equal(h.last_successful_relay_run, null);
 });
 
+test('an isolated run state never implicitly reads the production relay journal', () => {
+  const original = fs.readdirSync; let calls = 0;
+  fs.readdirSync = () => { calls++; throw new Error('must not inspect a global journal for isolated state'); };
+  try {
+    const h = doctorHealth({ state: '/isolated-fixture-state', sandboxed: false, now });
+    assert.equal(calls, 0); assert.equal(h.last_successful_relay_run, null);
+    assert.match(h.history_limitation, /unavailable/);
+  } finally { fs.readdirSync = original; }
+});
+
 test('doctor input rechecks observation times and cannot attest journal origin', (t) => {
   const f = fixture(t), file = path.join(f.root, 'observations.json');
   const d = data(); d.last_successful_relay_run = { origin: 'relay-journal', run_id: 'r-invented', ended: at() };

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { homedir } from 'node:os';
 import { healthOf, healthTime } from './health.mjs';
 
-export function doctorHealth({ readConfig, state, journal = path.join(homedir(), '.config/agent-readonly/relay-journal'), sandboxed = process.env.AGENT_SANDBOXED === '1', now = Date.now() } = {}) {
+export function doctorHealth({ readConfig, state, journal = state === path.join(homedir(), '.local/state/agent-workflow') ? path.join(homedir(), '.config/agent-readonly/relay-journal') : undefined, sandboxed = process.env.AGENT_SANDBOXED === '1', now = Date.now() } = {}) {
   const data = { versions: { node: process.version }, configuration: { source: 'unavailable' }, history_limitation: 'relay journal unavailable' };
   // Never try to access the protected credential-bearing configuration from a sandboxed agent.
   if (!sandboxed && readConfig) {
