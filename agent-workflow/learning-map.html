@@ -121,13 +121,12 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
   <ol class="path">
     <li class="done"><b>Plain agent</b><span><code>.md</code> + <code>pi --tools</code>, what you already knew</span><em class="pill ok">done</em></li>
     <li class="done"><b>Memory layers</b><span>instructions, session, notes you approve</span><em class="pill ok">done</em></li>
-    <li class="done"><b>pi-subagents</b><span>experiment 1: named agents + memory</span><em class="pill ok">tried</em></li>
-    <li class="done"><b>Pi Fabric</b><span>experiment 2: worker + reviewer</span><em class="pill ok">first pass</em></li>
-    <li class="done"><b>Pi Durable</b><span>experiment 3: kill -9 mid-task, resume</span><em class="pill ok">tried</em></li>
-    <li class="done"><b>pi-subagents (nicobailon)</b><span>experiment 1b: richer, sees your agents</span><em class="pill ok">tried</em></li>
-    <li class="now"><b>Pick a base</b><span>try the two subagent packages in the TUI, choose one</span><em class="pill now">next</em></li>
-    <li><b>Cloudflare?</b><span>only if something must live while the Mac sleeps</span><em class="pill later">decide</em></li>
-    <li><b>Dots sees agents</b><span>a list/read tool Dots can call</span><em class="pill later">later</em></li>
+    <li class="done"><b>Try the machinery</b><span>2× pi-subagents, Fabric, Durable</span><em class="pill ok">tried</em></li>
+    <li class="done"><b>Your agents</b><span><code>~/.agents</code>, versioned in git</span><em class="pill ok">done</em></li>
+    <li class="done"><b>Improvement loop</b><span>rate → coach → review → tests</span><em class="pill ok">done</em></li>
+    <li class="done"><b>network agent</b><span>skill + guard, 5/5 tests</span><em class="pill ok">done</em></li>
+    <li class="now"><b>Other apps use agents</b><span>local MCP: Claude, Codex, ChatGPT/Dots</span><em class="pill now">next</em></li>
+    <li><b>Per-project agent</b><span>project memory + fixed workspace</span><em class="pill later">later</em></li>
     <li><b>vm</b><span>real project work</span><em class="pill later">later</em></li>
   </ol>
 </section>
@@ -148,6 +147,27 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
     <article class="panel" id="panel" aria-live="polite"></article>
   </div>
   <p class="legend"><span><i style="background:var(--accent)"></i>outlined chip = what you use today</span></p>
+</section>
+
+<section aria-labelledby="built-h">
+  <div class="head"><h2 id="built-h">How your agents are built now</h2>
+  <p>One flat file per agent, the format every Pi extension reads. Everything else sits next to it in <code>~/.agents</code>, a git repo, so each accepted change is a version.</p></div>
+  <div class="tablebox"><table>
+    <thead><tr><th>Path</th><th>What</th><th>Who changes it</th></tr></thead>
+    <tbody>
+      <tr><th><code>agents/&lt;name&gt;.md</code></th><td>instructions + <code>tools</code>, <code>model</code>, <code>skills</code>, <code>guard</code>, <code>memory_scopes</code></td><td>you (or an accepted coach proposal)</td></tr>
+      <tr><th><code>memory/…</code></th><td>reviewed notes, one per file; shared, per project, per agent</td><td>agents propose, you accept</td></tr>
+      <tr><th><code>skills/</code></th><td>shared knowledge; Pi loads it for every agent</td><td>you</td></tr>
+      <tr><th><code>agent-skills/</code></th><td>knowledge only for agents that list it (e.g. macos-networking)</td><td>you</td></tr>
+      <tr><th><code>evals/&lt;agent&gt;/</code></th><td>test cases: answer patterns + which commands must or must not run</td><td>you or accepted coach proposals</td></tr>
+    </tbody>
+  </table></div>
+  <div class="cards">
+    <div class="card"><h3>Instructions</h3><p>What to do and how to answer. Small models follow them until you ask for the opposite.</p></div>
+    <div class="card"><h3>Knowledge skills</h3><p>How the domain works, verified on your Mac. Turned hedged network answers into correct ones.</p></div>
+    <div class="card"><h3>Guards</h3><p>Hard limits enforced by a Pi hook. Stopped <code>sudo dscacheutil -flushcache</code> that instructions did not.</p></div>
+    <div class="card"><h3>Tests + coach</h3><p><code>agent eval</code> scores each version; <code>agent reflect</code> proposes fixes you review. helper 3/4 → 4/4, network 4/5 → 5/5.</p></div>
+  </div>
 </section>
 
 <section aria-labelledby="cmp-h">
@@ -214,10 +234,10 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
 
 <section aria-labelledby="park-h">
   <div class="head"><h2 id="park-h">Parked, not wasted</h2>
-  <p>Built by Codex on 8 Oct before any agent needed it. It belongs to later steps.</p></div>
+  <p>Built by Codex on 8 Oct before any agent needed it. Archived on 9 Oct in <code>archive/2026-10-09-codex-agent-registry/</code>; the Cloudflare resources are still deployed until you decide.</p></div>
   <div class="cards">
     <div class="card"><h3>Run contract</h3><p><code>contracts/</code>: a shared vocabulary for runs (states, events, retries). Useful when Dots or another client must read runs.</p></div>
-    <div class="card"><h3>Cloudflare registry</h3><p>Deployed D1 + Durable Objects + R2 logbook of runs. Secrets removed, so it currently refuses requests.</p></div>
+    <div class="card"><h3>Cloudflare registry</h3><p>Deployed Worker, D1, Durable Objects, R2. Secrets removed, so it refuses requests. Removal commands are in the archive README.</p></div>
     <div class="card"><h3>Chrome Pages bridge</h3><p>Reads Pages through your signed-in Chrome. Not needed: the <code>chatgpt-pages</code> MCP already works.</p></div>
   </div>
 </section>
@@ -237,7 +257,7 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
   </dl>
 </section>
 
-<footer>Evidence: <code>evidence/2026-10-09-pi-subagents/</code>, <code>evidence/2026-10-09-pi-subagents-nicobailon/</code>, <code>evidence/2026-10-09-pi-fabric/</code>, <code>evidence/2026-10-09-pi-durable/</code>, <code>agent-workflow/README.md</code> in the dev-workflow repo. Test folders: <code>~/Development/pi-dev/experiments/</code>.</footer>
+<footer>Evidence: <code>evidence/2026-10-09-pi-subagents/</code>, <code>evidence/2026-10-09-pi-subagents-nicobailon/</code>, <code>evidence/2026-10-09-pi-fabric/</code>, <code>evidence/2026-10-09-pi-durable/</code>, <code>evidence/2026-10-09-netwatch-instructions/</code>, <code>evidence/2026-10-09-network-knowledge-skill/</code>, <code>agent-workflow/README.md</code> in the dev-workflow repo. Test folders: <code>~/Development/pi-dev/experiments/</code>.</footer>
 </div>
 
 <script>
