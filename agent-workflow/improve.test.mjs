@@ -49,6 +49,52 @@ test('sandboxed evals abort with an actionable message instead of a score', asyn
   assert.equal(fs.existsSync(path.join(state, 'evals')), false);
 });
 
+test('eval cwd is saved only for here agents and must be absolute', (t) => {
+  const { root } = home();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  addEval('demo', 'Fixed', { root, cwd: 'ignored-relative-path' });
+  assert.equal(loadEvals('demo', root)[0].cwd, undefined);
+  assert.doesNotMatch(fs.readFileSync(path.join(root, 'evals/demo', fs.readdirSync(path.join(root, 'evals/demo'))[0]), 'utf8'), /cwd:/);
+  fs.writeFileSync(path.join(root, 'agents/demo.md'), '---\nname: demo\nworkspace: here\n---\nBe brief.\n');
+  addEval('demo', 'Default', { root });
+  addEval('demo', 'Override', { root, cwd: os.homedir() });
+  const cases = loadEvals('demo', root);
+  assert.equal(cases.find((c) => c.question === 'Default').cwd, process.cwd());
+  assert.equal(cases.find((c) => c.question === 'Override').cwd, os.homedir());
+  assert.throws(() => addEval('demo', 'Bad', { root, cwd: 'relative' }), /absolute path/);
+});
+
+test('here evals use saved cwd from home and legacy cases use the launch folder', async (t) => {
+  const { root, state } = home();
+  const launch = process.cwd();
+  const sandboxed = process.env.AGENT_SANDBOXED;
+  t.after(() => {
+    process.chdir(launch);
+    if (sandboxed === undefined) delete process.env.AGENT_SANDBOXED;
+    else process.env.AGENT_SANDBOXED = sandboxed;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  delete process.env.AGENT_SANDBOXED;
+  fs.writeFileSync(path.join(root, 'agents/demo.md'), '---\nname: demo\nworkspace: here\n---\nBe brief.\n');
+  addEval('demo', 'Saved', { root, cwd: launch });
+  const seen = [];
+  const run = async (name, question, options) => {
+    seen.push([question, options.cwd]);
+    return { run_id: 'r-fake', status: 'completed', output: '', tool_calls: [], usage: { totalTokens: 0, cost: 0 } };
+  };
+  process.chdir(os.homedir());
+  await runEvals('demo', { root, state, run });
+  assert.deepEqual(seen, [['Saved', launch]]);
+  fs.writeFileSync(path.join(root, 'evals/demo/legacy.md'), '---\nid: legacy\n---\nLegacy\n');
+  await assert.rejects(runEvals('demo', { root, state, run }), /strictly inside/);
+  process.chdir(launch);
+  await runEvals('demo', { root, state, run });
+  assert.deepEqual(seen.slice(1).sort(), [['Legacy', launch], ['Saved', launch]]);
+  fs.writeFileSync(path.join(root, 'agents/demo.md'), `---\nname: demo\nworkspace: ${launch}\n---\nBe brief.\n`);
+  await runEvals('demo', { root, state, run });
+  assert.ok(seen.slice(3).every(([, cwd]) => cwd === undefined));
+});
+
 test('checkCase applies include, exclude and tool budget', () => {
   const c = { include: ['codex', 'fall ?back'], exclude: ['guarantee'], maxTools: 1 };
   assert.deepEqual(checkCase(c, { output: 'Codex can still fall back.', toolCalls: 1 }), { pass: true, problems: [] });

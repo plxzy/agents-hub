@@ -38,6 +38,11 @@ agent run → agent feedback <run|last> good|bad "why" → agent reflect <agent>
   `--include`, `--exclude`, `--run`, and `--not-run` all repeat. For compatibility, a flag appearing
   only once splits its value on commas unless it contains `{`; repeated values are always kept intact.
   New cases store JSON arrays so regex commas survive saving and loading; old comma-list cases still work.
+  Cases may also have an absolute `cwd:` path. For `workspace: here` agents, `agent eval add` saves
+  the current folder; `--cwd /absolute/project/folder` overrides it. `agent eval` uses each case's saved
+  folder, so it can be started from home. Legacy cases without `cwd` still use the folder eval was
+  started from. Fixed-workspace agents ignore `cwd`, and adding their cases never writes it.
+  The usual `here` restrictions apply at evaluation time (a directory strictly inside home).
 - **The coach** (`agent reflect`) is a no-tools Pi call that sees the definition, reviewed memory, recent
   task runs with your ratings, and the latest test results. It may propose notes, new test cases, and at
   most one instruction rewrite; it may not add tools or permissions. Its input and output are kept in

@@ -32,11 +32,13 @@ export function loadEvals(agent, root = ROOT) {
   return fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort().map((f) => {
     const { meta, body } = parseFrontmatter(fs.readFileSync(path.join(dir, f), 'utf8'));
     return { id: meta.id ?? path.basename(f, '.md'), question: body, include: list(meta.must_include),
-      exclude: list(meta.must_not_include), run: list(meta.must_run), notRun: list(meta.must_not_run), maxTools: meta.max_tools === undefined ? null : Number(meta.max_tools), why: meta.why };
+      exclude: list(meta.must_not_include), run: list(meta.must_run), notRun: list(meta.must_not_run), maxTools: meta.max_tools === undefined ? null : Number(meta.max_tools), why: meta.why, cwd: meta.cwd };
   });
 }
 
-export function addEval(agent, question, { include = [], exclude = [], run = [], notRun = [], maxTools = null, why, root = ROOT } = {}) {
+export function addEval(agent, question, { include = [], exclude = [], run = [], notRun = [], maxTools = null, why, cwd = process.cwd(), root = ROOT } = {}) {
+  cwd = getAgent(agent, root).workspace === 'here' ? cwd : undefined;
+  if (cwd !== undefined && !path.isAbsolute(cwd)) throw new Error('eval cwd must be an absolute path');
   const id = newId('e');
   const dir = evalDir(agent, root);
   fs.mkdirSync(dir, { recursive: true });
@@ -44,7 +46,7 @@ export function addEval(agent, question, { include = [], exclude = [], run = [],
   const patterns = (values) => values.length ? JSON.stringify(values) : undefined;
   const meta = { id, agent, must_include: patterns(include),
     must_not_include: patterns(exclude), must_run: patterns(run),
-    must_not_run: patterns(notRun), max_tools: maxTools ?? undefined, why };
+    must_not_run: patterns(notRun), max_tools: maxTools ?? undefined, why, cwd };
   fs.writeFileSync(path.join(dir, `${id}.md`), formatFrontmatter(meta, question));
   return id;
 }
@@ -66,12 +68,18 @@ export function checkCase(c, { output, toolCalls, commands = [] }) {
 
 export async function runEvals(name, { root = ROOT, state = STATE, run = runAgent } = {}) {
   const agent = getAgent(name, root);
-  assertSandboxAllowed(resolveWorkspace(agent), `agent eval ${name}`);
   const cases = loadEvals(name, root);
   if (!cases.length) throw new Error(`no eval cases for ${name}; add one with: agent eval add ${name} "<question>" --include ...`);
+  const cwd = process.cwd();
+  // Preflight the cases, not the launch folder: saved here cases can run from home.
+  const caseCwd = (c) => agent.workspace === 'here' ? c.cwd ?? cwd : undefined;
+  for (const c of cases) {
+    if (caseCwd(c) !== undefined && !path.isAbsolute(caseCwd(c))) throw new Error('eval cwd must be an absolute path');
+    assertSandboxAllowed(resolveWorkspace(agent, caseCwd(c)), `agent eval ${name}`);
+  }
   const results = [];
   for (const c of cases) {
-    const r = await run(name, c.question, { root, state, kind: 'eval', proposeMemory: false });
+    const r = await run(name, c.question, { root, state, kind: 'eval', proposeMemory: false, cwd: caseCwd(c) });
     results.push({ id: c.id, question: c.question, run_id: r.run_id, status: r.status,
       ...checkCase(c, { output: r.output, toolCalls: r.tool_calls.length, commands: r.commands ?? [] }),
       blocked: r.blocked ?? [], tool_calls: r.tool_calls.length, tokens: r.usage.totalTokens, cost: r.usage.cost });
@@ -295,9 +303,10 @@ export async function cli(cmd, args) {
     const rest = args.slice(1);
     const include = regexFlags(rest, '--include'); const exclude = regexFlags(rest, '--exclude'); const max = flag(rest, '--max-tools');
     const run = regexFlags(rest, '--run'); const notRun = regexFlags(rest, '--not-run');
+    if (rest.includes('--cwd') && (!rest[rest.indexOf('--cwd') + 1] || rest[rest.indexOf('--cwd') + 1].startsWith('--'))) throw new Error('--cwd requires a directory');
+    const cwd = flag(rest, '--cwd');
     const [agent, ...q] = rest;
-    getAgent(agent);
-    console.log(addEval(agent, q.join(' '), { include, exclude, run, notRun, maxTools: max === undefined ? null : Number(max) }));
+    console.log(addEval(agent, q.join(' '), { include, exclude, run, notRun, cwd, maxTools: max === undefined ? null : Number(max) }));
     commitHome(`Add eval case for ${agent}`);
   } else if (cmd === 'eval') {
     const { report, previous } = await runEvals(args[0]);

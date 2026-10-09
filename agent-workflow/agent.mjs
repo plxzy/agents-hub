@@ -445,7 +445,7 @@ const USAGE = `usage:
 improving over time:
   agent feedback <run_id|last> good|bad [comment...]
   agent eval <agent>                  run the agent's test cases, compare with last time
-  agent eval add <agent> [--include regex] [--exclude regex] [--run regex] [--not-run regex] [--max-tools n] "<question>"
+  agent eval add <agent> [--include regex] [--exclude regex] [--run regex] [--not-run regex] [--max-tools n] [--cwd /dir] "<question>"
     Regex flags are repeatable (one per regex). Legacy comma lists: only a single flag value without '{'.
   agent reflect <agent> [--runs n]    coach reviews recent runs + feedback, writes proposals
   agent review                        everything waiting for your decision
