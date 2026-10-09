@@ -35,6 +35,14 @@ test('WebSocket relay in real Workers runtime', async (t) => {
     assert.equal((await mf.dispatchFetch('https://test/relay/poll', { headers: { authorization: 'Bearer ' + token } })).status, 404);
   });
   assert.ok(client?.ws, "initial socket must connect");
+  await t.test('one-shot status adds timestamps/version without dispatch or journal mutations', async () => {
+    const before = await api('inspect');
+    const status = await api('status');
+    assert.equal(status.online, true); assert.equal(status.enabled, true);
+    assert.deepEqual(status.agents, ['helper']); assert.equal(status.protocol_version, WIRE.version);
+    assert.ok(Number.isFinite(Date.parse(status.observed_at))); assert.ok(Number.isFinite(Date.parse(status.last_seen_at)));
+    assert.deepEqual(await api('inspect'), before);
+  });
   let job;
   const args = { agent: 'helper', task: 'read', request_id: 'runtime-request' };
   await t.test('dispatch durable before send; concurrent duplicates share one operation', async () => {

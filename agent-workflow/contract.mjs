@@ -8,7 +8,9 @@
 //               local briefs add `task` (the full prompt); the hosted hub never has it.
 //   dashboard   { generated_at, capabilities, status, agents, runs: brief[], pending: item[] | null, snapshot? }
 //               status.pending is { memory, proposals } or null when unknown. `snapshot` is present only on the
-//               hosted hub: { published_at, generated_at, stale }.
+//               hosted hub: { published_at, generated_at, stale }; unavailable snapshots add available:false.
+//   health      additive field on get_status/open_dashboard: health.mjs schema_version 1. Legacy fields and tool names
+//               remain unchanged. Snapshot capabilities describe the published surface, never live relay authority.
 //   get_run     the run itself (local: the full receipt; hosted: its brief), plus `snapshot` on the hosted hub.
 
 export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v3.html';
@@ -60,10 +62,12 @@ export const lastRunOf = (name, runs) => {
 
 export function dashboardSummary(d) {
   const p = d.status.pending;
-  const review = p ? `${p.memory} memory note(s) and ${p.proposals} proposal(s) waiting for review` : 'review queue not published';
-  const fresh = d.snapshot ? ` · snapshot ${d.snapshot.generated_at}${d.snapshot.stale ? ' (stale)' : ''}` : '';
-  return `${d.status.agents} agents · ${d.status.running} running · ${review} · last run: `
-    + `${d.status.last_run ? `${d.status.last_run.agent} ${d.status.last_run.status}` : 'none'}${fresh}`;
+  const knownReview = Number.isInteger(p?.memory) && p.memory >= 0 && Number.isInteger(p?.proposals) && p.proposals >= 0;
+  const review = knownReview ? `${p.memory} memory note(s) and ${p.proposals} proposal(s) waiting for review` : 'review queue not published/unknown';
+  const fresh = d.snapshot ? ` · snapshot ${d.snapshot.generated_at ?? 'time unknown'}${d.snapshot.stale ? ' (stale/unavailable)' : ''}` : '';
+  const relay = d.health ? ` · relay ${d.health.relay.state} · remote execution ${d.health.execution.enabled === null ? 'unknown' : d.health.execution.enabled ? 'enabled' : 'deliberately off'}` : '';
+  return `${d.status.agents ?? 'unknown'} agents · ${d.status.running ?? 'unknown'} running · ${review} · last run: `
+    + `${d.status.last_run ? `${d.status.last_run.agent} ${d.status.last_run.status}` : 'unknown/none recorded'}${fresh}${relay}`;
 }
 
 const NONE = { type: 'object', properties: {}, additionalProperties: false };
@@ -78,7 +82,7 @@ export const READ_OPS = {
   },
   get_status: {
     title: 'Agents status', input: NONE, annotations: { readOnlyHint: true },
-    description: 'Counts of agents and runs, runs in progress, and how many items wait for the user\'s review.',
+    description: 'Read-only counts and one-shot health observations: relay state, snapshot freshness, remote execution and allowlist information when available. Unknown values remain unknown; historical success is not a heartbeat.',
   },
   list_agents: {
     title: 'List agents', input: NONE, annotations: { readOnlyHint: true },

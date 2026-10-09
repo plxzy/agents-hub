@@ -13,7 +13,7 @@ Claude Code, Codex, Pi and standalone `agent ui`, but no longer advertises a sec
   a run ID promptly, and fetching completion is a separate operation. Disconnected work is not automatically
   replayed. Explicit retries reuse the logical request ID with a fresh attempt deadline.
 - The Mac validates every operation and its inputs. Its private config is authoritative for the remote-start
-  allowlist and off switch. Only **helper and network** were authorized by the user. `workspace: here` is refused
+  allowlist and off switch. The current remote allowlist is **helper only**; network and other shell-capable agents remain excluded. `workspace: here` is refused
   remotely until an explicit project-folder policy is designed.
 - Starts use the existing operations catalog and launcher. Remote helpers always enter the existing macOS
   credential sandbox, even if normally unsandboxed locally. Their guards and reviewed memory still apply.
@@ -56,11 +56,45 @@ separate. Install local client dependencies with `npm ci --prefix agent-workflow
 The historical D1 migration and empty relay tables remain for rollback; active transport uses the DO.
 
 ```
-agent link status      # safe: no credentials printed
+agent link doctor --json # one-shot read-only observations; unknown is not offline/off
+agent link status      # local configuration only, NOT proof of connection; no credentials printed
 agent link serve       # foreground; Ctrl-C disconnects
 agent link off         # reject new remote starts on the Mac
 agent link on          # re-enable starts for the existing allowlist
 ```
+
+### One-shot health and capability labels (local patch; no deployment claim)
+
+The existing `get_status` read operation and `open_dashboard` now add a version-1 `health` report without changing
+legacy fields or tool names. CLI `agent link doctor [--json] [--input observations.json]` uses the same pure report
+and labels as the dashboard. Before this branch is reviewed/integrated, invoke its CLI explicitly as
+`node agent-workflow/agent.mjs link doctor --json` from the worktree root; the installed `agent` symlink still
+points to canonical main. The input option reads a raw `get_status`/`open_dashboard` JSON observation once,
+rechecking its timestamps; it does not authenticate, refresh that observation or create a live connection.
+
+- Published snapshot `capabilities.run:false` / `mutate:false` describe the read-only snapshot surface, not whether
+  the foreground relay exists. They stay false even when separate live relay observations report online/enabled.
+  Only a successful live `panel_data` response exposes Run/Review controls; remote Run lists explicitly allowed agents.
+- Relay freshness comes from the DO's existing auto-response timestamp (or initial connection time), with a 30s
+  limit. Status reads add observation/last-seen times and protocol version, without pinging, writing storage,
+  dispatching commands or adding timers. Disconnected does not establish whether the foreground process is reconnecting.
+- Current enabled state and observed allowlist are authoritative only with fresh live observations. Disconnected
+  socket-attachment values, when available, are labeled **last-known** with their time. Missing/unavailable facts,
+  review counts and timestamps stay unknown. Malformed/future times are never shown as age zero or healthy.
+- Expected remote allowlist is helper only. Comparison is diagnostic, not a new permission source or a configuration
+  write. `doctor`'s local configuration projection is separately labeled and is not proof of liveness. The default
+  local doctor has no authorized hosted status channel, so live connection and snapshot values remain unknown.
+- A successful relay-origin run requires a local run marker, its completed dispatch journal and a completed run
+  receipt with a valid end time. Default doctor can read these on an unsandboxed operator terminal. In a sandbox it
+  **does not attempt** private configuration/journal access. Hosted sanitized snapshots do not prove origin; their
+  report explicitly states that limitation. Old successful runs are historical evidence, never heartbeats.
+- Exit 0: fresh connected relay, known helper-only allowlist and known enabled/off state (deliberately off is not
+  an outage). Exit 1: disconnected/stale relay or observed allowlist mismatch. Exit 2: required live observations
+  unknown/unavailable. Invalid CLI/input syntax exits 1 through the existing CLI error handler. These codes concern
+  the remote-start gate, not a guarantee of model readiness or snapshot availability.
+- Normal health reads never start a model, issue confirmation codes, mutate settings, publish, schedule work or
+  create a resident process. Public `/health` remains liveness plus static read-only capabilities; private health
+  metadata stays behind the existing OAuth-protected MCP endpoint. No new credential or remote operation is added.
 
 Run `agent link serve` in a visible Terminal window. The user chose foreground-only operation: no launchd service, login item, or detached relay. Closing the terminal disconnects live access; private config and receipts remain on the Mac.
 

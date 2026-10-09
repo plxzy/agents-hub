@@ -94,8 +94,10 @@
 </div>
 <!-- MCP Apps bridge, inlined by ui/dashboard.mjs (hosts block script URLs); its own module so names can't clash. -->
 <script type="module">/*__EXT_APPS_BUNDLE__*/</script>
+<script type="module">/*__HEALTH_BUNDLE__*/</script>
 <script type="module">
 const { App, applyHostStyleVariables } = globalThis.ExtApps;
+const { healthOf, healthLabels } = globalThis.AgentsHealth;
 
 // ---------- state ----------
 const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null };
@@ -114,8 +116,8 @@ function h(tag, attrs = {}, ...kids) {
   return el;
 }
 const ago = (iso) => {
-  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
-  if (!Number.isFinite(s)) return '';
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (!Number.isFinite(s) || s < 0) return '';
   return s < 60 ? `${Math.floor(s)}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`;
 };
 const firstLine = (t) => String(t ?? '').trim().split('\n')[0];
@@ -143,8 +145,8 @@ async function refresh() {
   S.refreshing = true;
   try {
     let data = await call('open_dashboard');
-    if (data.relay?.online) {
-      try { data = await call('panel_data'); }
+    if (data.relay?.online === true) {
+      try { const live = await call('panel_data'); data = { ...live, health: data.health ?? healthOf(data) }; }
       catch (e) { data.relay.error = e.message; }
     }
     setData(data); showError(data.relay?.error);
@@ -180,16 +182,17 @@ async function loadDetail(id) {
 function chips() {
   const st = S.data?.status; if (!st) return [];
   // pending is null when the hosted snapshot does not carry it: say so instead of showing a zero.
-  const review = st.pending ? st.pending.memory + st.pending.proposals : null;
-  const snap = S.data.snapshot;
-  return [h('span', { class: 'chip' }, `${st.agents} agents`),
-    S.data.relay ? h('span', { class: 'chip' }, S.data.relay.online ? (S.data.relay.enabled ? 'Mac linked' : 'Mac linked · remote runs off') : 'Mac offline') : null,
-    h('span', { class: `chip${st.running ? ' on' : ''}` }, `${st.running} running`),
+  const review = Number.isInteger(st.pending?.memory) && st.pending.memory >= 0 && Number.isInteger(st.pending?.proposals) && st.pending.proposals >= 0
+    ? st.pending.memory + st.pending.proposals : null;
+  const health = S.data.health ?? healthOf(S.data);
+  return [h('span', { class: 'chip' }, `${st.agents ?? 'unknown'} agents`),
+    h('span', { class: `chip${st.running ? ' on' : ''}` }, `${st.running ?? 'unknown'} running`),
     h('span', { class: `chip${review ? ' attn' : ''}` }, review === null ? 'review: unknown' : `${review} to review`),
-    snap ? h('span', { class: `chip${snap.stale ? ' attn' : ''}`, title: `Published ${snap.published_at ?? '?'}` },
-      `${snap.stale ? 'stale · ' : ''}snapshot ${ago(snap.generated_at) || 'time unknown'}`) : null].filter(Boolean);
+    ...healthLabels(health).map((text) => h('span', { class: 'chip', title: text }, text))];
 }
-const canRun = () => S.data?.capabilities?.run === true;
+// Snapshot run=false stays false. Only live panel_data can expose remote Run controls.
+const canRun = () => S.data?.capabilities?.run === true && (!S.data?.relay || S.data.relay.online === true && S.data.relay.enabled === true);
+const allowedForRun = (a) => S.data?.relay ? a.remote_allowed === true : a.remote_allowed !== false;
 const canDecide = () => S.data?.capabilities?.mutate === true;
 
 function tabs() {
@@ -205,7 +208,7 @@ function agentsView() {
     h('div', { class: 'line' },
       h('span', { class: 'name' }, a.name), h('span', { class: 'grow muted ell' }, a.description),
       a.last_run ? h('span', { class: `pill ${a.last_run.status}` }, a.last_run.status) : null,
-      canRun() && a.remote_allowed !== false ? h('button', { onclick: () => { S.form = { agent: a.name }; render(); } }, 'Run…') : null),
+      canRun() && allowedForRun(a) ? h('button', { onclick: () => { S.form = { agent: a.name }; render(); } }, 'Run…') : null),
     h('div', { class: 'meta' }, [a.model, a.guard && `guard: ${a.guard}`, a.workspace === 'here' ? 'works in the folder it is started in' : home(a.workspace),
       a.tools?.length ? `tools: ${a.tools.join(', ')}` : 'no tools', a.last_run && `last run ${ago(a.last_run.started)}`].filter(Boolean).join(' · ')))));
 }
@@ -277,8 +280,8 @@ function reviewView() {
 }
 
 function formView() {
-  if (!canRun()) return h('div', { class: 'empty' }, 'Running agents is unavailable on this hosted read-only surface.');
-  const agents = S.data.agents.filter((a) => a.remote_allowed !== false);
+  if (!canRun()) return h('div', { class: 'empty' }, 'Run is unavailable: snapshot capabilities are read-only; live remote starts require an online, enabled relay and an allowed agent.');
+  const agents = S.data.agents.filter(allowedForRun);
   const chosen = agents.find((a) => a.name === S.form.agent) ?? agents[0];
   const submit = (e) => {
     e.preventDefault();
