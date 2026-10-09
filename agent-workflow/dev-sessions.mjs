@@ -151,7 +151,8 @@ export class DevelopmentSessions {
         let result = {};
         try { if (code === 0 && !failure) result = JSON.parse(output); } catch { failure = 'Invalid Pi result'; }
         save(file, { ...receipt, status: failure || code !== 0 ? 'interrupted' : 'completed', stopped_at: Date.now(),
-          ...(failure ? { error: failure } : {}), output: safeOutput(result.output ?? ''), tool_calls: result.tool_calls ?? [] });
+          ...(failure ? { error: failure } : {}), output: safeOutput(result.output ?? ''), tool_calls: result.tool_calls ?? [],
+          ...(/^[a-f0-9]{40,64}$/.test(result.commit ?? '') ? { commit: result.commit } : {}) });
         this.active = null;
         try { await this.lease({ ...leaseArgs, execution_state: 'stopped' }); } catch { /* stop remains unconfirmed on Hub until reconnect */ }
       };
@@ -173,8 +174,10 @@ export class DevelopmentSessions {
     const began = performance.now(), permit = await this.lease(leaseArgs);
     if (!permit.authorized || permit.lease_ms <= 0 || permit.lease_ms > DEVELOPMENT.leaseMs) throw new Error('Export lease refused');
     const filename = '.git/review-' + run_id + '.bundle';
+    if (!/^[a-f0-9]{40,64}$/.test(receipt.commit ?? '')) throw new Error('Task has no recorded commit');
+    const exportRef = 'refs/heads/export-' + run_id;
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), Math.max(0, permit.lease_ms - (performance.now() - began)));
-    try { await sandboxExecute(config.policy, 'bash', { command: `git -c core.hooksPath=/dev/null bundle create ${filename} HEAD` }, { signal: controller.signal }); }
+    try { await sandboxExecute(config.policy, 'bash', { command: `git -c core.hooksPath=/dev/null update-ref ${exportRef} ${receipt.commit} && git -c core.hooksPath=/dev/null bundle create ${filename} ${exportRef}` }, { signal: controller.signal }); }
     finally { clearTimeout(timer); }
     if (!(await this.lease(leaseArgs)).authorized) throw new Error('Export revoked before import');
     const candidate = fs.realpathSync(path.join(config.policy.workspace, filename));
@@ -190,14 +193,14 @@ export class DevelopmentSessions {
     const ref = `refs/heads/review/${conversation_id}/${run_id}`;
     // No plus/force: existing review refs cannot be replaced. No checkout or hooks.
     execFileSync('git', [...args, 'bundle', 'verify', target], { env: gitEnv, stdio: 'pipe' });
-    const head = execFileSync('git', [...args, 'bundle', 'list-heads', target, 'HEAD'], { env: gitEnv, encoding: 'utf8' }).split(' ')[0];
-    if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error('Invalid bundle head');
+    const head = execFileSync('git', [...args, 'bundle', 'list-heads', target, exportRef], { env: gitEnv, timeout: 15000, encoding: 'utf8' }).split(' ')[0];
+    if (head !== receipt.commit) throw new Error('Bundle does not match task commit');
     try {
       const existing = execFileSync('git', [...args, 'rev-parse', '--verify', ref], { env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
       if (existing !== head) throw new Error('Review ref already exists with different content');
       return { ref, commit: head };
     } catch (error) { if (error.message === 'Review ref already exists with different content') throw error; }
-    execFileSync('git', [...args, 'fetch', '--no-tags', '--no-write-fetch-head', target, `HEAD:${ref}`], { env: gitEnv, stdio: 'pipe' });
+    execFileSync('git', [...args, 'fetch', '--no-tags', '--no-write-fetch-head', target, `${exportRef}:${ref}`], { env: gitEnv, timeout: 15000, stdio: 'pipe' });
     return { ref, commit: head };
     } finally {
       this.active = null;

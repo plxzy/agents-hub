@@ -4,7 +4,7 @@ set -euo pipefail
 repo=${1:?usage: install-workflow.sh REPOSITORY KNOWLEDGE_RELEASE}
 knowledge=$(realpath "${2:?knowledge release required}")
 test -f "$knowledge/RELEASE.json"
-revision=$(git -C "$repo" rev-parse HEAD)
+revision=$(git -C "$repo" rev-parse "${3:-HEAD}^{commit}")
 base="$HOME/.local/share/agent-workflow/releases"
 release="$base/$revision"
 mkdir -p "$base" "$HOME/.local/bin"

@@ -49,7 +49,13 @@ export async function executeSession(config, task) {
   });
   const abort = () => { void session.abort(); };
   process.once('SIGTERM', abort);
-  try { await session.prompt(task); if (failed) throw new Error('Model turn failed'); return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id }; }
+  try {
+    await session.prompt(task); if (failed) throw new Error('Model turn failed');
+    const git = await sandboxExecute(config.policy, 'bash', { command: 'git -c core.hooksPath=/dev/null rev-parse HEAD' });
+    const commit = git.content?.find(c => c.type === 'text')?.text?.trim();
+    if (!/^[a-f0-9]{40,64}$/.test(commit ?? '')) throw new Error('Cannot identify task commit');
+    return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id, commit };
+  }
   finally { unsubscribe(); process.removeListener('SIGTERM', abort); session.dispose(); }
 }
 

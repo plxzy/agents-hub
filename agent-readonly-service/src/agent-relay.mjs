@@ -33,6 +33,12 @@ export class AgentRelay extends DurableObject {
   }
   developmentRequest(owner, requestId, fingerprint, manifest) { return this.grants.request(owner, requestId, fingerprint, manifest); }
   developmentGet(owner, id) { return this.grants.get(owner, id); }
+  developmentRecord(owner, id, receipt) {
+    const g = this.grants.own(id, owner);
+    if (receipt.grant_id !== id || receipt.conversation_id !== g.manifest.conversation_id || !validId(receipt.run_id)) throw new Error('Run receipt scope mismatch');
+    g.run_ids = [...new Set([...(g.run_ids ?? []), receipt.run_id])].slice(-100);
+    this.grants.store.put(id, g);
+  }
   developmentAuthorize(owner, id, conversation) { return this.grants.authorize(owner, id, conversation); }
   developmentDecide(owner, id, kind, token) { return this.grants.decide(owner, id, kind, token); }
   developmentLease(args) { return this.grants.lease(args); }

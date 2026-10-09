@@ -23,7 +23,11 @@ export async function developmentCall(env, owner, operation, args) {
     return r;
   }
   await host.developmentAuthorize(owner, args.grant_id, args.conversation_id ?? grant.manifest.conversation_id);
-  if (operation === 'start_development_task') return dispatch('dev_start', { ...args, policy_digest: grant.manifest.policy_digest });
+  if (operation === 'start_development_task') {
+    const receipt = await dispatch('dev_start', { ...args, policy_digest: grant.manifest.policy_digest });
+    await host.developmentRecord(owner, args.grant_id, receipt);
+    return receipt;
+  }
   if (operation === 'export_development') return dispatch('dev_export', { ...args, conversation_id: grant.manifest.conversation_id, policy_digest: grant.manifest.policy_digest });
   throw new Error('Unknown development operation');
 }
