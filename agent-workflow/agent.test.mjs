@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
   acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
-  loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent, formatAgentListEntry,
+  loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent, formatAgentListEntry, resolveWorkspace, sessionDirectory,
 } from './agent.mjs';
 
 function fixture() {
@@ -33,6 +33,8 @@ function fakeSpawn(lines, calls) {
     return child;
   };
 }
+
+const projectFixture = () => fs.mkdtempSync(new URL('./.agent-wf-test-', import.meta.url).pathname);
 
 const reply = (text) => [
   { type: 'session', id: 'sess-1' },
@@ -139,6 +141,66 @@ test('a chat session file becomes a rateable run', () => {
   const r = receiptFromSession(lines, { agent: { name: 'demo', tools: [], version: 'v' } });
   assert.equal(r.kind, 'chat'); assert.equal(r.task, 'hi'); assert.equal(r.output, 'hello');
   assert.deepEqual(r.commands, ['ls']); assert.equal(r.usage.cost, 0.01);
+});
+
+test('here workspaces are canonical, bounded by home, and have run-local permissions', (t) => {
+  const dir = projectFixture();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const project = path.join(dir, 'project');
+  fs.mkdirSync(project);
+  const alias = path.join(dir, 'alias');
+  fs.symlinkSync(project, alias);
+  const agent = { name: 'demo', workspace: 'here', writePaths: ['/other'] };
+  const resolved = resolveWorkspace(agent, alias);
+  assert.equal(resolved.workspace, fs.realpathSync(project));
+  assert.deepEqual(resolved.writePaths, ['/other', resolved.workspace]);
+  assert.equal(sessionDirectory(resolved), sessionDirectory(resolveWorkspace(agent, project)));
+  assert.notEqual(sessionDirectory(resolved), sessionDirectory(resolveWorkspace(agent, dir)));
+  assert.notEqual(sessionDirectory(resolved), sessionDirectory(resolved, undefined, 'eval'));
+  assert.match(sessionDirectory(resolved), /demo\.[a-f0-9]{12}$/);
+  assert.deepEqual(agent, { name: 'demo', workspace: 'here', writePaths: ['/other'] });
+  assert.throws(() => resolveWorkspace(agent, os.homedir()), /strictly inside/);
+  assert.throws(() => resolveWorkspace(agent, path.parse(os.homedir()).root), /strictly inside/);
+  const outside = path.join(dir, 'outside');
+  fs.symlinkSync(path.parse(os.homedir()).root, outside);
+  assert.throws(() => resolveWorkspace(agent, outside), /strictly inside/);
+  const file = path.join(dir, 'file');
+  fs.writeFileSync(file, 'x');
+  assert.throws(() => resolveWorkspace(agent, file), /directory/);
+  const fixed = { ...agent, workspace: project };
+  assert.equal(resolveWorkspace(fixed, '/ignored'), fixed);
+  assert.equal(sessionDirectory(fixed, '/state'), '/state/sessions/demo');
+});
+
+test('here runs sandbox the actual folder, record it, and continue only its history', async (t) => {
+  const { root, state } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dir = projectFixture();
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const other = path.join(dir, 'other');
+  fs.mkdirSync(other);
+  fs.writeFileSync(path.join(root, 'agents/demo.md'), '---\nname: demo\nworkspace: here\n---\nBe brief.\n');
+  const calls = [];
+  const options = { root, state, resume: true, spawn: fakeSpawn(reply('ok'), calls) };
+  const first = await runAgent('demo', 'q', { ...options, cwd: dir });
+  await runAgent('demo', 'q', { ...options, cwd: dir });
+  await runAgent('demo', 'q', { ...options, cwd: other });
+  const session = (call) => call.args[call.args.indexOf('--session-dir') + 1];
+  assert.equal(session(calls[0]), session(calls[1]));
+  assert.notEqual(session(calls[0]), session(calls[2]));
+  assert.ok(calls[0].args.includes('-c'));
+  assert.equal(calls[0].cmd, 'sandbox-exec');
+  assert.ok(calls[0].args[1].includes(`(subpath ${JSON.stringify(fs.realpathSync(dir))})`));
+  assert.equal(first.workspace, fs.realpathSync(dir));
+  assert.equal(calls[0].opts.cwd, first.workspace);
+  assert.equal(loadAgents(root)[0].writePaths, null);
+  const chatReceipt = receiptFromSession(JSON.stringify({ type: 'message', message: { role: 'user', content: 'hi' } }),
+    { agent: resolveWorkspace(loadAgents(root)[0], dir) });
+  assert.equal(chatReceipt.workspace, first.workspace);
+  const defaultRun = await runAgent('demo', 'q', options);
+  assert.equal(defaultRun.workspace, fs.realpathSync(process.cwd()));
+  await assert.rejects(runAgent('demo', 'q', { ...options, cwd: os.homedir() }), /strictly inside/);
+  assert.equal(calls.length, 4);
 });
 
 test('agents with write_paths run Pi in a sandbox that only allows those writes', async () => {

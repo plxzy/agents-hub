@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Local stdio MCP server that lets other apps (Claude Code/Desktop, Codex, ChatGPT via a local bridge) use the
 // agents in AGENT_HOME through the same code as the `agent` CLI. Dependency-free JSON-RPC over stdio.
+import path from 'node:path';
 import { STATE, getAgent, listRuns, loadAgents, runAgent } from './agent.mjs';
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
 
@@ -24,16 +25,22 @@ const TOOLS = [
     name: 'run_agent',
     description: 'Ask one of the user\'s agents to do a task and return its answer. The agent runs locally in Pi with its own '
       + 'instructions, tools, guard and reviewed memory. Pass the user\'s request as the task, in their words. '
-      + 'Use continue=true to follow up in the same agent conversation. Takes seconds to a few minutes.',
+      + 'For workspace: here agents, pass your project folder as an absolute cwd; otherwise the server\'s current folder is used. '
+      + 'cwd is an error for other agents. Use continue=true to follow up in the same agent conversation in that folder. Takes seconds to a few minutes.',
     inputSchema: { type: 'object', required: ['agent', 'task'], additionalProperties: false, properties: {
       agent: { type: 'string', description: 'Agent name from list_agents' },
       task: { type: 'string', description: 'What to ask the agent' },
+      cwd: { type: 'string', description: 'Absolute project folder, only for workspace: here agents' },
       continue: { type: 'boolean', description: 'Continue the agent\'s previous conversation', default: false },
     } },
     annotations: { readOnlyHint: false, openWorldHint: true },
-    run: async ({ agent, task, continue: resume = false }) => {
-      getAgent(agent);
-      const r = await runAgent(agent, task, { resume });
+    run: async ({ agent, task, cwd, continue: resume = false }) => {
+      const definition = getAgent(agent);
+      if (cwd !== undefined) {
+        if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new Error('cwd must be an absolute path');
+        if (definition.workspace !== 'here') throw new Error('cwd is only allowed for workspace: here agents');
+      }
+      const r = await runAgent(agent, task, { resume, cwd });
       const answer = (r.output ?? r.error ?? '(no output)').replace(/```remember\n[\s\S]*?```/g, '').trim();
       return text(`${answer}\n\n— run ${r.run_id} · ${r.status} · ${r.model} · ${r.tool_calls.length} tool call(s)`
         + `${r.blocked?.length ? ` · ${r.blocked.length} blocked by guard` : ''} · $${r.usage.cost.toFixed(4)}`

@@ -51,6 +51,17 @@ agent run → agent feedback <run|last> good|bad "why" → agent reflect <agent>
 | `~/.agents/memory/rejected/` | Rejected proposals, kept as evidence | |
 | `~/.local/state/agent-workflow/` (`AGENT_WORKFLOW_STATE`) | Run receipts, raw Pi events, Pi sessions per agent | Private |
 
+Agent file fields: `name`, `description`, `model`, `thinking`, `tools`, `workspace`, `memory_scopes`,
+`skills`, `guard`, `sudo_allow`, `write_paths`, `protect_paths` (lists accept comma-separated values or `[a, b]`).
+`workspace` accepts a fixed folder (`~/...` is expanded) or `here`. With `workspace: here`, `agent run`
+and `agent chat` use the folder they are started from; `runAgent` accepts an optional `cwd`, defaulting to
+`process.cwd()`, used only for `here` agents. The folder is symlink-resolved and must be a directory
+strictly inside home, not home itself. It is added to `write_paths` for that invocation only, enabling
+the macOS sandbox even when no `write_paths` were specified. Receipts record the resolved folder.
+Sessions include a stable short hash of that folder: `--continue` shares task/chat history in the same
+project, never another project; symlink aliases share history. Fixed-workspace agents keep their existing
+session paths and permissions.
+
 `memory_scopes` is deliberately not called `memory`, which pi-subagents extensions use for their own
 self-written memory. `agent chat` loads accepted notes but does not capture proposals; use
 `agent memory add` for anything worth keeping from a chat.
@@ -111,6 +122,11 @@ First runs: "what am I working on?" in 13 s / $0.001; a small feature (agent lis
 A dependency-free local stdio MCP server over the same code: `list_agents`, `run_agent`, `list_runs`, `get_run`,
 `rate_run`, `list_pending`, `review_decide`, `run_eval`. Ratings and proposal decisions are described to the
 calling model as the user's to give.
+
+`run_agent` accepts an optional absolute `cwd` string for agents whose `workspace` is `here`
+(as reported by `list_agents`). Calling apps should pass their project folder so the agent works there
+and continuation uses that project's history. Omit it to use the MCP server's current directory.
+Passing `cwd` for a fixed-workspace agent is an error; the same home-folder restrictions apply.
 
 Registered (2026-10-09) in Claude Code (`claude mcp add -s user agents -- node .../mcp.mjs`) and Codex
 (`codex mcp add agents -- node .../mcp.mjs`). Verified: Claude Code `-p` ran `network` through `run_agent` and relayed

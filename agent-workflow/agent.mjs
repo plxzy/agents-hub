@@ -94,6 +94,26 @@ export function getAgent(name, root = ROOT) {
   return agent;
 }
 
+/** Resolve `here` per invocation, without changing the loaded definition or its permissions. */
+export function resolveWorkspace(agent, cwd = process.cwd()) {
+  if (agent.workspace !== 'here') return agent;
+  const workspace = fs.realpathSync(cwd);
+  const home = fs.realpathSync(os.homedir());
+  const relative = path.relative(home, workspace);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('workspace: here requires a folder strictly inside the home folder');
+  }
+  if (!fs.statSync(workspace).isDirectory()) throw new Error('workspace: here requires a directory');
+  return { ...agent, workspace, workspaceId: createHash('sha256').update(workspace).digest('hex').slice(0, 12),
+    writePaths: [...(agent.writePaths ?? []), workspace] };
+}
+
+/** Task and chat share history; other run kinds stay separate, as do folders for `here` agents. */
+export function sessionDirectory(agent, state = STATE, kind = 'task') {
+  const name = kind === 'task' ? agent.name : `${agent.name}.${kind}`;
+  return path.join(state, 'sessions', agent.workspaceId ? `${name}.${agent.workspaceId}` : name);
+}
+
 /** Commits AGENT_HOME when it is a git repository, so every accepted change is a version. */
 export function commitHome(message, root = ROOT) {
   if (!fs.existsSync(path.join(root, '.git'))) return false;
@@ -282,13 +302,13 @@ export function summarize(events) {
   };
 }
 
-export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000 } = {}) {
-  const agent = getAgent(name, root);
+export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd() } = {}) {
+  const agent = resolveWorkspace(getAgent(name, root), cwd);
   const memories = useMemory ? loadMemory(agent.memory, root) : [];
   const runId = newId('r');
   const runsDir = path.join(state, 'runs');
   // Eval and other non-task runs keep their own sessions, so `--continue` resumes real work only.
-  const sessionDir = path.join(state, 'sessions', kind === 'task' ? agent.name : `${agent.name}.${kind}`);
+  const sessionDir = sessionDirectory(agent, state, kind);
   fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
   const prompt = buildSystemPrompt(agent, memories);
@@ -428,9 +448,9 @@ async function main(argv) {
     const resume = args.includes('--continue');
     const name = args.find((a) => a !== '--continue');
     if (!name) throw new Error(USAGE);
-    const agent = getAgent(name);
+    const agent = resolveWorkspace(getAgent(name));
     const memories = loadMemory(agent.memory);
-    const sessionDir = path.join(STATE, 'sessions', agent.name);
+    const sessionDir = sessionDirectory(agent);
     fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     console.log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
     console.log('When you exit, this chat is saved as a run you can rate (agent feedback last good|bad) and the coach can learn from.\n');
