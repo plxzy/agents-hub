@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Minimal agent launcher: plain Pi + file-based agent definitions + reviewed memory.
-// Definitions and accepted memory live in this folder (versioned); runs, sessions and
-// raw events live in a private state directory outside the repository.
+// Definitions (~/.agents/agents/*.md) and reviewed memory (~/.agents/memory/) live in AGENT_HOME;
+// runs, sessions and raw events live in a private state directory.
 import { spawn as nodeSpawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
@@ -9,12 +9,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const ROOT = path.dirname(fileURLToPath(import.meta.url));
+export const ROOT = process.env.AGENT_HOME ?? path.join(os.homedir(), '.agents');
 export const STATE = process.env.AGENT_WORKFLOW_STATE ?? path.join(os.homedir(), '.local/state/agent-workflow');
 
 // ---------- files ----------
 
-/** Parses a small YAML subset: `key: value` and `key: [a, b]`. */
+/** Parses a small YAML subset: `key: value` and `key: [a, b]` (nested keys are ignored). */
 export function parseFrontmatter(text) {
   const match = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text);
   if (!match) return { meta: {}, body: text.trim() };
@@ -37,6 +37,7 @@ export function formatFrontmatter(meta, body) {
   return `---\n${lines.join('\n')}\n---\n${body.trim()}\n`;
 }
 
+const list = (v) => (Array.isArray(v) ? v : typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
 const expandHome = (p) => (p?.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 const newId = (prefix) => `${prefix}-${stamp()}-${randomBytes(3).toString('hex')}`;
@@ -54,9 +55,11 @@ export function loadAgents(root = ROOT) {
       description: meta.description ?? '',
       model: meta.model ?? null,
       thinking: meta.thinking ?? null,
-      tools: Array.isArray(meta.tools) ? meta.tools : [],
-      workspace: expandHome(meta.workspace ?? root),
-      memory: Array.isArray(meta.memory) ? meta.memory : [`agent:${name}`],
+      // `tools: read, grep` (the format pi extensions use) or `tools: [read, grep]`.
+      tools: list(meta.tools),
+      workspace: expandHome(meta.workspace ?? process.cwd()),
+      // Own key so it does not clash with the `memory:` field of pi-subagents extensions.
+      memory: meta.memory_scopes ? list(meta.memory_scopes) : [`agent:${name}`],
       instructions: body,
     };
   });
@@ -133,6 +136,15 @@ export function acceptCandidate(id, { root = ROOT, scope, supersedes } = {}) {
   const dest = path.join(dir, `${id}.md`);
   fs.writeFileSync(dest, formatFrontmatter(meta, item.body));
   fs.rmSync(item.file);
+  return dest;
+}
+
+export function addMemory(scope, body, { root = ROOT } = {}) {
+  const dir = scopeDir(scope, root);
+  fs.mkdirSync(dir, { recursive: true });
+  const id = newId('m');
+  const dest = path.join(dir, `${id}.md`);
+  fs.writeFileSync(dest, formatFrontmatter({ id, scope, status: 'accepted', proposed_by: 'user', accepted: new Date().toISOString() }, body));
   return dest;
 }
 
@@ -242,6 +254,18 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   return receipt;
 }
 
+/** Opens an interactive Pi session as the agent (same prompt, tools, memory and session folder). */
+export function chatArgs(agent, { prompt, sessionDir, resume }) {
+  return [
+    '--session-dir', sessionDir,
+    ...(resume ? ['-c'] : []),
+    ...(agent.tools.length ? ['--tools', agent.tools.join(',')] : ['--no-tools']),
+    ...(agent.model ? ['--model', agent.model] : []),
+    ...(agent.thinking ? ['--thinking', agent.thinking] : []),
+    '--append-system-prompt', prompt,
+  ];
+}
+
 export function listRuns(state = STATE) {
   const dir = path.join(state, 'runs');
   if (!fs.existsSync(dir)) return [];
@@ -254,11 +278,13 @@ export function listRuns(state = STATE) {
 const USAGE = `usage:
   agent list
   agent run <agent> [--continue] [--no-memory] <task...>
+  agent chat <agent> [--continue]    interactive Pi session as that agent
   agent runs [n]                      recent run receipts
   agent show <run_id>
   agent memory                        candidates waiting for review
   agent memory accept <id> [--scope s] [--supersedes id]
-  agent memory reject <id> [reason...]`;
+  agent memory reject <id> [reason...]
+  agent memory add <scope> <text...>   write a note yourself (scope: shared | project:<p> | agent:<a>)`;
 
 function flag(args, name) {
   const i = args.indexOf(name);
@@ -280,6 +306,18 @@ async function main(argv) {
     console.log((r.output ?? r.error ?? '(no output)').replace(/```remember\n[\s\S]*?```/g, '').trim());
     console.log(`\n— ${r.status} · ${r.run_id} · ${r.model} · ${r.model_calls} model call(s) · tools: ${r.tool_calls.join(',') || 'none'} · ${r.usage.totalTokens} tok · $${r.usage.cost.toFixed(4)}`);
     console.log(`— memory supplied: ${r.memory_enabled ? r.memory_supplied.length : 'off'}${r.memory_proposed.length ? ` · proposed: ${r.memory_proposed.join(', ')} (review: agent memory)` : ''}`);
+  } else if (cmd === 'chat') {
+    const resume = args.includes('--continue');
+    const name = args.find((a) => a !== '--continue');
+    if (!name) throw new Error(USAGE);
+    const agent = getAgent(name);
+    const memories = loadMemory(agent.memory);
+    const sessionDir = path.join(STATE, 'sessions', agent.name);
+    fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+    console.log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
+    console.log('To keep something, ask it to propose a note, then copy it into: agent memory add <scope> "<text>"\n');
+    const child = nodeSpawn('pi', chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume }), { cwd: agent.workspace, stdio: 'inherit' });
+    await new Promise((resolve) => child.on('close', resolve));
   } else if (cmd === 'runs') {
     for (const r of listRuns().slice(-(Number(args[0]) || 10))) {
       console.log(`${r.run_id}  ${r.agent.padEnd(10)} ${r.status.padEnd(9)} mem=${r.memory_supplied.length} +${r.memory_proposed.length}  ${r.task.slice(0, 60)}`);
@@ -296,6 +334,9 @@ async function main(argv) {
       for (const i of c) console.log(`${i.meta.id}  ${i.meta.scope}  (from ${i.meta.source_run})\n  ${i.body.replace(/\n+/g, ' ')}\n`);
     } else if (sub === 'accept') {
       console.log(path.relative(ROOT, acceptCandidate(id, { scope: flag(rest, '--scope'), supersedes: flag(rest, '--supersedes') })));
+    } else if (sub === 'add') {
+      if (!id || !rest.length) throw new Error(USAGE);
+      console.log(addMemory(id, rest.join(' ')));
     } else if (sub === 'reject') {
       console.log(path.relative(ROOT, rejectCandidate(id, { reason: rest.join(' ') || undefined })));
     } else throw new Error(USAGE);

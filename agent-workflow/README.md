@@ -5,9 +5,12 @@ layered memory that the user reviews. No Cloudflare, no registry, no control pla
 the brief *dev-workflow-agent-context*: portable
 knowledge first, one direct specialist, curated memory compared against a no-memory baseline.
 
+`agent` is on PATH via `~/.local/bin/agent` (symlink to `agent.mjs`).
+
 ```sh
-alias agent="node ~/Development/dev-workflow/agent-workflow/agent.mjs"
 agent list
+agent chat helper                                       # interactive Pi session as helper
+agent chat helper --continue                            # resume its last session
 agent run helper "where is the update-comparison tooling and what does it produce?"
 agent run helper --continue "and how do I run it?"     # same Pi session
 agent run helper --no-memory "..."                      # baseline without reviewed memory
@@ -15,18 +18,23 @@ agent runs                                              # receipts
 agent memory                                            # candidates to review
 agent memory accept <id> [--scope s] [--supersedes old-id]
 agent memory reject <id> [reason]
+agent memory add <scope> "text"                         # write a note yourself
 node --test agent-workflow/                             # tests
 ```
 
-## Layout
+## Layout (since 2026-10-09: definitions and memory in `~/.agents`, `AGENT_HOME`)
 
 | Path | What | Owner |
 |---|---|---|
-| `agents/<name>.md` | Definition: frontmatter (`tools`, `workspace`, `memory` scopes, optional `model`, `thinking`) + instructions | You, versioned |
-| `memory/shared/`, `memory/projects/<p>/`, `memory/agents/<a>/` | Accepted memory, one fact per file | You, versioned |
-| `memory/candidates/` | Proposed by agents, never shown to agents until accepted | Agents propose, you decide |
-| `memory/rejected/` | Rejected proposals, kept as evidence | |
-| `~/.local/state/agent-workflow/` (`AGENT_WORKFLOW_STATE`) | Run receipts, raw Pi events, Pi sessions per agent | Private, not in git |
+| `~/.agents/agents/<name>.md` | Definition: frontmatter `tools` (comma list), `model`, `thinking`, `workspace`, `memory_scopes` + instructions. Same file format pi-subagents extensions read. | You |
+| `~/.agents/memory/shared/`, `projects/<p>/`, `agents/<a>/` | Accepted memory, one fact per file | You |
+| `~/.agents/memory/candidates/` | Proposed by agents in `agent run`; inactive until accepted | Agents propose, you decide |
+| `~/.agents/memory/rejected/` | Rejected proposals, kept as evidence | |
+| `~/.local/state/agent-workflow/` (`AGENT_WORKFLOW_STATE`) | Run receipts, raw Pi events, Pi sessions per agent | Private |
+
+`memory_scopes` is deliberately not called `memory`, which pi-subagents extensions use for their own
+self-written memory. `agent chat` loads accepted notes but does not capture proposals; use
+`agent memory add` for anything worth keeping from a chat.
 
 ## Memory layers
 

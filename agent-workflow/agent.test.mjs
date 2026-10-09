@@ -6,7 +6,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
-  acceptCandidate, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
+  acceptCandidate, addMemory, chatArgs, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
   loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent,
 } from './agent.mjs';
 
@@ -14,7 +14,7 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-wf-'));
   fs.mkdirSync(path.join(root, 'agents'));
   fs.writeFileSync(path.join(root, 'agents/demo.md'),
-    `---\nname: demo\ndescription: test agent\ntools: [read, ls]\nworkspace: ${root}\nmemory: [shared, agent:demo]\n---\nBe brief.\n`);
+    `---\nname: demo\ndescription: test agent\ntools: read, ls\nworkspace: ${root}\nmemory_scopes: shared, agent:demo\n---\nBe brief.\n`);
   return { root, state: path.join(root, '.state') };
 }
 
@@ -106,4 +106,14 @@ test('continue flag resumes the agent session', () => {
   const args = piArgs(agent, { task: 't', prompt: 'p', sessionDir: '/s', resume: true });
   assert.ok(args.includes('-c'));
   assert.ok(args.includes('--no-tools'));
+});
+
+test('user-written notes are active immediately; chat args mirror run args', () => {
+  const { root } = fixture();
+  const agent = loadAgents(root)[0];
+  addMemory('agent:demo', 'Prefer short answers.', { root });
+  assert.match(buildSystemPrompt(agent, loadMemory(agent.memory, root)), /Prefer short answers/);
+  const args = chatArgs(agent, { prompt: 'p', sessionDir: '/s', resume: false });
+  assert.ok(!args.includes('-p') && !args.includes('--mode'));
+  assert.deepEqual(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2), ['--tools', 'read,ls']);
 });
