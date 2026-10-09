@@ -80,3 +80,13 @@ tokens and cost, so you can see whether memory helped.
 Cloudflare reporting, a list/read API that Dots or other clients can call, more agents, and a
 writer/reviewer pair. The earlier `contracts/` and `cloudflare/agent-registry/` work is the
 candidate for that later step.
+
+## Guards (enforced, not instructed)
+
+Small models follow instructions until a user asks directly: `network` ran `sudo dscacheutil -flushcache`
+when asked, despite "never use sudo" (2026-10-09). `guard: readonly` in an agent file loads
+`guards/readonly-bash.ts`, a Pi `tool_call` hook that blocks state-changing bash commands (kill, file writes,
+redirections, launchctl, network/VPN/DNS changes, installs, sudo outside `sudo_allow:`) before they run and
+tells the model to give the user the command instead. Blocked attempts are recorded in run receipts as
+`blocked` and shown to the coach. Tests: `node --test agent-workflow/guards/`.
+

@@ -70,7 +70,7 @@ export async function runEvals(name, { root = ROOT, state = STATE, run = runAgen
     const r = await run(name, c.question, { root, state, kind: 'eval', proposeMemory: false });
     results.push({ id: c.id, question: c.question, run_id: r.run_id, status: r.status,
       ...checkCase(c, { output: r.output, toolCalls: r.tool_calls.length, commands: r.commands ?? [] }),
-      tool_calls: r.tool_calls.length, tokens: r.usage.totalTokens, cost: r.usage.cost });
+      blocked: r.blocked ?? [], tool_calls: r.tool_calls.length, tokens: r.usage.totalTokens, cost: r.usage.cost });
   }
   const report = {
     agent: name, agent_version: agent.version, at: new Date().toISOString(),
@@ -161,6 +161,7 @@ function coachInput(agent, { root, state, runs }) {
       `Task: ${r.task}`, `Tools used (${r.tool_calls.length}): ${r.tool_calls.join(', ') || 'none'}; tokens ${r.usage.totalTokens}; status ${r.status}`,
       r.kind === 'chat' ? `Chat (${r.turns} user message(s)):\n${(r.transcript ?? '').slice(-3000)}` : `Answer: ${(r.output ?? r.error ?? '').slice(0, 1500)}`,
       r.commands?.length ? `Commands: ${r.commands.map((c) => c.slice(0, 160)).join(' | ')}` : '',
+      r.blocked?.length ? `BLOCKED by guard (tried anyway): ${r.blocked.map((c) => c.slice(0, 160)).join(' | ')}` : '',
     ].join('\n')),
     '## Test cases', cases.length ? cases.map((c) => {
       const res = evalReport?.results.find((x) => x.id === c.id);
@@ -286,7 +287,7 @@ export async function cli(cmd, args) {
     commitHome(`Add eval case for ${agent}`);
   } else if (cmd === 'eval') {
     const { report, previous } = await runEvals(args[0]);
-    for (const r of report.results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.question.slice(0, 70).padEnd(70)} tools=${r.tool_calls} ${r.problems.join('; ')}`);
+    for (const r of report.results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.question.slice(0, 70).padEnd(70)} tools=${r.tool_calls}${r.blocked.length ? ` blocked=${r.blocked.length}` : ''} ${r.problems.join('; ')}`);
     console.log(`\n${report.agent} v${report.agent_version}: ${report.passed}/${report.total} passed · ${report.tokens} tok · $${report.cost.toFixed(4)} · ${report.memory.length} note(s)`);
     if (previous) console.log(`previous (v${previous.agent_version}, ${previous.at.slice(0, 16)}): ${previous.passed}/${previous.total} passed · ${previous.tokens} tok · $${previous.cost.toFixed(4)}`);
   } else if (cmd === 'reflect') {

@@ -68,6 +68,9 @@ export function loadAgents(root = ROOT) {
       // Pi also loads those for every agent on its own).
       skills: meta.skills === 'none' ? 'none' : list(meta.skills).map((n) =>
         [path.join(root, 'agent-skills', n), path.join(root, 'skills', n)].find((d) => fs.existsSync(d)) ?? path.join(root, 'agent-skills', n)),
+      // Enforced (not just instructed) bash policy: `guard: readonly` loads guards/readonly-bash.ts.
+      guard: meta.guard ?? null,
+      sudoAllow: list(meta.sudo_allow),
       instructions: body,
     };
   });
@@ -193,8 +196,14 @@ export function buildSystemPrompt(agent, memories) {
   return parts.join('\n\n');
 }
 
+const GUARDS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'guards');
+const guardArgs = (agent) => (agent.guard ? ['-e', path.join(GUARDS, `${agent.guard}-bash.ts`)] : []);
+/** Environment for the Pi process: the guard reads the allowed sudo prefixes from it. */
+export const agentEnv = (agent) => ({ ...process.env, AGENT_SUDO_ALLOW: JSON.stringify(agent.sudoAllow.map((p) => `sudo -n ${p}`)) });
+
 export function piArgs(agent, { task, prompt, sessionDir, resume }) {
   return [
+    ...guardArgs(agent),
     '-p', '--mode', 'json', '--session-dir', sessionDir,
     ...(resume ? ['-c'] : []),
     ...(agent.tools.length ? ['--tools', agent.tools.join(',')] : ['--no-tools']),
@@ -204,6 +213,13 @@ export function piArgs(agent, { task, prompt, sessionDir, resume }) {
     '--append-system-prompt', prompt,
     '--', task,
   ];
+}
+
+const isBlocked = (text) => /^Blocked by /.test(text ?? '');
+function bashCalls(events) {
+  const ended = new Map(events.filter((e) => e.type === 'tool_execution_end').map((e) => [e.toolCallId, e.result?.content?.[0]?.text]));
+  return events.filter((e) => e.type === 'tool_execution_start' && e.toolName === 'bash')
+    .map((e) => ({ command: e.args?.command ?? '', blocked: isBlocked(ended.get(e.toolCallId)) }));
 }
 
 /** Folds Pi's JSONL events into a receipt summary. */
@@ -223,7 +239,9 @@ export function summarize(events) {
     output: final?.content?.filter((p) => p.type === 'text').map((p) => p.text).join('\n') ?? null,
     error: final?.errorMessage ?? null,
     tool_calls: events.filter((e) => e.type === 'tool_execution_start').map((e) => e.toolName),
-    commands: events.filter((e) => e.type === 'tool_execution_start' && e.toolName === 'bash').map((e) => e.args?.command ?? ''),
+    // Commands that actually ran; attempts a guard stopped are kept separately as `blocked`.
+    commands: bashCalls(events).filter((c) => !c.blocked).map((c) => c.command),
+    blocked: bashCalls(events).filter((c) => c.blocked).map((c) => c.command),
     model_calls: assistant.length,
     usage,
   };
@@ -243,7 +261,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   const rawFile = path.join(runsDir, `${runId}.jsonl`);
 
   const { events, exitCode, timedOut } = await new Promise((resolve, reject) => {
-    const child = spawn('pi', piArgs(agent, { task, prompt, sessionDir, resume }), { cwd: agent.workspace, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('pi', piArgs(agent, { task, prompt, sessionDir, resume }), { cwd: agent.workspace, env: agentEnv(agent), stdio: ['ignore', 'pipe', 'pipe'] });
     const raw = fs.createWriteStream(rawFile, { mode: 0o600 });
     const events = [];
     let buf = '';
@@ -277,6 +295,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
 /** Opens an interactive Pi session as the agent (same prompt, tools, memory and session folder). */
 export function chatArgs(agent, { prompt, sessionDir, resume }) {
   return [
+    ...guardArgs(agent),
     '--session-dir', sessionDir,
     ...(resume ? ['-c'] : []),
     ...(agent.tools.length ? ['--tools', agent.tools.join(',')] : ['--no-tools']),
@@ -296,6 +315,7 @@ export function receiptFromSession(text, { agent, memories = [], file } = {}) {
   const assistants = msgs.filter((m) => m.role === 'assistant');
   if (!users.length) return null;
   const calls = assistants.flatMap((m) => (m.content ?? []).filter((p) => p.type === 'toolCall'));
+  const blockedIds = new Set(msgs.filter((m) => m.role === 'toolResult' && isBlocked(textOf(m))).map((m) => m.toolCallId));
   const usage = { input: 0, output: 0, totalTokens: 0, cost: 0 };
   for (const m of assistants) {
     usage.input += m.usage?.input ?? 0; usage.output += m.usage?.output ?? 0;
@@ -313,7 +333,9 @@ export function receiptFromSession(text, { agent, memories = [], file } = {}) {
     model: last ? `${last.provider}/${last.model}` : null, output: last ? textOf(last) : null,
     transcript: transcript.length > 8000 ? `...${transcript.slice(-8000)}` : transcript,
     all_text: assistants.map(textOf).join('\n'),
-    tool_calls: calls.map((c) => c.name), commands: calls.filter((c) => c.name === 'bash').map((c) => c.arguments?.command ?? ''),
+    tool_calls: calls.map((c) => c.name),
+    commands: calls.filter((c) => c.name === 'bash' && !blockedIds.has(c.id)).map((c) => c.arguments?.command ?? ''),
+    blocked: calls.filter((c) => c.name === 'bash' && blockedIds.has(c.id)).map((c) => c.arguments?.command ?? ''),
     model_calls: assistants.length, usage, session_file: file,
   };
 }
@@ -378,7 +400,7 @@ async function main(argv) {
     console.log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
     console.log('When you exit, this chat is saved as a run you can rate (agent feedback last good|bad) and the coach can learn from.\n');
     const startedAt = Date.now() - 1000;
-    const child = nodeSpawn('pi', chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume }), { cwd: agent.workspace, stdio: 'inherit' });
+    const child = nodeSpawn('pi', chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume }), { cwd: agent.workspace, env: agentEnv(agent), stdio: 'inherit' });
     await new Promise((resolve) => child.on('close', resolve));
     const runsDir = path.join(STATE, 'runs');
     fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
