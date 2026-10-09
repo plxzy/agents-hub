@@ -110,6 +110,9 @@ Local lifecycle regressions (`link-lifecycle.test.mjs`, `link-lock.test.mjs`, `l
 mock time and disposable authenticated loopback fixtures, never private configuration, a hosted relay or
 real host sleep. The loopback fixture alone substitutes plaintext WebSockets; production still requires WSS.
 These tests do not establish deployed health or actual host suspend/resume acceptance.
+New requests and queued commands check socket liveness before execution, including when I/O arrives
+before overdue timers after suspend. Stale sockets resume the same owner with current configuration;
+unstarted commands are discarded and require an explicit retry. Already-started work may finish.
 
 After updating the Worker, refresh the Agents Hub App **on chatgpt.com** (Settings → Apps → Agents Hub → Refresh), then reopen the panel. ChatGPT stores the App's tool list and panel page; restarting the desktop app does not update them (verified 2026-10-09: decisions failed with *Missing confirm* until the refresh).
 Reconnect/reload local MCP hosts to drop their cached extra navigation entry. No App recreation or plugin

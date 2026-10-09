@@ -88,6 +88,44 @@ test('simulated suspend invalidates stale liveness and restores authenticated cu
   assert.deepEqual(resumed.hello.status, { enabled: false, agents: ['helper'] }); assert.ok(resumed.sent.includes(PING));
 });
 
+test('a wake-time request arriving before timers cannot execute on a stale socket', async t => {
+  const f = fixture(t, ws => ws.greet()); await flush(); const old = f.instances[0];
+  old.pongs = false;
+  t.mock.timers.setTime(Date.now() + WIRE.freshness);
+  const request = { type: 'request', id: 'wake-request', attempt: 'wake-attempt', operation: 'start_run',
+    args: { agent: 'helper', task: 'fixture', request_id: 'wake-request' }, expires: Date.now() + WIRE.attempt };
+  old.message(request); await flush(); // Deliver I/O before advancing the overdue stale-check timer.
+  assert.equal(f.calls(), 0); assert.equal(old.readyState, 3);
+  assert.deepEqual(old.sent.filter(m => m.type === 'result'), []);
+  await f.advance(1000); const resumed = f.instances[1];
+  assert.equal(resumed.hello.mode, 'resume'); assert.equal(resumed.hello.session, old.hello.session);
+  assert.equal(f.calls(), 0); assert.deepEqual(resumed.sent.filter(m => m.type === 'result'), []);
+  resumed.message({ ...request, attempt: 'wake-retry', expires: Date.now() + WIRE.attempt }); await flush();
+  assert.equal(f.calls(), 1); // Only an explicit retry on the fresh connection may execute.
+});
+
+for (const refreshed of [false, true]) test(`queued work rechecks liveness before execution (fresh PONG=${refreshed})`, async t => {
+  let release; const blocked = new Promise(resolve => { release = resolve; });
+  const f = fixture(t, ws => ws.greet(), async () => { await blocked; return { ok: true, value: 'done' }; });
+  t.after(() => release()); await flush(); const old = f.instances[0]; old.pongs = false;
+  const request = suffix => ({ type: 'request', id: 'queued-request-' + suffix, attempt: 'queued-attempt-' + suffix,
+    operation: 'panel_data', args: {}, expires: Date.now() + WIRE.attempt });
+  old.message(request('one')); await flush(); assert.equal(f.calls(), 1);
+  t.mock.timers.setTime(Date.now() + 20000);
+  const queued = request('two'); old.message(queued); await flush();
+  t.mock.timers.setTime(Date.now() + 10000); // Socket stale; queued request still has ten seconds left.
+  assert.ok(queued.expires > Date.now());
+  if (refreshed) old.emit('message', Buffer.from(PONG), false);
+  release(); await flush();
+  assert.equal(f.calls(), refreshed ? 2 : 1);
+  assert.equal(old.readyState, refreshed ? 1 : 3);
+  assert.equal(old.sent.filter(m => m.type === 'result' && m.id === queued.id).length, refreshed ? 1 : 0);
+  if (!refreshed) {
+    await f.advance(1000); assert.equal(f.instances[1].hello.mode, 'resume');
+    assert.equal(f.calls(), 1); assert.deepEqual(f.instances[1].sent.filter(m => m.type === 'result'), []);
+  }
+});
+
 test('unanswered keepalives expire liveness even while the socket appears open', async t => {
   const f = fixture(t, ws => ws.greet()); await flush(); const old = f.instances[0]; old.pongs = false;
   for (let i = 0; i < WIRE.freshness / 1000; i++) await f.advance(1000);
