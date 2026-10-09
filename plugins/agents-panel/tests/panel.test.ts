@@ -7,6 +7,7 @@ const DASHBOARD = {
     { run_id: 'r-1', agent: 'helper', status: 'completed', task: 'List the tools', started: '2026-10-09T04:50:00.000Z', ended: '2026-10-09T04:51:00.000Z' },
     { run_id: 'r-2', agent: 'network', status: 'running', task: 'Which app uses the most data?', started: '2026-10-09T04:59:00.000Z' },
   ],
+  agents: [{ name: 'helper', description: 'Answers questions', workspace: '/repo' }, { name: 'workflow', description: 'Develops', workspace: 'here' }],
   pending: [{ id: 'm-1', kind: 'memory', agent: 'claude-code', body: 'Prefer small real examples.' }],
 }
 
@@ -21,6 +22,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const out = op === 'open_dashboard' ? DASHBOARD
         : op === 'get_run' ? { run_id: 'r-1', agent: 'helper', status: 'completed', task: 'List the tools', output: 'tools/space-backup/' }
         : op === 'review_decide' ? 'accepted m-1'
+        : op === 'start_run' ? { run_id: 'r-3', status: 'running' }
         : null
       return { value: { exitCode: 0, stdout: JSON.stringify(out), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     })
@@ -34,15 +36,27 @@ for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ plugin: 'agents-panel', surface, component: 'Pane', requestId: 'agents', props: PROPS as never })
 
     await ui.press({ key: 'refresh' })
-    expect((await ui.find({ text: 'network' }))).toBeDefined()
-    expect((await ui.find({ text: '1 running' }))).toBeDefined()
-    expect((await ui.find({ text: 'Prefer small real examples.' }))).toBeDefined()
+    expect(await ui.find({ text: 'network' })).toBeDefined()
+    expect(await ui.find({ text: '1 running' })).toBeDefined()
 
+    // a run's output
     await ui.press({ key: 'run-r-1' })
-    expect((await ui.find({ text: 'tools/space-backup/' }))).toBeDefined()
+    expect(await ui.find({ text: 'tools/space-backup/' })).toBeDefined()
     await ui.press({ key: 'back' })
 
+    // review: accept, and reject with a reason
+    await ui.press({ key: 'tab-review' })
+    expect(await ui.find({ text: 'Prefer small real examples.' })).toBeDefined()
     await ui.press({ key: 'accept-m-1' })
     expect(calls).toContainEqual(['review_decide', JSON.stringify({ id: 'm-1', decision: 'accept' })])
+    await ui.press({ key: 'reject-m-1' })
+    await ui.input({ key: 'reason-m-1', text: 'not now' })
+    expect(calls).toContainEqual(['review_decide', JSON.stringify({ id: 'm-1', decision: 'reject', reason: 'not now' })])
+
+    // start a run of a "here" agent in the session's folder
+    await ui.press({ key: 'tab-start' })
+    await ui.select({ key: 'agent', value: 'workflow' })
+    await ui.input({ key: 'task', text: 'Check the tests' })
+    expect(calls).toContainEqual(['start_run', JSON.stringify({ agent: 'workflow', task: 'Check the tests', cwd: '/tmp' })])
   })
 }

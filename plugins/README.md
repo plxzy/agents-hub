@@ -28,9 +28,13 @@ its `[mcp_servers.agents]` entry: it has the same name, so Codex lists one serve
 ## `agents-panel/`: a side panel in Claude Code (a mod)
 
 A Claude Code mod (hooks module, `hooks/register.tsx`): a docked **Agents** pane beside the conversation in
-the terminal and the desktop Code tab. It shows the agent count, running runs, the last 8 runs (press one for its
-output), and what waits for your review with Accept/Reject buttons (your clicks; the model never sees them), plus
-a footer status. It refreshes every 4 s while a run is going, otherwise every 30 s; `/agents-panel` reopens it.
+the terminal and the desktop Code tab. Header chips (agents, running, to review) and three tabs:
+**Runs** (running and the last 10 runs; press one for its output as Markdown with model, duration, tool calls),
+**Review** (memory and proposals as cards: Accept, or Reject with an optional reason) and **Start a run** (pick an
+agent, type a task; agents that work "here" run in the session's folder). Accept, Reject and Start are your clicks;
+the model never sees them. Footer status shows running/to review. Refreshes every 4 s while a run is going (the open
+run's output follows it), otherwise every 30 s; `/agents-panel` reopens it; hotkeys r, 1–3, b while it has focus.
+On mobile (no text fields) Reject skips the reason and Start is hidden.
 It draws only: data comes from `agent call open_dashboard | get_run | review_decide` (the operations catalog).
 Claude Code only: Codex and ChatGPT panels need their own extension format, using the same operations.
 
