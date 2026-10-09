@@ -91,4 +91,5 @@ removes the schedule on WebSocket cutover because cf beta.13 leaves existing sch
 Run the matching bridge `agent.mjs link serve` in the visible Terminal, preserving private config and journal.
 Verify the selected version is serving before starting the client; deployment propagation can reject a first
 acquisition, requiring a fresh manual start. A forward deploy of bridge code must preserve the DO declaration.
+A no-op scheduled handler absorbs delayed deliveries after schedule removal; it does not schedule work.
 See `LINK-websocket-design.md` for protocol details and the dated evidence directory for rehearsal results.

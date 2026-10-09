@@ -1,6 +1,6 @@
 # Agents Hub WebSocket design — 2026-10-09
 
-Status: implementation in progress. Deployment and acceptance evidence are recorded separately.
+Status: implemented and tested. Deployment and acceptance evidence are recorded separately.
 
 ## Architecture and boundaries
 
@@ -64,6 +64,8 @@ unstarted commands; already started agents may finish.
 2. Deploy the WebSocket transport without another DO lifecycle change. Stop admission, drain/classify commands,
    stop the visible polling client, and start the visible WebSocket client. Verify hosted helper execution.
 3. Remove active polling routes/queries and cron; keep migration 0002 and empty obsolete table schemas.
+   Explicitly synchronize schedules: cf beta.13 leaves old cron schedules when configured with an empty list.
+   Retain a no-op scheduled handler to absorb delayed old deliveries during Cloudflare propagation.
 
 Rollback must target the bridge, not a pre-DO version: Cloudflare blocks rollback across DO lifecycle changes.
 Resource data is not rolled back. Restore matching polling client and explicitly verify/reinstate cleanup cron.
