@@ -112,7 +112,7 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
 <header class="head">
   <span class="eyebrow">dev-workflow · agents · 9 Oct 2026</span>
   <h1>Pi Agent Learning Map</h1>
-  <p class="lede">Where the pieces fit, what we actually tried, and what comes next. Everything here was run on your Mac with Pi 1.0.4 unless marked as docs-only.</p>
+  <p class="lede">Where the pieces fit, what we actually tried, and what comes next. Everything here was run on your Mac (Pi 1.0.4 for experiments 1–2, 1.1.0 since) unless marked as docs-only.</p>
 </header>
 
 <section aria-labelledby="path-h">
@@ -123,7 +123,8 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
     <li class="done"><b>Memory layers</b><span>instructions, session, notes you approve</span><em class="pill ok">done</em></li>
     <li class="done"><b>pi-subagents</b><span>experiment 1: named agents + memory</span><em class="pill ok">tried</em></li>
     <li class="done"><b>Pi Fabric</b><span>experiment 2: worker + reviewer</span><em class="pill ok">first pass</em></li>
-    <li class="now"><b>Pi Durable</b><span>kill a run mid-task, see what survives</span><em class="pill now">next</em></li>
+    <li class="done"><b>Pi Durable</b><span>experiment 3: kill -9 mid-task, resume</span><em class="pill ok">tried</em></li>
+    <li class="now"><b>Pick a base</b><span>try nicobailon pi-subagents (1b), then choose</span><em class="pill now">next</em></li>
     <li><b>Cloudflare?</b><span>only if something must live while the Mac sleeps</span><em class="pill later">decide</em></li>
     <li><b>Dots sees agents</b><span>a list/read tool Dots can call</span><em class="pill later">later</em></li>
     <li><b>vm</b><span>real project work</span><em class="pill later">later</em></li>
@@ -136,10 +137,10 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
   <div class="stackgrid">
     <div class="stack" role="group" aria-label="Layers">
       <button class="layer" data-k="clients" style="background:var(--l1)"><span class="name">Clients</span><span class="tag">who talks to it</span><span class="q">Where you type or watch.</span><span class="chips"><span class="chip you">Pi TUI</span><span class="chip">pi -p</span><span class="chip">ChatGPT / Dots</span><span class="chip">own UI</span></span></button>
-      <button class="layer" data-k="orch" style="background:var(--l2)"><span class="name">Orchestration</span><span class="tag">many agents</span><span class="q">How agents get named, started, steered, reviewed.</span><span class="chips"><span class="chip">nothing</span><span class="chip you">pi-subagents</span><span class="chip">Pi Fabric</span></span></button>
-      <button class="layer" data-k="harness" aria-pressed="true" style="background:var(--l3)"><span class="name">Harness</span><span class="tag">one agent's loop</span><span class="q">What the agent does each turn: prompt, tools, model.</span><span class="chips"><span class="chip you">Pi 1.0.4</span></span></button>
+      <button class="layer" data-k="orch" style="background:var(--l2)"><span class="name">Orchestration</span><span class="tag">many agents</span><span class="q">How agents get named, started, steered, reviewed.</span><span class="chips"><span class="chip">nothing</span><span class="chip you">tintinweb pi-subagents</span><span class="chip">nicobailon pi-subagents</span><span class="chip">Pi Fabric</span></span></button>
+      <button class="layer" data-k="harness" aria-pressed="true" style="background:var(--l3)"><span class="name">Harness</span><span class="tag">one agent's loop</span><span class="q">What the agent does each turn: prompt, tools, model.</span><span class="chips"><span class="chip you">Pi 1.1.0</span></span></button>
       <button class="layer" data-k="models" style="background:var(--l6)"><span class="name">Models</span><span class="tag">who thinks</span><span class="q">Which provider answers each call.</span><span class="chips"><span class="chip you">gpt-6-luna</span><span class="chip">gpt-6.1-sol</span><span class="chip">apple-fm/system</span><span class="chip">apple-fm/pcc</span></span></button>
-      <button class="layer" data-k="runtime" style="background:var(--l4)"><span class="name">Runtime</span><span class="tag">where it lives</span><span class="q">Does it survive a crash or the Mac sleeping?</span><span class="chips"><span class="chip you">terminal</span><span class="chip">Pi Durable</span><span class="chip">Cloudflare PiHarness</span></span></button>
+      <button class="layer" data-k="runtime" style="background:var(--l4)"><span class="name">Runtime</span><span class="tag">where it lives</span><span class="q">Does it survive a crash or the Mac sleeping?</span><span class="chips"><span class="chip you">terminal</span><span class="chip">Pi Durable (tested)</span><span class="chip">Cloudflare PiHarness</span></span></button>
       <button class="layer" data-k="knowledge" style="background:var(--l5)"><span class="name">Knowledge</span><span class="tag">what it remembers</span><span class="q">What is true, who decided, where it is stored.</span><span class="chips"><span class="chip you">reviewed notes</span><span class="chip">agent MEMORY.md</span><span class="chip">Fabric recall</span></span></button>
       <button class="layer" data-k="obs" style="background:var(--bg); border:1px dashed var(--line)"><span class="name">Observability</span><span class="tag">side rail</span><span class="q">Seeing every call, tool and cost afterwards.</span><span class="chips"><span class="chip you">run receipts</span><span class="chip">Langfuse</span><span class="chip">Fabric receipts</span></span></button>
     </div>
@@ -187,12 +188,26 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
   <p class="legend"><span><i style="background:var(--warn)"></i>main-model call</span><span><i style="background:var(--accent)"></i>agent work</span></p>
 </section>
 
+<section aria-labelledby="dur-h">
+  <div class="head"><h2 id="dur-h">Pi Durable under a hard kill</h2>
+  <p>Experiment 3. Four slow tools, Apple on-device model, SQLite store. Each tool logs every time it actually runs.</p></div>
+  <div class="tablebox"><table>
+    <thead><tr><th>Test</th><th>What we did</th><th>What happened</th></tr></thead>
+    <tbody>
+      <tr><th>Baseline</th><td>run to the end</td><td>4 tools in order, <span class="num">20 s</span>, <span class="num">$0</span></td></tr>
+      <tr><th>A · kill during tools</th><td><code>kill -9</code> with all four tools running, then <code>resume</code></td><td>3 replay-safe tools re-ran and finished; the unsafe tool did <b>not</b> re-run; model was told it "may have partially run". The small model ignored that and said DONE.</td></tr>
+      <tr><th>C · resume twice</th><td>resume again after it finished</td><td>same result returned instantly, nothing ran again</td></tr>
+      <tr><th>D · kill while thinking</th><td><code>kill -9</code> at <span class="num">0.6 s</span>, during the model call</td><td>model call repeated on resume; each tool then ran exactly once</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
 <section aria-labelledby="model-h">
   <div class="head"><h2 id="model-h">Models for the experiments</h2></div>
   <div class="cards">
     <div class="card"><h3>gpt-6-luna · low</h3><em class="pill ok">default for experiments</em><p>Good fit: cheap, fast, correct on every repo question so far. Set in each experiment's <code>.pi/settings.json</code>.</p></div>
-    <div class="card"><h3>apple-fm/system</h3><em class="pill warn">simple tasks only</em><p>On-device via <code>fm serve</code>. Free, 3.6 s, tool calls work. Answered the Pages fallback question wrong.</p></div>
-    <div class="card"><h3>apple-fm/pcc</h3><em class="pill bad">blocked</em><p>Wired into Pi on port 1976. As your user: Apple error 32035. As <code>psp</code>: server didn't answer from this account. Next check: <code>fm respond --model pcc "Say OK"</code> in Terminal.</p></div>
+    <div class="card"><h3>apple-fm/system</h3><em class="pill warn">simple tasks only</em><p>On-device via <code>fm serve</code>. Free, fast, tool calls work. Answered a reasoning question wrong; fine for the Durable crash tests.</p></div>
+    <div class="card"><h3>apple-fm/pcc</h3><em class="pill bad">blocked</em><p>Wired into Pi on port 1976. As your user: Apple error 32035. As <code>psp</code>: server didn't answer from this account. Skipped for now.</p></div>
   </div>
 </section>
 
@@ -221,7 +236,7 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
   </dl>
 </section>
 
-<footer>Evidence: <code>evidence/2026-10-09-pi-subagents/</code>, <code>evidence/2026-10-09-pi-fabric/</code>, <code>agent-workflow/README.md</code> in the dev-workflow repo. Test folders: <code>~/Development/pi-dev/experiments/</code>.</footer>
+<footer>Evidence: <code>evidence/2026-10-09-pi-subagents/</code>, <code>evidence/2026-10-09-pi-fabric/</code>, <code>evidence/2026-10-09-pi-durable/</code>, <code>agent-workflow/README.md</code> in the dev-workflow repo. Test folders: <code>~/Development/pi-dev/experiments/</code>.</footer>
 </div>
 
 <script>
@@ -231,21 +246,21 @@ const LAYERS = {
     found: ["pi-subagents' <code>@mentions</code> skip the main model only inside the TUI", "From the CLI, a leading <code>@</code> is read as a file to attach"],
     next: "Dots or ChatGPT as a client comes at step 7, once there is a small list/read API to call." },
   orch: { title: "Orchestration", q: "How do several agents get named, started, steered and reviewed?",
-    have: ["Experiment 1: pi-subagents (agent files, @mentions, FleetView, steering, worktrees)", "Experiment 2: Pi Fabric (programs that call agents, councils, actors, budgets)"],
+    have: ["Experiment 1: tintinweb pi-subagents 0.19.0 (27 Aug, predates Pi 1.0, hence the typebox warning)", "Not yet tried: nicobailon pi-subagents 0.76.1 (6 Oct, Pi 1.0-ready peer deps, far more downloads)", "Experiment 2: Pi Fabric (programs that call agents, councils, actors, budgets)"],
     found: ["pi-subagents replaces most of my wrapper", "Fabric did worker + reviewer from one plain request, but the model writes the orchestration each time", "In both, the delegating model can change what the agent is told"],
-    next: "Try both in the TUI yourself, then pick one. Don't run two orchestrators together." },
+    next: "Experiment 1b: nicobailon pi-subagents. Then try the winners in the TUI and pick one. Don't run two orchestrators together." },
   harness: { title: "Harness", q: "What does one agent do each turn: prompt, tools, model?",
-    have: ["Pi 1.0.4 with your providers and extensions", "Agents as <code>.md</code> files with <code>--tools</code> allowlists, as you already did"],
+    have: ["Pi 1.1.0 with your providers and extensions", "Agents as <code>.md</code> files with <code>--tools</code> allowlists, as you already did"],
     found: ["Nothing fundamental changed here. Every option on this page is built on top of plain Pi.", "Fabric ships its own Pi 1.1.0 for child agents"],
     next: "Stays as is. Everything else plugs into it." },
   models: { title: "Models", q: "Which provider answers each call?",
     have: ["openai / openai-2: gpt-6-luna, gpt-6.1-sol", "New: <code>apple-fm</code> provider in <code>~/.pi/agent/models.json</code> pointing at <code>fm serve</code> on port 1976 (backup kept)"],
     found: ["Luna at low thinking is fast, cheap and correct for these experiments", "On-device Apple model works with tools but got a reasoning question wrong", "PCC blocked so far (Apple error 32035)"],
-    next: "Run <code>fm respond --model pcc \"Say OK\"</code> in Terminal to see whether PCC works at all on this Mac." },
+    next: "PCC skipped for now; Luna low for agent experiments, on-device for cheap mechanical tests." },
   runtime: { title: "Runtime", q: "Where does the agent live, and does it survive a crash or a sleeping Mac?",
     have: ["Your terminal: if Pi stops, the run stops", "Codex's Cloudflare Durable Object pilot (parked)"],
-    found: ["Fabric uses Pi Durable underneath for its children", "Cloudflare PiHarness is Pi Durable hosted in a Durable Object (docs)"],
-    next: "Step 5: start a long task under Pi Durable, kill the process, and see what actually resumes." },
+    found: ["Pi Durable is a library: you write a small Node program; the pi CLI itself is not durable", "kill -9 mid-task, then resume: replay-safe tools re-ran, the unsafe one did not and the model was told it was interrupted", "Resubmitting the same request id returned the finished result; nothing ran twice", "Fabric's children and Cloudflare PiHarness are built on it"],
+    next: "Use it only for jobs that must survive restarts. Its SQLite file can later move to a Cloudflare Durable Object without code changes." },
   knowledge: { title: "Knowledge", q: "What does it remember, who decides what's true, where is it stored?",
     have: ["<code>agent-workflow/memory/</code>: one accepted note, reviewed by you", "pi-subagents: <code>.pi/agent-memory/&lt;agent&gt;/MEMORY.md</code>, written by the agent"],
     found: ["Reviewed note cut tokens and cost on a follow-up", "Self-written memory worked and was reused, with a small formatting slip"],
