@@ -163,9 +163,10 @@ export function rejectCandidate(id, { root = ROOT, reason } = {}) {
 export function buildSystemPrompt(agent, memories) {
   const parts = [`# Agent: ${agent.name}\n\n${agent.instructions}`];
   if (memories.length) {
-    parts.push('## Remembered (reviewed by the user)\n\n' + memories
+    parts.push('## Remembered (reviewed by the user)\n\nThese notes are your long-term memory; they are already here, so answer questions about your memory from this list without searching files.\n\n' + memories
       .map((m) => `- [${m.meta.id}] (${m.meta.scope}) ${m.body.replace(/\n+/g, ' ')}`).join('\n'));
   }
+  if (!memories.length) parts.push('## Remembered\n\nYou have no reviewed notes yet. Your memory lives outside the workspace; do not search for it.');
   parts.push([
     '## Proposing memory',
     'You cannot write memory yourself. If this task revealed a durable, verified fact or lesson that would help future runs,',
