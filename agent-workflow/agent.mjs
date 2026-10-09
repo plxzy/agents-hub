@@ -82,6 +82,8 @@ export function loadAgents(root = ROOT) {
         [path.join(root, 'agent-skills', n), path.join(root, 'skills', n)].find((d) => fs.existsSync(d)) ?? path.join(root, 'agent-skills', n)),
       // Enforced (not just instructed) bash policy: `guard: readonly` loads guards/readonly-bash.ts.
       guard: meta.guard ?? null,
+      // Where runs happen: `local` (Pi on this Mac). Other runners (cloud) plug in through ops.mjs later.
+      runner: meta.runner ?? 'local',
       sudoAllow: list(meta.sudo_allow),
       // Folders the agent may write to. When set, Pi runs inside a macOS sandbox that denies every other write
       // in the home folder (see sandboxProfile); `protect_paths` are kept read-only even inside them.
@@ -284,6 +286,8 @@ const guardArgs = (agent) => (agent.guard ? ['-e', path.join(GUARDS, `${agent.gu
 export const agentEnv = (agent, root = ROOT) => ({
   ...process.env,
   ...(agent.writePaths ? { AGENT_SANDBOXED: '1' } : {}),
+  // Marks Pi processes started for an agent, so add-ons meant for the user's own sessions (the agents Pi package) stay out.
+  AGENT_RUN: '1',
   AGENT_SUDO_ALLOW: JSON.stringify(agent.sudoAllow.map((p) => `sudo -n ${p}`)),
   // Never editable by an agent: its own definition, the user's accepted memory and past decisions.
   AGENT_PROTECTED: JSON.stringify([agent.file, ...['shared', 'projects', 'agents', 'rejected'].map((d) => path.join(root, 'memory', d)),
@@ -362,18 +366,27 @@ export function summarize(events) {
   };
 }
 
-export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd() } = {}) {
+/** Marker for a run in progress (`<id>.running`); the receipt replaces it when the run ends. */
+export function writeRunningMarker(state, { run_id, agent, kind = 'task', task, workspace, pid }) {
+  const runsDir = path.join(state, 'runs');
+  fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+  const marker = { run_id, agent, kind, status: 'running', task, workspace, started: new Date().toISOString(), pid };
+  fs.writeFileSync(path.join(runsDir, `${run_id}.running`), JSON.stringify(marker) + '\n', { mode: 0o600 });
+  return marker;
+}
+
+export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd(), runId = newId('r') } = {}) {
   const agent = resolveWorkspace(getAgent(name, root), cwd);
   assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
   const memories = useMemory ? loadMemory(agent.memory, root) : [];
-  const runId = newId('r');
   const runsDir = path.join(state, 'runs');
   // Eval and other non-task runs keep their own sessions, so `--continue` resumes real work only.
   const sessionDir = sessionDirectory(agent, state, kind);
   fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
   const prompt = buildSystemPrompt(agent, memories);
-  const started = new Date().toISOString();
+  const { started } = writeRunningMarker(state, { run_id: runId, agent: agent.name, kind, task, workspace: agent.workspace, pid: process.pid });
+  const marker = path.join(runsDir, `${runId}.running`);
   const rawFile = path.join(runsDir, `${runId}.jsonl`);
 
   const { events, exitCode, timedOut } = await new Promise((resolve, reject) => {
@@ -390,7 +403,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
       for (const l of lines) if (l.trim()) { try { events.push(JSON.parse(l)); } catch { /* keep raw only */ } }
     });
     child.stderr.on('data', () => {});
-    child.on('error', reject);
+    child.on('error', (e) => { fs.rmSync(marker, { force: true }); reject(e); });
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
     child.on('close', (code) => { clearTimeout(timer); raw.end(); resolve({ events, exitCode: code, timedOut }); });
   });
@@ -405,6 +418,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
     exit_code: exitCode, ...summary, raw_events: rawFile,
   };
   fs.writeFileSync(path.join(runsDir, `${runId}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
+  fs.rmSync(marker, { force: true });
   publishInBackground({ state });
   return receipt;
 }
@@ -468,11 +482,22 @@ export function receiptFromSession(text, { agent, memories = [], file } = {}) {
   };
 }
 
-export function listRuns(state = STATE) {
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+
+/** Finished runs (receipts), oldest first. `running: true` adds runs still in progress, and ones whose process
+ *  died without a receipt as `interrupted`. */
+export function listRuns(state = STATE, { running = false } = {}) {
   const dir = path.join(state, 'runs');
   if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir).filter((f) => f.endsWith('.json')).sort()
+  const files = fs.readdirSync(dir);
+  const runs = files.filter((f) => f.endsWith('.json')).sort()
     .map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')));
+  if (!running) return runs;
+  const done = new Set(runs.map((r) => r.run_id));
+  const open = files.filter((f) => f.endsWith('.running')).sort().flatMap((f) => {
+    try { return [JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))]; } catch { return []; }
+  }).filter((m) => !done.has(m.run_id)).map((m) => (alive(m.pid) ? m : { ...m, status: 'interrupted' }));
+  return [...runs, ...open].sort((a, b) => String(a.started ?? '').localeCompare(String(b.started ?? '')));
 }
 
 // ---------- CLI ----------
@@ -511,11 +536,12 @@ async function main(argv) {
   if (cmd === 'list') {
     for (const a of loadAgents()) console.log(formatAgentListEntry(a));
   } else if (cmd === 'run') {
+    const runId = flag(args, '--run-id'); // set by start_run (ops.mjs), which already told the caller this id
     const resume = args.includes('--continue');
     const useMemory = !args.includes('--no-memory');
     const [name, ...rest] = args.filter((a) => a !== '--continue' && a !== '--no-memory');
     if (!name || !rest.length) throw new Error(USAGE);
-    const r = await runAgent(name, rest.join(' '), { resume, useMemory });
+    const r = await runAgent(name, rest.join(' '), { resume, useMemory, ...(runId ? { runId } : {}) });
     console.log((r.output ?? r.error ?? '(no output)').replace(/```remember\n[\s\S]*?```/g, '').trim());
     console.log(`\n— ${r.status} · ${r.run_id} · ${r.model} · ${r.model_calls} model call(s) · tools: ${r.tool_calls.join(',') || 'none'} · ${r.usage.totalTokens} tok · $${r.usage.cost.toFixed(4)}`);
     console.log(`— memory supplied: ${r.memory_enabled ? r.memory_supplied.length : 'off'}${r.memory_proposed.length ? ` · proposed: ${r.memory_proposed.join(', ')} (review: agent memory)` : ''}`);
