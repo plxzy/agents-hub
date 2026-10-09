@@ -389,6 +389,7 @@ export function writeRunningMarker(state, { run_id, agent, kind = 'task', task, 
 }
 
 export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd(), runId = newId('r') } = {}) {
+  if (fs.existsSync(path.join(root, 'RELEASE.json'))) proposeMemory = false;
   const agent = remoteSandbox(resolveWorkspace(getAgent(name, root), cwd));
   assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
   if (process.platform === 'linux' && agent.writePaths && spawn === nodeSpawn) agent.linuxPolicy = linuxPolicy(agent, state);
