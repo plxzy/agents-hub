@@ -38,6 +38,15 @@ test('MCP endpoint lists read-only tools and answers from the latest snapshot', 
   let body = await (await apiFetch(rpc({ id: 1, method: 'tools/list' }), env, '<html/>')).json();
   assert.deepEqual(body.result.tools.map((t) => t.name), ['open_dashboard', 'get_status', 'list_agents', 'list_runs', 'get_run', 'resolve_context']);
   assert.ok(body.result.tools.every((t) => t.annotations.readOnlyHint));
+  const dashboard = body.result.tools.find((t) => t.name === 'open_dashboard');
+  assert.deepEqual(dashboard._meta['openai/ui'].entrypoints, [{ type: 'global' }, { type: 'thread' }]);
+  assert.ok(dashboard.icons[0].src.startsWith('data:image/svg+xml,'));
+  const opened = await (await apiFetch(rpc({ id: 10, method: 'tools/call', params: { name: 'open_dashboard', arguments: {} } }), env)).json();
+  assert.equal(opened.result.structuredContent.capabilities.run, false);
+  assert.equal(opened.result.structuredContent.agents[0].name, 'helper');
+  const resource = await (await apiFetch(rpc({ id: 11, method: 'resources/read', params: { uri: dashboard._meta.ui.resourceUri } }), env, '<html/>')).json();
+  assert.equal(resource.result.contents[0].text, '<html/>');
+  assert.deepEqual(resource.result.contents[0]._meta['openai/ui'].availableDisplayModes, ['inline', 'fullscreen']);
   body = await (await apiFetch(rpc({ id: 2, method: 'tools/call', params: { name: 'list_agents', arguments: {} } }), env)).json();
   assert.deepEqual(JSON.parse(body.result.content[0].text).agents[0].tools, ['read', 'ls']);
   body = await (await apiFetch(rpc({ id: 3, method: 'tools/call', params: { name: 'get_run', arguments: { run_id: 'r1' } } }), env)).json();

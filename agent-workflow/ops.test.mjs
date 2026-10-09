@@ -81,6 +81,9 @@ test('dashboard data and MCP App wiring', async () => {
   const tool = toolList().find((t) => t.name === 'open_dashboard');
   assert.equal(tool._meta.ui.resourceUri, DASHBOARD_URI);
   assert.equal(tool._meta['openai/outputTemplate'], DASHBOARD_URI);
+  assert.deepEqual(tool._meta['openai/ui'].entrypoints, [{ type: 'global' }, { type: 'thread' }]);
+  assert.ok(tool.icons[0].src.startsWith('data:image/svg+xml,'));
+  assert.notEqual(tool.title, 'Agents Hub', 'thread entrypoint has a descriptive title');
 
   const handle = createServer({ ctx, html: async () => '<html>dash</html>' });
   const call = await handle({ id: 1, method: 'tools/call', params: { name: 'open_dashboard', arguments: {} } });
@@ -90,5 +93,6 @@ test('dashboard data and MCP App wiring', async () => {
   assert.equal(listed.result.resources[0].mimeType, 'text/html;profile=mcp-app');
   const read = await handle({ id: 3, method: 'resources/read', params: { uri: DASHBOARD_URI } });
   assert.equal(read.result.contents[0].text, '<html>dash</html>');
+  assert.deepEqual(read.result.contents[0]._meta['openai/ui'].availableDisplayModes, ['inline', 'fullscreen']);
   assert.equal((await handle({ method: 'notifications/initialized' })), null);
 });

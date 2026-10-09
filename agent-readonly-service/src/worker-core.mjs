@@ -1,4 +1,4 @@
-import { DASHBOARD_URI, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
+import { DASHBOARD_URI, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 
 const KEEP_SNAPSHOTS = 20;
@@ -60,7 +60,7 @@ const TOOLS = [
 
 const toolList = TOOLS.map(({ name, title, description, input, annotations, ui }) => ({
   name, title, description, inputSchema: input, annotations: { title, ...annotations, readOnlyHint: true },
-  ...(ui ? { _meta: { ui: { resourceUri: ui }, 'openai/outputTemplate': ui } } : {}),
+  ...(ui ? { icons: DASHBOARD_ICONS, _meta: DASHBOARD_TOOL_META } : {}),
 }));
 
 export async function apiFetch(request, env, dashboardHtml = '') {
@@ -85,7 +85,7 @@ export async function apiFetch(request, env, dashboardHtml = '') {
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
       if (params?.uri !== DASHBOARD_URI) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown resource' } });
-      return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_MIME, text: dashboardHtml, _meta: { ui: { prefersBorder: true } } }] });
+      return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_MIME, text: dashboardHtml, _meta: DASHBOARD_RESOURCE_META }] });
     }
     if (method === 'tools/call') {
       const tool = TOOLS.find((x) => x.name === params?.name);

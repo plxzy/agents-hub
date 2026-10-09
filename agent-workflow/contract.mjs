@@ -13,6 +13,22 @@
 
 export const DASHBOARD_URI = 'ui://agents-hub/dashboard.html';
 
+// MCP Extensions: the same app opens from navigation or beside a conversation, without a model call.
+// https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#mcp-app-entrypoints
+export const DASHBOARD_TOOL_META = {
+  ui: { resourceUri: DASHBOARD_URI },
+  'openai/outputTemplate': DASHBOARD_URI,
+  'openai/ui': { entrypoints: [{ type: 'global' }, { type: 'thread' }] },
+};
+export const DASHBOARD_RESOURCE_META = {
+  ui: { prefersBorder: true },
+  'openai/ui': { availableDisplayModes: ['inline', 'fullscreen'] },
+};
+export const DASHBOARD_ICONS = [{
+  src: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.33"><rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14M7 8h11"/></svg>'),
+  mimeType: 'image/svg+xml', sizes: ['20x20'],
+}];
+
 const count = (v) => (Array.isArray(v) ? v.length : Number.isInteger(v) && v >= 0 ? v : 0);
 const num = (...vs) => vs.find((v) => Number.isFinite(v));
 

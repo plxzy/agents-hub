@@ -133,8 +133,18 @@ async function call(name, args = {}) {
   try { return JSON.parse(text); } catch { return text; }
 }
 async function refresh() {
+  if (S.refreshing || S.closed) return;
+  S.refreshing = true;
   try { setData(await call('open_dashboard')); showError(); }
   catch (e) { showError(`Could not refresh: ${e.message}`); }
+  finally { S.refreshing = false; scheduleRefresh(); }
+}
+function scheduleRefresh() {
+  clearTimeout(S.poll);
+  if (document.hidden || S.closed) return;
+  // Hosted data changes only when the Mac publishes. Local running tasks need faster updates.
+  const active = !S.data?.snapshot && S.data?.runs.some((r) => r.status === 'running');
+  S.poll = setTimeout(refresh, active ? 4000 : 30000);
 }
 async function act(key, fn) {
   if (S.busy.has(key)) return;
@@ -146,9 +156,7 @@ async function act(key, fn) {
 function setData(data) {
   S.data = data;
   if (S.detail?.status === 'running') loadDetail(S.detail.run_id);
-  const running = data.runs.some((r) => r.status === 'running');
-  clearTimeout(S.poll);
-  if (running) S.poll = setTimeout(refresh, 4000);
+  scheduleRefresh();
   render({ passive: true });
 }
 async function loadDetail(id) {
@@ -326,6 +334,11 @@ app.ontoolresult = (result) => {
   if (data?.agents) setData(data); else refresh();
 };
 app.onhostcontextchanged = applyContext;
+app.onteardown = async () => { S.closed = true; clearTimeout(S.poll); return {}; };
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clearTimeout(S.poll);
+  else if (!S.closed) refresh();
+});
 render();
 await app.connect();
 applyContext(app.getHostContext());

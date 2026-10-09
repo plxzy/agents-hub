@@ -5,6 +5,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DASHBOARD_URI, OPS, defaultContext } from './ops.mjs';
+import { DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS } from './contract.mjs';
 
 const MCP_APP_MIME = 'text/html;profile=mcp-app';
 const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
@@ -13,7 +14,7 @@ const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(va
 export function toolList(ops = OPS) {
   return ops.map((op) => ({
     name: op.name, title: op.title, description: op.description, inputSchema: op.input, annotations: { title: op.title, ...op.annotations },
-    ...(op.ui ? { _meta: { ui: { resourceUri: op.ui }, 'openai/outputTemplate': op.ui } } : {}),
+    ...(op.ui ? { icons: DASHBOARD_ICONS, _meta: DASHBOARD_TOOL_META } : {}),
   }));
 }
 
@@ -50,7 +51,7 @@ export function createServer({ ctx = defaultContext(), ops = OPS, html = () => i
     if (method === 'resources/read') {
       if (params?.uri !== DASHBOARD_URI) return { jsonrpc: '2.0', id, error: { code: -32602, message: `unknown resource ${params?.uri}` } };
       return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_APP_MIME, text: await html(),
-        _meta: { ui: { prefersBorder: true } } }] });
+        _meta: DASHBOARD_RESOURCE_META }] });
     }
     if (id !== undefined) return { jsonrpc: '2.0', id, error: { code: -32601, message: `method not found: ${method}` } };
     return null; // notifications

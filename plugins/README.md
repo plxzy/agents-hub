@@ -47,3 +47,18 @@ ChatGPT, Dots and claude.ai connect to `https://YOUR-HUB.workers.dev/mcp` as an 
 custom connector with OAuth (Cloudflare Access Managed OAuth). It is read-only, from the last published snapshot,
 and answers the same read operations with the same shapes as the local server (`agent-workflow/contract.mjs`).
 The former `agents-hub` plugin package (read-only remote plugin) was removed on 2026-10-09; the user uninstalled it.
+
+## ChatGPT/Codex panel (MCP Extensions)
+
+Both MCP servers advertise `open_dashboard` as a **global** navigation entry and a **thread** content-tab entry,
+named **Agents Hub dashboard**. These open the same dashboard without asking a model to call a tool. The host
+chooses placement: the global entry opens a permanent app tab with a conversation, and the thread entry opens
+beside the current conversation. The normal inline widget still works in other MCP Apps hosts.
+
+Metadata lives in `agent-workflow/contract.mjs`, shared by the local and hosted servers. No extra plugin package
+or App registration is needed. After deployment, use **Manage → Refresh tools** on the existing hosted App;
+local MCP processes must reconnect to discover updated tool metadata. The panel refreshes every 30 seconds
+(4 seconds for a local running task), pauses when hidden, and retries after refresh errors. Hosted data still
+comes from the last Mac publication and shows its age; remote run/review capabilities are not added.
+
+Specification: https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#mcp-app-entrypoints
