@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
   acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
-  loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent,
+  loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent, formatAgentListEntry,
 } from './agent.mjs';
 
 function fixture() {
@@ -52,6 +52,17 @@ test('loads agent definitions', () => {
   assert.equal(a.name, 'demo');
   assert.deepEqual(a.tools, ['read', 'ls']);
   assert.deepEqual(a.memory, ['shared', 'agent:demo']);
+});
+
+test('agent list entry includes optional guard, skill names, and write paths compactly', () => {
+  const { root } = fixture();
+  fs.writeFileSync(path.join(root, 'agents/demo.md'),
+    `---\nname: demo\ndescription: test agent\ntools: read, ls\nmemory_scopes: shared\nguard: readonly\nskills: helper, network\nwrite_paths: ~/Development/demo\n---\nBe brief.\n`);
+  const entry = formatAgentListEntry(loadAgents(root)[0]);
+  assert.match(entry, /guard=readonly/);
+  assert.match(entry, /skills=helper,network/);
+  assert.ok(entry.includes('writes=') && entry.includes('/Development/demo'));
+  assert.equal((entry.match(/\n/g) ?? []).length, 1);
 });
 
 test('remember blocks only target the agent\'s own scopes', () => {
@@ -128,4 +139,17 @@ test('a chat session file becomes a rateable run', () => {
   const r = receiptFromSession(lines, { agent: { name: 'demo', tools: [], version: 'v' } });
   assert.equal(r.kind, 'chat'); assert.equal(r.task, 'hi'); assert.equal(r.output, 'hello');
   assert.deepEqual(r.commands, ['ls']); assert.equal(r.usage.cost, 0.01);
+});
+
+test('agents with write_paths run Pi in a sandbox that only allows those writes', async () => {
+  const { piCommand, sandboxProfile } = await import('./agent.mjs');
+  const agent = { writePaths: ['/h/repo'], file: '/h/.agents/agents/w.md', sudoAllow: [], protectPaths: [] };
+  const [cmd, args] = piCommand(agent, ['-p', 'x']);
+  assert.equal(cmd, 'sandbox-exec');
+  assert.deepEqual(args.slice(2), ['pi', '-p', 'x']);
+  const profile = sandboxProfile(agent, { home: '/h', state: '/h/.state' });
+  assert.match(profile, /\(deny file-write\* \(subpath "\/h"\)\)/);
+  assert.match(profile, /\(allow file-write\* \(subpath "\/h\/repo"\)/);
+  assert.match(profile, /\(deny file-read\* file-write\* .*"\/h\/.codex\/auth.json"/);
+  assert.deepEqual(piCommand({ ...agent, writePaths: null }, ['-p']), ['pi', ['-p']]);
 });

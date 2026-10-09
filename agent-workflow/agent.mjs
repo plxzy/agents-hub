@@ -71,9 +71,21 @@ export function loadAgents(root = ROOT) {
       // Enforced (not just instructed) bash policy: `guard: readonly` loads guards/readonly-bash.ts.
       guard: meta.guard ?? null,
       sudoAllow: list(meta.sudo_allow),
+      // Folders the agent may write to. When set, Pi runs inside a macOS sandbox that denies every other write
+      // in the home folder (see sandboxProfile); `protect_paths` are kept read-only even inside them.
+      writePaths: meta.write_paths ? list(meta.write_paths).map(expandHome) : null,
+      protectPaths: list(meta.protect_paths).map(expandHome),
       instructions: body,
     };
   });
+}
+
+export function formatAgentListEntry(a) {
+  const details = [`tools=${a.tools.join(',') || 'none'}`, `memory=${a.memory.join(',')}`];
+  if (a.guard) details.push(`guard=${a.guard}`);
+  if (a.skills !== 'none' && a.skills.length) details.push(`skills=${a.skills.map((s) => path.basename(s)).join(',')}`);
+  if (a.writePaths?.length) details.push(`writes=${a.writePaths.join(',')}`);
+  return `${a.name.padEnd(14)} ${a.description}\n${''.padEnd(14)} ${details.join(' ')}`;
 }
 
 export function getAgent(name, root = ROOT) {
@@ -198,8 +210,31 @@ export function buildSystemPrompt(agent, memories) {
 
 const GUARDS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'guards');
 const guardArgs = (agent) => (agent.guard ? ['-e', path.join(GUARDS, `${agent.guard}-bash.ts`)] : []);
-/** Environment for the Pi process: the guard reads the allowed sudo prefixes from it. */
-export const agentEnv = (agent) => ({ ...process.env, AGENT_SUDO_ALLOW: JSON.stringify(agent.sudoAllow.map((p) => `sudo -n ${p}`)) });
+/** Environment for the Pi process: guards read the allowed sudo prefixes and protected paths from it. */
+export const agentEnv = (agent, root = ROOT) => ({
+  ...process.env,
+  AGENT_SUDO_ALLOW: JSON.stringify(agent.sudoAllow.map((p) => `sudo -n ${p}`)),
+  // Never editable by an agent: its own definition, the user's accepted memory and past decisions.
+  AGENT_PROTECTED: JSON.stringify([agent.file, ...['shared', 'projects', 'agents', 'rejected'].map((d) => path.join(root, 'memory', d)),
+    path.join(root, 'proposals/rejected'), ...agent.protectPaths]),
+});
+
+// Credential stores no sandboxed agent may read or write (Pi's own login under ~/.pi stays readable for Pi itself).
+const SECRET_PATHS = ['.ssh', '.aws', '.docker/config.json', '.netrc', '.config/gh', '.config/gcloud', '.codex/auth.json',
+  '.codex/multi-auth', '.claude/.credentials.json', 'Library/Keychains', 'Library/Cookies', 'Library/Application Support/Google/Chrome'];
+
+/** macOS sandbox profile: writes in the home folder only to write_paths and Pi's own folders; no credential stores. */
+export function sandboxProfile(agent, { home = os.homedir(), state = STATE } = {}) {
+  const q = (p) => JSON.stringify(p);
+  const writable = [...agent.writePaths, path.join(home, '.pi'), state, path.join(home, '.cache'), path.join(home, 'Library/Caches'), path.join(home, '.npm')];
+  return ['(version 1)', '(allow default)',
+    `(deny file-write* (subpath ${q(home)}))`,
+    `(allow file-write* ${writable.map((p) => `(subpath ${q(p)})`).join(' ')})`,
+    `(deny file-read* file-write* ${SECRET_PATHS.map((p) => `(subpath ${q(path.join(home, p))})`).join(' ')})`].join('\n');
+}
+
+/** [command, args] that starts Pi for this agent, inside the sandbox when the agent has write_paths. */
+export const piCommand = (agent, args) => (agent.writePaths ? ['sandbox-exec', ['-p', sandboxProfile(agent), 'pi', ...args]] : ['pi', args]);
 
 export function piArgs(agent, { task, prompt, sessionDir, resume }) {
   return [
@@ -261,7 +296,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   const rawFile = path.join(runsDir, `${runId}.jsonl`);
 
   const { events, exitCode, timedOut } = await new Promise((resolve, reject) => {
-    const child = spawn('pi', piArgs(agent, { task, prompt, sessionDir, resume }), { cwd: agent.workspace, env: agentEnv(agent), stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(...piCommand(agent, piArgs(agent, { task, prompt, sessionDir, resume })), { cwd: agent.workspace, env: agentEnv(agent, root), stdio: ['ignore', 'pipe', 'pipe'] });
     const raw = fs.createWriteStream(rawFile, { mode: 0o600 });
     const events = [];
     let buf = '';
@@ -379,7 +414,7 @@ function flag(args, name) {
 async function main(argv) {
   const [cmd, ...args] = argv;
   if (cmd === 'list') {
-    for (const a of loadAgents()) console.log(`${a.name.padEnd(14)} ${a.description}\n${''.padEnd(14)} tools=${a.tools.join(',') || 'none'} memory=${a.memory.join(',')}`);
+    for (const a of loadAgents()) console.log(formatAgentListEntry(a));
   } else if (cmd === 'run') {
     const resume = args.includes('--continue');
     const useMemory = !args.includes('--no-memory');
@@ -400,7 +435,7 @@ async function main(argv) {
     console.log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
     console.log('When you exit, this chat is saved as a run you can rate (agent feedback last good|bad) and the coach can learn from.\n');
     const startedAt = Date.now() - 1000;
-    const child = nodeSpawn('pi', chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume }), { cwd: agent.workspace, env: agentEnv(agent), stdio: 'inherit' });
+    const child = nodeSpawn(...piCommand(agent, chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume })), { cwd: agent.workspace, env: agentEnv(agent), stdio: 'inherit' });
     await new Promise((resolve) => child.on('close', resolve));
     const runsDir = path.join(STATE, 'runs');
     fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
