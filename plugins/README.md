@@ -45,7 +45,20 @@ Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin
 
 A private remote plugin for the read-only Cloudflare service. It connects to
 `https://YOUR-HUB.workers.dev/mcp` using native OAuth and owner-only Cloudflare Access.
-The local `agents/` plugin remains the entry point for running Pi agents.
 
 Private plugin: https://chatgpt.com/plugins/plugins_6ac8a29d576c8191aa112562b4131771
-Package version: `0.3.1`. Release: `pluginrel_6ac8a29dc8a08191bb5e577374b4dc45`.
+Package version in this folder: `0.3.2` (display name "Agents Hub (read-only)"). The live ChatGPT release is still
+`0.3.1` ("Agents Hub") until this folder is uploaded again.
+
+## Which one to use (two plugins on purpose)
+
+| | `agents` → **Agents Hub (this Mac)** | `agents-hub` → **Agents Hub (read-only)** |
+|---|---|---|
+| Where | Claude Code, Codex CLI/app, Pi, Claude Desktop (config entry) | ChatGPT web/mobile, Dots, claude.ai (later) |
+| Connection | stdio, `agent-workflow/mcp.mjs` on this Mac | HTTPS + OAuth to the Worker |
+| Data | live | last published snapshot (titles and counts; stale after 15 min) |
+| Can | read, run, review (your clicks) | read only |
+
+Both answer the same read operations with the same result shapes (`agent-workflow/contract.mjs`) and render the
+same dashboard; the hosted one shows the snapshot's age and never shows a task's full text. In the Codex app both can
+appear, because ChatGPT plugins are account-wide: on the Mac use "this Mac".

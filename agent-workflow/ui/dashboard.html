@@ -120,6 +120,8 @@ const ago = (iso) => {
 };
 const firstLine = (t) => String(t ?? '').trim().split('\n')[0];
 const home = (p) => String(p ?? '').replace(/^\/Users\/[^/]+/, '~');
+// Local run records list tools and blocked commands; hosted ones only count them.
+const list = (v, sep, unit) => (Array.isArray(v) ? (v.length ? v.join(sep) : null) : v > 0 ? `${v} ${unit}` : null);
 
 // ---------- server calls ----------
 function showError(msg) { const e = document.getElementById('error'); e.textContent = msg ?? ''; e.hidden = !msg; }
@@ -156,16 +158,20 @@ async function loadDetail(id) {
 // ---------- views ----------
 function chips() {
   const st = S.data?.status; if (!st) return [];
-  const review = st.pending.memory + st.pending.proposals;
+  // pending is null when the hosted snapshot does not carry it: say so instead of showing a zero.
+  const review = st.pending ? st.pending.memory + st.pending.proposals : null;
+  const snap = S.data.snapshot;
   return [h('span', { class: 'chip' }, `${st.agents} agents`),
     h('span', { class: `chip${st.running ? ' on' : ''}` }, `${st.running} running`),
-    h('span', { class: `chip${review ? ' attn' : ''}` }, `${review} to review`)];
+    h('span', { class: `chip${review ? ' attn' : ''}` }, review === null ? 'review: unknown' : `${review} to review`),
+    snap ? h('span', { class: `chip${snap.stale ? ' attn' : ''}`, title: `Published ${snap.published_at ?? '?'}` },
+      `${snap.stale ? 'stale · ' : ''}snapshot ${ago(snap.generated_at) || 'time unknown'}`) : null].filter(Boolean);
 }
 const canRun = () => S.data?.capabilities?.run === true;
 const canDecide = () => S.data?.capabilities?.mutate === true;
 
 function tabs() {
-  const review = S.data ? S.data.pending.length : 0;
+  const review = S.data?.pending?.length ?? 0;
   return [['runs', 'Runs'], ['agents', 'Agents'], ...(canDecide() ? [['review', 'Review']] : [])].map(([id, label]) =>
     h('button', { role: 'tab', 'aria-selected': String(S.tab === id), onclick: () => { S.tab = id; S.detail = null; S.form = null; render(); } },
       label, id === 'review' && review ? h('span', { class: 'badge' }, review) : null));
@@ -190,10 +196,10 @@ function runsView() {
     onkeydown: (e) => e.key === 'Enter' && e.currentTarget.click() },
     h('div', { class: 'line' },
       h('span', { class: `pill ${r.status}` }, r.status === 'running' ? [h('span', { class: 'spin' }), ' running'] : r.status),
-      h('span', { class: 'name' }, r.agent), h('span', { class: 'grow ell' }, firstLine(r.task)),
+      h('span', { class: 'name' }, r.agent), h('span', { class: 'grow ell' }, r.title ?? firstLine(r.task)),
       r.feedback ? h('span', { class: 'small muted' }, r.feedback === 'good' ? '👍' : '👎') : null),
     h('div', { class: 'meta' }, [r.kind !== 'task' && r.kind, ago(r.started), r.status !== 'running' && `${r.tool_calls} tool call(s)`,
-      r.blocked && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')))));
+      r.blocked > 0 && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')))));
 }
 
 function detailView() {
@@ -210,14 +216,16 @@ function detailView() {
   return h('div', {}, back, h('div', { class: 'row' },
     h('div', { class: 'line' }, h('span', { class: `pill ${r.status}` }, r.status), h('span', { class: 'name' }, r.agent),
       h('span', { class: 'grow muted small ell' }, r.run_id)),
-    h('div', { class: 'body' }, r.task),
+    h('div', { class: 'body' }, r.task ?? r.title ?? ''),
+    S.data?.snapshot ? h('div', { class: 'meta' }, 'Hosted view: title and counts only, from the last published snapshot.') : null,
     r.status === 'running' ? h('div', { class: 'meta' }, h('span', { class: 'spin' }), ` started ${ago(r.started)}; this updates on its own`) : null,
     output ? h('pre', {}, output) : null,
     h('dl', {}, ...[
-      ['model', r.model], ['started', r.started && new Date(r.started).toLocaleString()], ['tools', r.tool_calls?.join(', ')],
-      ['commands', r.commands?.length ? r.commands.join('\n') : null], ['blocked', r.blocked?.length ? r.blocked.join('\n') : null],
+      ['model', r.model], ['started', r.started && new Date(r.started).toLocaleString()], ['tools', list(r.tool_calls, ', ', 'call(s)')],
+      ['commands', r.commands?.length ? r.commands.join('\n') : null], ['blocked', list(r.blocked, '\n', 'attempt(s)')],
       ['memory used', r.memory_supplied?.length], ['memory proposed', r.memory_proposed?.length ? `${r.memory_proposed.length} (see Review)` : null],
-      ['tokens', r.usage?.totalTokens], ['workspace', home(r.workspace)], ['your rating', r.feedback ? `${r.feedback.rating}${r.feedback.comment ? ` — ${r.feedback.comment}` : ''}` : null],
+      ['tokens', r.usage?.totalTokens ?? r.tokens], ['workspace', r.workspace && home(r.workspace)],
+      ['your rating', typeof r.feedback === 'string' ? r.feedback : r.feedback ? `${r.feedback.rating}${r.feedback.comment ? ` — ${r.feedback.comment}` : ''}` : null],
     ].filter(([, v]) => v !== null && v !== undefined && v !== '').flatMap(([k, v]) => [h('dt', {}, k), h('dd', { style: k === 'commands' || k === 'blocked' ? 'white-space:pre-wrap;font-family:var(--font-mono)' : null }, v)])),
     rateable ? h('div', { class: 'actions' },
       h('input', { id: 'rate-why', placeholder: 'Why (optional, your words)', 'aria-label': 'Reason for rating' }),

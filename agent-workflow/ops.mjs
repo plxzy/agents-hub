@@ -13,22 +13,17 @@ import {
   ROOT, STATE, assertSandboxAllowed, getAgent, listRuns, loadAgents, newId, resolveWorkspace, runAgent, writeRunningMarker,
 } from './agent.mjs';
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
+import { DASHBOARD_URI, READ_OPS, lastRunOf, runBrief } from './contract.mjs';
 
-export const DASHBOARD_URI = 'ui://agents-hub/dashboard.html';
+export { DASHBOARD_URI };
 const AGENT_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent.mjs');
 
-const brief = (r) => ({
-  run_id: r.run_id, agent: r.agent, kind: r.kind ?? 'task', status: r.status, task: r.task, started: r.started, ended: r.ended,
-  model: r.model, tool_calls: r.tool_calls?.length ?? 0, blocked: r.blocked?.length ?? 0, tokens: r.usage?.totalTokens,
-  cost_usd: r.usage?.cost, feedback: r.feedback?.rating ?? null,
-});
+// The shared brief (contract.mjs) plus the full task, which only local surfaces show.
+const brief = (r) => ({ ...runBrief(r), task: r.task });
 
-const agentSummary = (a, runs) => {
-  const last = runs.filter((r) => r.agent === a.name).at(-1);
-  return { name: a.name, description: a.description, model: a.model, tools: a.tools,
-    skills: Array.isArray(a.skills) ? a.skills.map((s) => s.split('/').pop()) : a.skills, guard: a.guard,
-    workspace: a.workspace, runner: a.runner, last_run: last ? { run_id: last.run_id, status: last.status, started: last.started } : null };
-};
+const agentSummary = (a, runs) => ({ name: a.name, description: a.description, model: a.model, tools: a.tools,
+  skills: Array.isArray(a.skills) ? a.skills.map((s) => s.split('/').pop()) : a.skills, guard: a.guard,
+  workspace: a.workspace, runner: a.runner, last_run: lastRunOf(a.name, runs) });
 
 function validateCwd(definition, cwd) {
   if (cwd === undefined) return;
@@ -74,28 +69,11 @@ const AGENT_ARGS = {
 };
 
 export const OPS = [
+  // Read operations: names, descriptions, schemas and result shapes are shared with the hosted hub (contract.mjs).
+  { name: 'open_dashboard', access: 'read', ...READ_OPS.open_dashboard, run: (_, ctx) => dashboardData(ctx) },
+  { name: 'get_status', access: 'read', ...READ_OPS.get_status, run: (_, ctx) => status(ctx) },
   {
-    name: 'open_dashboard', access: 'read', ui: DASHBOARD_URI, title: 'Agents Hub dashboard',
-    description: 'Open the interactive agents dashboard: agents, recent runs, items waiting for the user\'s review, and a form to start a run. '
-      + 'Use when the user wants to see, check on or manage their agents.',
-    input: { type: 'object', properties: {}, additionalProperties: false },
-    annotations: { readOnlyHint: true },
-    run: (_, ctx) => dashboardData(ctx),
-    summary: (d) => `${d.status.agents} agents · ${d.status.running} running · ${d.status.pending.memory} memory note(s) and `
-      + `${d.status.pending.proposals} proposal(s) waiting for review · last run: ${d.status.last_run ? `${d.status.last_run.agent} ${d.status.last_run.status}` : 'none'}`,
-  },
-  {
-    name: 'get_status', access: 'read', title: 'Agents status',
-    description: 'Counts of agents and runs, runs in progress, and how many items wait for the user\'s review.',
-    input: { type: 'object', properties: {}, additionalProperties: false },
-    annotations: { readOnlyHint: true },
-    run: (_, ctx) => status(ctx),
-  },
-  {
-    name: 'list_agents', access: 'read', title: 'List agents',
-    description: "List the user's agents (name, what it is for, tools, skills, guard, workspace, last run).",
-    input: { type: 'object', properties: {}, additionalProperties: false },
-    annotations: { readOnlyHint: true },
+    name: 'list_agents', access: 'read', ...READ_OPS.list_agents,
     run: (_, { root, state }) => { const runs = listRuns(state, { running: true }); return loadAgents(root).map((a) => agentSummary(a, runs)); },
   },
   {
@@ -130,20 +108,13 @@ export const OPS = [
     },
   },
   {
-    name: 'list_runs', access: 'read', title: 'List runs',
-    description: 'Recent agent runs and chats (newest last), with status, cost and the user\'s rating. Includes runs in progress.',
-    input: { type: 'object', additionalProperties: false, properties: {
-      agent: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
-    } },
-    annotations: { readOnlyHint: true },
+    name: 'list_runs', access: 'read', ...READ_OPS.list_runs,
     run: ({ agent, limit = 10 }, { state }) => listRuns(state, { running: true }).filter((r) => !agent || r.agent === agent).slice(-limit).map(brief),
   },
   {
-    name: 'get_run', access: 'read', title: 'Get a run',
+    name: 'get_run', access: 'read', ...READ_OPS.get_run,
     description: 'Full record of one run: task, answer, tools and commands used, blocked attempts, memory used and proposed. '
       + 'A run still in progress has status running.',
-    input: { type: 'object', required: ['run_id'], additionalProperties: false, properties: { run_id: { type: 'string' } } },
-    annotations: { readOnlyHint: true },
     run: ({ run_id }, { state }) => {
       const r = listRuns(state, { running: true }).find((x) => x.run_id === run_id);
       if (!r) throw new Error(`no run ${run_id}`);

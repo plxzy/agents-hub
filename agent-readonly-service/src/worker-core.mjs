@@ -1,8 +1,8 @@
+import { DASHBOARD_URI, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 
 const KEEP_SNAPSHOTS = 20;
 const CAPABILITIES = { discovery: true, status: true, context: true, run: false, mutate: false };
-const DASHBOARD_URI = 'ui://agents-hub/dashboard.html';
 const MCP_MIME = 'text/html;profile=mcp-app';
 
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), {
@@ -27,34 +27,40 @@ function page(items, cursor, limit = 20) {
   return { items: items.slice(start, start + n), next_cursor: start + n < items.length ? String(start + n) : null };
 }
 
-function snapshotData(snap, env) {
-  const m = meta(snap, env);
-  return { ...m, status: { agents: snap.payload.agents.length, runs: snap.payload.runs.length, running: snap.payload.runs.filter((r) => r.status === 'running').length,
-      pending: { memory: 0, proposals: 0 }, last_run: snap.payload.runs.at(-1) ?? null },
-    agents: snap.payload.agents, runs: snap.payload.runs.slice(-50), pending: [] };
+// Results follow the shared contract (agent-workflow/contract.mjs), so the one dashboard reads local and hosted data
+// alike. `snapshot` says how old the data is; pending is null when the snapshot did not carry review counts.
+const freshness = (m) => ({ published_at: m.published_at, generated_at: m.generated_at, stale: m.stale });
+
+function status(snap) {
+  const runs = snap.payload.runs;
+  const last = runs.filter((r) => r.status !== 'running').at(-1);
+  return { agents: snap.payload.agents.length, runs: runs.length, running: runs.filter((r) => r.status === 'running').length,
+    pending: snap.payload.pending ?? null, last_run: last ? { run_id: last.run_id, agent: last.agent, status: last.status, ended: last.ended } : null };
+}
+const agents = (snap) => snap.payload.agents.map((a) => ({ ...a, last_run: lastRunOf(a.name, snap.payload.runs) }));
+
+function snapshotData(snap, m) {
+  return { generated_at: m.generated_at, capabilities: m.capabilities, status: status(snap), agents: agents(snap),
+    runs: snap.payload.runs.slice(-50), pending: null, snapshot: freshness(m) };
 }
 
 const TOOLS = [
-  { name: 'open_dashboard', title: 'Agents Hub dashboard', description: 'Open the read-only Agents Hub dashboard with agents, recent runs, provenance and freshness.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }, ui: true, run: (p) => snapshotData(p.snap, p.env) },
-  { name: 'list_agents', title: 'List agents', description: 'List sanitized local agent definitions from the latest published snapshot.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }, run: (p) => ({ ...p.meta, agents: p.snap.payload.agents }) },
-  { name: 'list_runs', title: 'List runs', description: 'List sanitized recent agent runs with task titles, status and provenance.',
-    inputSchema: { type: 'object', properties: { agent: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }, additionalProperties: false },
-    run: (p, { agent, limit = 20 }) => ({ ...p.meta, ...page(p.snap.payload.runs.filter((r) => !agent || r.agent === agent), null, limit) }) },
-  { name: 'get_run', title: 'Get a run', description: 'Inspect one sanitized run by id.',
-    inputSchema: { type: 'object', required: ['run_id'], properties: { run_id: { type: 'string' } }, additionalProperties: false },
-    run: (p, { run_id }) => { const run = p.snap.payload.runs.find((r) => r.run_id === run_id); if (!run) throw new Error('no run ' + run_id); return { ...p.meta, run }; } },
-  { name: 'get_status', title: 'Agents Hub status', description: 'Show snapshot freshness, provenance and explicitly advertised capabilities.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false }, run: (p) => ({ ...p.meta, agents: p.snap.payload.agents.length, runs: p.snap.payload.runs.length }) },
-  { name: 'resolve_context', title: 'Resolve context', description: 'List approved context metadata from the latest published snapshot.',
-    inputSchema: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }, additionalProperties: false },
-    run: (p, { limit = 20 }) => ({ ...p.meta, ...page(p.snap.payload.context ?? [], null, limit) }) },
+  { name: 'open_dashboard', ...READ_OPS.open_dashboard,
+    description: READ_OPS.open_dashboard.description + ' Hosted: read-only, from the last published snapshot.', run: (p) => snapshotData(p.snap, p.meta) },
+  { name: 'get_status', ...READ_OPS.get_status, run: (p) => ({ ...status(p.snap), snapshot: freshness(p.meta), capabilities: p.meta.capabilities }) },
+  { name: 'list_agents', ...READ_OPS.list_agents, run: (p) => ({ snapshot: freshness(p.meta), agents: agents(p.snap) }) },
+  { name: 'list_runs', ...READ_OPS.list_runs,
+    run: (p, { agent, limit = 10 }) => ({ snapshot: freshness(p.meta), runs: p.snap.payload.runs.filter((r) => !agent || r.agent === agent).slice(-limit) }) },
+  { name: 'get_run', ...READ_OPS.get_run,
+    run: (p, { run_id }) => { const run = p.snap.payload.runs.find((r) => r.run_id === run_id); if (!run) throw new Error('no run ' + run_id); return { ...run, snapshot: freshness(p.meta) }; } },
+  { name: 'resolve_context', title: 'Resolve context', description: 'List approved context metadata from the latest published snapshot.', annotations: { readOnlyHint: true },
+    input: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }, additionalProperties: false },
+    run: (p, { limit = 20 }) => ({ snapshot: freshness(p.meta), ...page(p.snap.payload.context ?? [], null, limit) }) },
 ];
 
-const toolList = TOOLS.map(({ run, ui, ...tool }) => ({
-  ...tool, annotations: { readOnlyHint: true },
-  ...(ui ? { _meta: { ui: { resourceUri: DASHBOARD_URI }, 'openai/outputTemplate': DASHBOARD_URI } } : {}),
+const toolList = TOOLS.map(({ name, title, description, input, annotations, ui }) => ({
+  name, title, description, inputSchema: input, annotations: { title, ...annotations, readOnlyHint: true },
+  ...(ui ? { _meta: { ui: { resourceUri: ui }, 'openai/outputTemplate': ui } } : {}),
 }));
 
 export async function apiFetch(request, env, dashboardHtml = '') {
@@ -86,7 +92,7 @@ export async function apiFetch(request, env, dashboardHtml = '') {
       if (!tool) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool ' + params?.name } });
       try {
         const value = tool.run({ snap, env, meta: m }, params.arguments ?? {});
-        return reply({ content: [{ type: 'text', text: tool.ui ? 'Agents Hub dashboard' : JSON.stringify(value, null, 2) }], ...(tool.ui ? { structuredContent: value } : {}) });
+        return reply({ content: [{ type: 'text', text: tool.ui ? tool.summary(value) : JSON.stringify(value, null, 2) }], ...(tool.ui ? { structuredContent: value } : {}) });
       } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
     }
     return json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } });

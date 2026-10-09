@@ -1,18 +1,22 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "agents",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Agents Hub: see, run and review your own Pi agents through one shared dashboard.",
-  "author": { "name": "effeef" },
+  "author": {
+    "name": "effeef"
+  },
   "extensions": {
     "com.openai": {
       "interface": {
-        "displayName": "Agents Hub",
-        "shortDescription": "Your own Pi agents in one hub",
+        "displayName": "Agents Hub (this Mac)",
+        "shortDescription": "Run and review your Pi agents on this Mac",
         "longDescription": "Opens the shared Agents Hub dashboard for your local Pi agents (runs, agents, and items waiting for your review), starts runs, and delegates tasks to the agent that fits. Runs happen on your Mac in Pi with each agent's sandbox, guard and reviewed memory.",
         "developerName": "effeef",
         "category": "Productivity",
-        "capabilities": ["Interactive"],
+        "capabilities": [
+          "Interactive"
+        ],
         "defaultPrompt": "Open my Agents Hub dashboard."
       }
     }

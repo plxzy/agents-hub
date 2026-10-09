@@ -28,3 +28,12 @@ test('secret-looking values are redacted in place instead of rejecting the snaps
 });
 
 test('pages with bounded cursors', () => { assert.deepEqual(page([1, 2, 3], '1', 1), { items: [2], next_cursor: '2' }); });
+
+test('sanitizing twice keeps everything (publisher and Worker both sanitize)', () => {
+  const once = sanitizeSnapshot({ generated_at: '2026-10-09T00:00:00.000Z', pending: { memory: 1, proposals: 0 },
+    agents: [{ name: 'helper', tools: 'read', workspace: '/Users/you/x' }],
+    runs: [{ run_id: 'r1', agent: 'helper', status: 'completed', task: 'Do it\nmore', tool_calls: [{}, {}], blocked: ['rm'], usage: { totalTokens: 7, cost: 0.2 }, feedback: { rating: 'bad' } }] });
+  assert.deepEqual(sanitizeSnapshot(once), once);
+  assert.deepEqual(once.runs[0], { run_id: 'r1', agent: 'helper', kind: 'task', status: 'completed', title: 'Do it', tool_calls: 2, blocked: 1, tokens: 7, cost_usd: 0.2, feedback: 'bad' });
+  assert.deepEqual(once.pending, { memory: 1, proposals: 0 });
+});

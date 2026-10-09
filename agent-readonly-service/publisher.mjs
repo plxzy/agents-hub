@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { listRuns, loadAgents } from '../agent-workflow/agent.mjs';
+import { pending } from '../agent-workflow/improve.mjs';
 import { sanitizeSnapshot } from './src/snapshot.mjs';
 
 export const CONFIG = path.join(os.homedir(), '.config/agent-readonly/publish.env');
@@ -23,7 +24,9 @@ export function readConfig(file = CONFIG, env = process.env) {
 }
 
 export function buildSnapshot({ root, state, context = [] } = {}) {
-  return sanitizeSnapshot({ generated_at: new Date().toISOString(), agents: loadAgents(root), runs: listRuns(state), context });
+  const items = pending(root);
+  return sanitizeSnapshot({ generated_at: new Date().toISOString(), agents: loadAgents(root), runs: listRuns(state, { running: true }), context,
+    pending: { memory: items.filter((p) => p.kind === 'memory').length, proposals: items.filter((p) => p.kind !== 'memory').length } });
 }
 
 export async function publish({ endpoint, token } = readConfig(), options = {}) {
