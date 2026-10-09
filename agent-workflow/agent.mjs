@@ -38,7 +38,7 @@ export function formatFrontmatter(meta, body) {
 }
 
 export const list = (v) => (Array.isArray(v) ? v : typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
-const expandHome = (p) => (p?.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
+const expandHome = (p) => (p === '~' ? os.homedir() : p?.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
 export const newId = (prefix) => `${prefix}-${stamp()}-${randomBytes(3).toString('hex')}`;
 
