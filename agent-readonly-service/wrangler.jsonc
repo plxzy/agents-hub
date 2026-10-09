@@ -1,8 +1,0 @@
-{
-  "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "agent-readonly",
-  "main": "src/worker.mjs",
-  "compatibility_date": "2026-10-01",
-  "vars": { "STALE_AFTER_MS": "900000" },
-  "d1_databases": [{ "binding": "DB", "database_name": "agent-readonly", "database_id": "REPLACE_BEFORE_DEPLOY", "migrations_dir": "./migrations" }]
-}
