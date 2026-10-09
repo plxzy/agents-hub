@@ -35,6 +35,6 @@ chatgpt.com, claude.ai, claude.com and loopback), sign in with the Access email 
 (refresh for 30 days). The Worker has no OAuth code; it verifies the `Cf-Access-Jwt-Assertion` on every `/mcp`
 request (`src/access.mjs`), so preview URLs or a missing Access app fail closed. `/health` and `/v1/snapshots`
 (publisher token in `~/.config/agent-readonly/`) are outside Access. Evidence: `evidence/2026-10-09-agents-hub-managed-oauth/`.
-The old OAuth KV namespace is no longer bound and can be deleted.
+The former OAuth KV namespace was deleted on 2026-10-09.
 
 Tests: `npm test`. Deploy: `cf deploy` (check with `cf deploy --dry-run` first).
