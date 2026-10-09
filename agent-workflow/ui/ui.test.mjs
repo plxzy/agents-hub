@@ -43,6 +43,15 @@ test('the dashboard inlines the MCP Apps bridge and loads nothing from the netwo
   assert.throws(() => bridgeScript('const a = 1;'), /unexpected ext-apps bundle format/);
 });
 
+test('the dashboard isolates its styles from the embedding host', () => {
+  const html = dashboardHtml();
+  assert.match(html, /<div id="agents-hub-ui">\s*<div class="app">/);
+  assert.match(html, /#agents-hub-ui \.row\s*\{/);
+  assert.doesNotMatch(html, /\n\s*\.row\s*\{/);
+  assert.doesNotMatch(html, /\n\s*\.list\s*\{/);
+  assert.doesNotMatch(html, /document\.body\.style\.setProperty/);
+});
+
 test('agent ui needs its token and a loopback Host header', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-ui-'));
   fs.mkdirSync(path.join(root, 'agents'));

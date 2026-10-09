@@ -25,64 +25,68 @@
     --color-background-success: #1d3324; --color-background-danger: #3a1f1d; --color-background-warning: #3a3018; --color-background-info: #1d2a40;
     --color-ring-primary: #8ab4ff;
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--color-background-primary); color: var(--color-text-primary);
+  /* MCP Apps can share a document with their host. Keep every rule under our
+     root so host selectors such as .row, .list, and .body cannot restyle it. */
+  #agents-hub-ui, #agents-hub-ui * { box-sizing: border-box; }
+  #agents-hub-ui { display: block; width: 100%; margin: 0; min-height: 100%; background: var(--color-background-primary); color: var(--color-text-primary);
     font: 14px/1.45 var(--font-sans); padding: var(--inset-top, 0) var(--inset-right, 0) var(--inset-bottom, 0) var(--inset-left, 0); }
-  .app { padding: 14px 16px 16px; max-width: 920px; margin: 0 auto; }
-  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  h1 { font-size: 16px; font-weight: 600; margin: 0; }
-  .chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
-  .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--color-background-secondary); color: var(--color-text-secondary); }
-  .chip.on { background: var(--color-background-info); color: var(--color-text-info); }
-  .chip.attn { background: var(--color-background-warning); color: var(--color-text-warning); }
-  .runner-health { flex-basis: 100%; font-size: 12px; color: var(--color-text-secondary); }
-  .runner-health summary { cursor: pointer; min-height: 24px; padding: 2px 0; }
-  .runner-health ul { margin: 4px 0; padding-left: 20px; overflow-wrap: anywhere; }
-  button { font: inherit; font-size: 13px; color: var(--color-text-primary); background: var(--color-background-secondary);
+  #agents-hub-ui .app { padding: 14px 16px 16px; max-width: 920px; margin: 0 auto; }
+  #agents-hub-ui header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #agents-hub-ui h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  #agents-hub-ui .chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+  #agents-hub-ui .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--color-background-secondary); color: var(--color-text-secondary); }
+  #agents-hub-ui .chip.on { background: var(--color-background-info); color: var(--color-text-info); }
+  #agents-hub-ui .chip.attn { background: var(--color-background-warning); color: var(--color-text-warning); }
+  #agents-hub-ui .runner-health { flex-basis: 100%; font-size: 12px; color: var(--color-text-secondary); }
+  #agents-hub-ui .runner-health summary { cursor: pointer; min-height: 24px; padding: 2px 0; }
+  #agents-hub-ui .runner-health ul { margin: 4px 0; padding-left: 20px; overflow-wrap: anywhere; }
+  #agents-hub-ui button { font: inherit; font-size: 13px; color: var(--color-text-primary); background: var(--color-background-secondary);
     border: 1px solid var(--color-border-primary); border-radius: var(--border-radius-sm); padding: 4px 10px; cursor: pointer; }
-  button:hover { background: var(--color-background-tertiary); }
-  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--color-ring-primary); outline-offset: 1px; }
-  button:disabled { opacity: .5; cursor: default; }
-  button.primary { background: var(--color-text-primary); color: var(--color-background-primary); border-color: transparent; }
-  button.ok { color: var(--color-text-success); } button.no { color: var(--color-text-danger); }
-  nav { display: flex; gap: 2px; margin: 12px 0 10px; border-bottom: 1px solid var(--color-border-secondary); }
-  nav button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 10px; color: var(--color-text-secondary); }
-  nav button[aria-selected="true"] { color: var(--color-text-primary); border-bottom-color: var(--color-text-primary); }
-  .badge { font-size: 11px; margin-left: 4px; padding: 0 6px; border-radius: 999px; background: var(--color-background-warning); color: var(--color-text-warning); }
-  .list { display: flex; flex-direction: column; gap: 6px; }
-  .row { border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 9px 11px; background: var(--color-background-primary); }
-  .row.click { cursor: pointer; } .row.click:hover { background: var(--color-background-secondary); }
-  .line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-  .name { font-weight: 600; } .grow { flex: 1; min-width: 0; }
-  .muted { color: var(--color-text-secondary); } .small { font-size: 12px; }
-  .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .meta { font-size: 12px; color: var(--color-text-tertiary); margin-top: 2px; overflow-wrap: anywhere; }
-  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; background: var(--color-background-secondary); color: var(--color-text-secondary); }
-  .pill.completed { background: var(--color-background-success); color: var(--color-text-success); }
-  .pill.failed, .pill.interrupted { background: var(--color-background-danger); color: var(--color-text-danger); }
-  .pill.running { background: var(--color-background-info); color: var(--color-text-info); }
-  .pill.unknown { background: var(--color-background-warning); color: var(--color-text-warning); }
-  .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; font-size: 13px; }
-  pre { font: 12px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--color-background-secondary);
+  #agents-hub-ui button:hover { background: var(--color-background-tertiary); }
+  #agents-hub-ui button:focus-visible, #agents-hub-ui input:focus-visible, #agents-hub-ui textarea:focus-visible, #agents-hub-ui select:focus-visible, #agents-hub-ui summary:focus-visible { outline: 2px solid var(--color-ring-primary); outline-offset: 1px; }
+  #agents-hub-ui button:disabled { opacity: .5; cursor: default; }
+  #agents-hub-ui button.primary { background: var(--color-text-primary); color: var(--color-background-primary); border-color: transparent; }
+  #agents-hub-ui button.ok { color: var(--color-text-success); } #agents-hub-ui button.no { color: var(--color-text-danger); }
+  #agents-hub-ui nav { display: flex; gap: 2px; margin: 12px 0 10px; border-bottom: 1px solid var(--color-border-secondary); }
+  #agents-hub-ui main, #agents-hub-ui section { display: block; }
+  #agents-hub-ui nav button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 10px; color: var(--color-text-secondary); }
+  #agents-hub-ui nav button[aria-selected="true"] { color: var(--color-text-primary); border-bottom-color: var(--color-text-primary); }
+  #agents-hub-ui .badge { font-size: 11px; margin-left: 4px; padding: 0 6px; border-radius: 999px; background: var(--color-background-warning); color: var(--color-text-warning); }
+  #agents-hub-ui .list { display: flex; flex-direction: column; gap: 6px; }
+  #agents-hub-ui .row { border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 9px 11px; background: var(--color-background-primary); }
+  #agents-hub-ui .row.click { cursor: pointer; } #agents-hub-ui .row.click:hover { background: var(--color-background-secondary); }
+  #agents-hub-ui .line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  #agents-hub-ui .name { font-weight: 600; } #agents-hub-ui .grow { flex: 1; min-width: 0; }
+  #agents-hub-ui .muted { color: var(--color-text-secondary); } #agents-hub-ui .small { font-size: 12px; }
+  #agents-hub-ui .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #agents-hub-ui .meta { font-size: 12px; color: var(--color-text-tertiary); margin-top: 2px; overflow-wrap: anywhere; }
+  #agents-hub-ui .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; background: var(--color-background-secondary); color: var(--color-text-secondary); }
+  #agents-hub-ui .pill.completed { background: var(--color-background-success); color: var(--color-text-success); }
+  #agents-hub-ui .pill.failed, #agents-hub-ui .pill.interrupted { background: var(--color-background-danger); color: var(--color-text-danger); }
+  #agents-hub-ui .pill.running { background: var(--color-background-info); color: var(--color-text-info); }
+  #agents-hub-ui .pill.unknown { background: var(--color-background-warning); color: var(--color-text-warning); }
+  #agents-hub-ui .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; font-size: 13px; }
+  #agents-hub-ui pre { font: 12px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--color-background-secondary);
     padding: 8px 10px; border-radius: var(--border-radius-sm); margin: 6px 0 0; max-height: 360px; overflow: auto; }
-  .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
-  .actions input { flex: 1; min-width: 140px; }
-  form { display: grid; gap: 8px; }
-  label { font-size: 12px; color: var(--color-text-secondary); display: grid; gap: 3px; }
-  input, textarea, select { font: inherit; color: var(--color-text-primary); background: var(--color-background-primary);
+  #agents-hub-ui .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  #agents-hub-ui .actions input { flex: 1; min-width: 140px; }
+  #agents-hub-ui form { display: grid; gap: 8px; }
+  #agents-hub-ui label { font-size: 12px; color: var(--color-text-secondary); display: grid; gap: 3px; }
+  #agents-hub-ui input, #agents-hub-ui textarea, #agents-hub-ui select { font: inherit; color: var(--color-text-primary); background: var(--color-background-primary);
     border: 1px solid var(--color-border-primary); border-radius: var(--border-radius-sm); padding: 6px 8px; width: 100%; }
-  textarea { min-height: 76px; resize: vertical; }
-  .empty { color: var(--color-text-tertiary); padding: 18px 4px; text-align: center; }
-  .note { font-size: 12px; color: var(--color-text-danger); margin-top: 8px; }
-  .back { margin-bottom: 8px; }
-  dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0 0; font-size: 12px; }
-  dt { color: var(--color-text-tertiary); } dd { margin: 0; overflow-wrap: anywhere; }
-  .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .8s linear infinite; }
-  @keyframes s { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+  #agents-hub-ui textarea { min-height: 76px; resize: vertical; }
+  #agents-hub-ui .empty { color: var(--color-text-tertiary); padding: 18px 4px; text-align: center; }
+  #agents-hub-ui .note { font-size: 12px; color: var(--color-text-danger); margin-top: 8px; }
+  #agents-hub-ui .back { margin-bottom: 8px; }
+  #agents-hub-ui dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0 0; font-size: 12px; }
+  #agents-hub-ui dt { color: var(--color-text-tertiary); } #agents-hub-ui dd { margin: 0; overflow-wrap: anywhere; }
+  #agents-hub-ui .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: agents-hub-spin .8s linear infinite; }
+  @keyframes agents-hub-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #agents-hub-ui .spin { animation: none; } }
 </style>
 </head>
 <body>
+<div id="agents-hub-ui">
 <div class="app">
   <header>
     <h1>Agents Hub</h1>
@@ -94,6 +98,7 @@
   <nav role="tablist" id="tabs"></nav>
   <main id="view"><div class="empty">Loading…</div></main>
   <div class="note" id="error" role="status" aria-live="polite" hidden></div>
+</div>
 </div>
 <!-- MCP Apps bridge, inlined by ui/dashboard.mjs (hosts block script URLs); its own module so names can't clash. -->
 <script type="module">/*__EXT_APPS_BUNDLE__*/</script>
@@ -535,7 +540,8 @@ function applyContext(ctx) {
   if (ctx.theme) document.documentElement.dataset.theme = ctx.theme;
   if (ctx.styles?.variables && applyHostStyleVariables) applyHostStyleVariables(ctx.styles.variables);
   const i = ctx.safeAreaInsets;
-  if (i) for (const side of ['top', 'right', 'bottom', 'left']) document.body.style.setProperty(`--inset-${side}`, `${i[side] ?? 0}px`);
+  const root = document.getElementById('agents-hub-ui');
+  if (i && root) for (const side of ['top', 'right', 'bottom', 'left']) root.style.setProperty(`--inset-${side}`, `${i[side] ?? 0}px`);
   // Inline in the chat by default; hosts that offer full screen get a toggle.
   if (ctx.displayMode) S.mode = ctx.displayMode;
   if (ctx.availableDisplayModes) S.modes = ctx.availableDisplayModes;
