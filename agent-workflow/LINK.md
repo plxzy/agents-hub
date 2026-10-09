@@ -53,7 +53,7 @@ agent link on          # re-enable starts for the existing allowlist
 
 Run `agent link serve` in a visible Terminal window. The user chose foreground-only operation: no launchd service, login item, or detached relay. Closing the terminal disconnects live access; private config and receipts remain on the Mac.
 
-After updating the Worker, refresh tools on the existing Agents Hub account App, then reopen the panel.
+After updating the Worker, refresh the Agents Hub App **on chatgpt.com** (Settings → Apps → Agents Hub → Refresh), then reopen the panel. ChatGPT stores the App's tool list and panel page; restarting the desktop app does not update them (verified 2026-10-09: decisions failed with *Missing confirm* until the refresh).
 Reconnect/reload local MCP hosts to drop their cached extra navigation entry. No App recreation or plugin
 uninstall is required.
 
