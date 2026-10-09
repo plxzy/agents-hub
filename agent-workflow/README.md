@@ -22,6 +22,25 @@ agent memory add <scope> "text"                         # write a note yourself
 node --test agent-workflow/                             # tests
 ```
 
+## Improving over time (`improve.mjs`)
+
+```
+agent run → agent feedback <run|last> good|bad "why" → agent reflect <agent>
+  → proposals (memory notes, test cases, instruction edits) → agent review [show|accept|reject]
+  → agent eval <agent> (score vs. the previous version) → every accepted change is a git commit in ~/.agents
+```
+
+- **Test cases** live in `~/.agents/evals/<agent>/*.md`: a question plus `must_include` / `must_not_include`
+  (case-insensitive regexes) and an optional `max_tools`. `agent eval` records each score with the agent's
+  version hash and the memory it used, and prints the previous score next to it.
+- **The coach** (`agent reflect`) is a no-tools Pi call that sees the definition, reviewed memory, recent
+  task runs with your ratings, and the latest test results. It may propose notes, new test cases, and at
+  most one instruction rewrite; it may not add tools or permissions. Its input and output are kept in
+  `~/.local/state/agent-workflow/reflections/`.
+- **Versions:** `~/.agents` is a git repo (only `agents/`, `memory/`, `evals/`, `proposals/` are tracked), so
+  `git -C ~/.agents log -p agents/helper.md` is the agent's history and `git revert` undoes a change.
+  An instruction proposal is refused if the agent changed after the coach saw it.
+
 ## Layout (since 2026-10-09: definitions and memory in `~/.agents`, `AGENT_HOME`)
 
 | Path | What | Owner |

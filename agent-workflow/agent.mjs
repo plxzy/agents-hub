@@ -2,8 +2,8 @@
 // Minimal agent launcher: plain Pi + file-based agent definitions + reviewed memory.
 // Definitions (~/.agents/agents/*.md) and reviewed memory (~/.agents/memory/) live in AGENT_HOME;
 // runs, sessions and raw events live in a private state directory.
-import { spawn as nodeSpawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -37,10 +37,10 @@ export function formatFrontmatter(meta, body) {
   return `---\n${lines.join('\n')}\n---\n${body.trim()}\n`;
 }
 
-const list = (v) => (Array.isArray(v) ? v : typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
+export const list = (v) => (Array.isArray(v) ? v : typeof v === 'string' && v ? v.split(',').map((x) => x.trim()).filter(Boolean) : []);
 const expandHome = (p) => (p?.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
 const stamp = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
-const newId = (prefix) => `${prefix}-${stamp()}-${randomBytes(3).toString('hex')}`;
+export const newId = (prefix) => `${prefix}-${stamp()}-${randomBytes(3).toString('hex')}`;
 
 // ---------- agents ----------
 
@@ -48,10 +48,14 @@ export function loadAgents(root = ROOT) {
   const dir = path.join(root, 'agents');
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort().map((file) => {
-    const { meta, body } = parseFrontmatter(fs.readFileSync(path.join(dir, file), 'utf8'));
+    const text = fs.readFileSync(path.join(dir, file), 'utf8');
+    const { meta, body } = parseFrontmatter(text);
     const name = meta.name ?? path.basename(file, '.md');
     return {
       name,
+      file: path.join(dir, file),
+      // Identifies the exact definition a run used, so improvements can be traced over time.
+      version: createHash('sha256').update(text).digest('hex').slice(0, 12),
       description: meta.description ?? '',
       model: meta.model ?? null,
       thinking: meta.thinking ?? null,
@@ -69,6 +73,14 @@ export function getAgent(name, root = ROOT) {
   const agent = loadAgents(root).find((a) => a.name === name);
   if (!agent) throw new Error(`unknown agent: ${name}`);
   return agent;
+}
+
+/** Commits AGENT_HOME when it is a git repository, so every accepted change is a version. */
+export function commitHome(message, root = ROOT) {
+  if (!fs.existsSync(path.join(root, '.git'))) return false;
+  const git = (...a) => spawnSync('git', ['-C', root, ...a], { encoding: 'utf8' });
+  git('add', '-A');
+  return git('commit', '-q', '-m', message).status === 0;
 }
 
 // ---------- memory ----------
@@ -211,12 +223,13 @@ export function summarize(events) {
   };
 }
 
-export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, spawn = nodeSpawn, timeoutMs = 600_000 } = {}) {
+export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000 } = {}) {
   const agent = getAgent(name, root);
   const memories = useMemory ? loadMemory(agent.memory, root) : [];
   const runId = newId('r');
   const runsDir = path.join(state, 'runs');
-  const sessionDir = path.join(state, 'sessions', agent.name);
+  // Eval and other non-task runs keep their own sessions, so `--continue` resumes real work only.
+  const sessionDir = path.join(state, 'sessions', kind === 'task' ? agent.name : `${agent.name}.${kind}`);
   fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
   const prompt = buildSystemPrompt(agent, memories);
@@ -244,9 +257,9 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
 
   const summary = summarize(events);
   const status = timedOut ? 'unknown' : exitCode === 0 && !summary.error ? 'completed' : 'failed';
-  const candidates = status === 'completed' ? saveCandidates(extractRemember(summary.output, agent), { agent, runId, root }) : [];
+  const candidates = status === 'completed' && proposeMemory ? saveCandidates(extractRemember(summary.output, agent), { agent, runId, root }) : [];
   const receipt = {
-    run_id: runId, agent: agent.name, status, task, resumed: resume, memory_enabled: useMemory,
+    run_id: runId, agent: agent.name, kind, agent_version: agent.version, status, task, resumed: resume, memory_enabled: useMemory,
     workspace: agent.workspace, tools: agent.tools, started, ended: new Date().toISOString(),
     memory_supplied: memories.map((m) => m.meta.id), memory_proposed: candidates,
     exit_code: exitCode, ...summary, raw_events: rawFile,
@@ -285,7 +298,16 @@ const USAGE = `usage:
   agent memory                        candidates waiting for review
   agent memory accept <id> [--scope s] [--supersedes id]
   agent memory reject <id> [reason...]
-  agent memory add <scope> <text...>   write a note yourself (scope: shared | project:<p> | agent:<a>)`;
+  agent memory add <scope> <text...>   write a note yourself (scope: shared | project:<p> | agent:<a>)
+
+improving over time:
+  agent feedback <run_id|last> good|bad [comment...]
+  agent eval <agent>                  run the agent's test cases, compare with last time
+  agent eval add <agent> "<question>" [--include a,b] [--exclude c] [--max-tools n]
+  agent reflect <agent> [--runs n]    coach reviews recent runs + feedback, writes proposals
+  agent review                        everything waiting for your decision
+  agent review show <id>              one proposal (instruction edits as a diff)
+  agent review accept|reject <id> [reason...]`;
 
 function flag(args, name) {
   const i = args.indexOf(name);
@@ -321,7 +343,8 @@ async function main(argv) {
     await new Promise((resolve) => child.on('close', resolve));
   } else if (cmd === 'runs') {
     for (const r of listRuns().slice(-(Number(args[0]) || 10))) {
-      console.log(`${r.run_id}  ${r.agent.padEnd(10)} ${r.status.padEnd(9)} mem=${r.memory_supplied.length} +${r.memory_proposed.length}  ${r.task.slice(0, 60)}`);
+      const fb = r.feedback ? ` [${r.feedback.rating}]` : '';
+      console.log(`${r.run_id}  ${r.agent.padEnd(10)} ${(r.kind ?? 'task').padEnd(6)} ${r.status.padEnd(9)} mem=${r.memory_supplied.length} +${r.memory_proposed.length}${fb}  ${r.task.slice(0, 60)}`);
     }
   } else if (cmd === 'show') {
     const r = listRuns().find((x) => x.run_id === args[0]);
@@ -335,12 +358,17 @@ async function main(argv) {
       for (const i of c) console.log(`${i.meta.id}  ${i.meta.scope}  (from ${i.meta.source_run})\n  ${i.body.replace(/\n+/g, ' ')}\n`);
     } else if (sub === 'accept') {
       console.log(path.relative(ROOT, acceptCandidate(id, { scope: flag(rest, '--scope'), supersedes: flag(rest, '--supersedes') })));
+      commitHome(`Accept memory ${id}`);
     } else if (sub === 'add') {
       if (!id || !rest.length) throw new Error(USAGE);
       console.log(addMemory(id, rest.join(' ')));
+      commitHome(`Add memory note (${id})`);
     } else if (sub === 'reject') {
       console.log(path.relative(ROOT, rejectCandidate(id, { reason: rest.join(' ') || undefined })));
+      commitHome(`Reject memory ${id}`);
     } else throw new Error(USAGE);
+  } else if (['feedback', 'eval', 'reflect', 'review'].includes(cmd)) {
+    await (await import('./improve.mjs')).cli(cmd, args);
   } else {
     console.log(USAGE);
   }
