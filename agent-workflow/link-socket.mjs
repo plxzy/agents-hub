@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
-import { setTimeout as sleep } from 'node:timers/promises';
+import timers from 'node:timers/promises';
 import { WIRE, PING, PONG, encode, decode, validId, validateStatus } from './relay-wire.mjs';
 
 // Foreground-only. A process acquires once; every ordinary reconnect must resume its durable ownership.
@@ -39,11 +39,15 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
           if (ws.readyState !== 3) ws.terminate();
           resolve({ fatal: reason ?? fatal, ready });
         };
+        const fresh = () => {
+          if (Date.now() - lastPong < WIRE.freshness) return true;
+          finish(); return false;
+        };
         const handshake = setTimeout(() => finish(), WIRE.handshake);
         const tick = setInterval(() => {
           if (!ready || done) return;
           try {
-            if (Date.now() - lastPong >= WIRE.freshness) { finish(); return; }
+            if (!fresh()) return;
             if (Date.now() - lastPing >= WIRE.keepalive) { ws.send(PING); lastPing = Date.now(); }
             const c = readConfig();
             const status = validateStatus({ enabled: c.enabled === true, agents: c.agents });
@@ -78,10 +82,12 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
             if (!ready || m.session !== session || m.socket !== socketId) throw new Error('Invalid socket identity');
             if (m.type === 'ack') { pending.delete(m.attempt); return; }
             if (m.type !== 'request' || !validId(m.attempt) || !validId(m.id) || !Number.isFinite(m.expires)) throw new Error('Invalid request');
+            if (!fresh()) return; // I/O can arrive before overdue timers after suspend.
             if (queued + pending.size >= WIRE.capacity) { send({ type: 'result', attempt: m.attempt, id: m.id, result: { ok: false, kind: 'rejected', error: 'Mac relay is busy; retry explicitly.' } }); return; }
             queued++;
             commands = commands.then(async () => {
               if (done || signal?.aborted) return; // disconnect cancels only unstarted commands
+              if (!fresh()) return; // Waiting behind another command can also outlive liveness.
               let value;
               try {
                 value = m.expires <= Date.now() ? { ok: false, kind: 'rejected', error: 'Transport attempt expired before execution; retry explicitly.' }
@@ -101,7 +107,7 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
       failures = result.ready ? 0 : failures + 1;
       const cap = Math.min(30000, 1000 * 2 ** Math.min(failures, 5));
       log('Relay disconnected; resuming the same process session.');
-      try { await sleep(Math.max(1000, cap * (0.5 + Math.random() * 0.5)), undefined, { signal }); }
+      try { await timers.setTimeout(Math.max(1000, cap * (0.5 + Math.random() * 0.5)), undefined, { signal }); }
       catch (e) { if (e.name !== 'AbortError') throw e; }
     }
   } finally { clearInterval(snapshots); await commands; }

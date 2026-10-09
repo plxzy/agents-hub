@@ -99,6 +99,21 @@ rechecking its timestamps; it does not authenticate, refresh that observation or
 
 Run `agent link serve` in a visible Terminal window. The user chose foreground-only operation: no launchd service, login item, or detached relay. Closing the terminal disconnects live access; private config and receipts remain on the Mac.
 
+Local ownership uses the existing PID `link.lock`. Only an `ESRCH` probe permits stale-lock reclamation;
+permission errors, malformed PIDs and unknown probe failures preserve the lock and refuse the start.
+A short-lived `link.lock.acquiring` gate serializes acquisition/reclamation. An interrupted gate is never
+automatically removed: inspect its recorded PID and the existing owner first, and remove only a gate
+proven abandoned before restarting manually. Never remove an active or ambiguous lock. Normal Ctrl-C/SIGTERM
+releases the owned lock and signal handlers; abrupt termination leaves the PID lock for the next explicit start.
+
+Local lifecycle regressions (`link-lifecycle.test.mjs`, `link-lock.test.mjs`, `link-process.test.mjs`) use
+mock time and disposable authenticated loopback fixtures, never private configuration, a hosted relay or
+real host sleep. The loopback fixture alone substitutes plaintext WebSockets; production still requires WSS.
+These tests do not establish deployed health or actual host suspend/resume acceptance.
+New requests and queued commands check socket liveness before execution, including when I/O arrives
+before overdue timers after suspend. Stale sockets resume the same owner with current configuration;
+unstarted commands are discarded and require an explicit retry. Already-started work may finish.
+
 After updating the Worker, refresh the Agents Hub App **on chatgpt.com** (Settings → Apps → Agents Hub → Refresh), then reopen the panel. ChatGPT stores the App's tool list and panel page; restarting the desktop app does not update them (verified 2026-10-09: decisions failed with *Missing confirm* until the refresh).
 Reconnect/reload local MCP hosts to drop their cached extra navigation entry. No App recreation or plugin
 uninstall is required.
