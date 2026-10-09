@@ -598,7 +598,8 @@ async function main(argv) {
       if (fs.statSync(file).mtimeMs < startedAt) continue;
       const receipt = receiptFromSession(fs.readFileSync(file, 'utf8'), { agent, memories, file });
       if (!receipt) continue;
-      receipt.memory_proposed = saveCandidates(extractRemember(receipt.all_text, agent), { agent, runId: receipt.run_id });
+      receipt.memory_proposed = fs.existsSync(path.join(ROOT, 'RELEASE.json')) ? []
+        : saveCandidates(extractRemember(receipt.all_text, agent), { agent, runId: receipt.run_id });
       delete receipt.all_text;
       fs.writeFileSync(path.join(runsDir, `${receipt.run_id}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
       publishInBackground();
@@ -615,6 +616,7 @@ async function main(argv) {
     console.log(JSON.stringify(r, null, 2));
   } else if (cmd === 'memory') {
     const [sub, id, ...rest] = args;
+    if (sub && fs.existsSync(path.join(ROOT, 'RELEASE.json'))) throw new Error('Reviewed release is read-only; review memory in its owning repository and install a new knowledge release');
     if (!sub) {
       console.log(formatCandidateList(listCandidates()));
     } else if (sub === 'accept') {
