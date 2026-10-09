@@ -1,4 +1,4 @@
-import { DASHBOARD_URI, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
+import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList } from '../../agent-workflow/relay-contract.mjs';
 import { relayFetch, relayStatus, requestRelay } from './relay.mjs';
@@ -91,8 +91,8 @@ export async function apiFetch(request, env, dashboardHtml = '') {
     ] : toolList });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
-      if (params?.uri !== DASHBOARD_URI) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown resource' } });
-      return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_MIME, text: dashboardHtml, _meta: DASHBOARD_RESOURCE_META }] });
+      if (!isDashboardUri(params?.uri)) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown resource' } });
+      return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_MIME, text: dashboardHtml, _meta: DASHBOARD_RESOURCE_META }].map((c) => ({ ...c, uri: params.uri })) });
     }
     if (method === 'tools/call') {
       if (env.RELAY_TOKEN && RELAY_OPS[params?.name]) {

@@ -127,6 +127,9 @@ const list = (v, sep, unit) => (Array.isArray(v) ? (v.length ? v.join(sep) : nul
 function showError(msg) { const e = document.getElementById('error'); e.textContent = msg ?? ''; e.hidden = !msg; }
 async function call(name, args = {}) {
   if (S.data?.relay && ['start_run', 'rate_run', 'review_decide'].includes(name)) args = { ...args, request_id: crypto.randomUUID() };
+  if (S.data?.relay && ['rate_run', 'review_decide'].includes(name) && !args.confirm) {
+    throw new Error('This panel has no confirmation code for that item yet. Press Refresh and try again.');
+  }
   const r = await app.callServerTool({ name, arguments: args });
   // One-time codes the Mac requires for the user's decisions (hosted relay only); the model never sees them.
   if (r?._meta?.['agents-hub/confirm']) S.confirm = r._meta['agents-hub/confirm'];

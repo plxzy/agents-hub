@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DASHBOARD_URI, OPS, defaultContext } from './ops.mjs';
-import { DASHBOARD_RESOURCE_META } from './contract.mjs';
+import { DASHBOARD_RESOURCE_META, isDashboardUri } from './contract.mjs';
 
 const MCP_APP_MIME = 'text/html;profile=mcp-app';
 const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
@@ -51,8 +51,8 @@ export function createServer({ ctx = defaultContext(), ops = OPS, html = () => i
       return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents dashboard', mimeType: MCP_APP_MIME }] });
     }
     if (method === 'resources/read') {
-      if (params?.uri !== DASHBOARD_URI) return { jsonrpc: '2.0', id, error: { code: -32602, message: `unknown resource ${params?.uri}` } };
-      return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_APP_MIME, text: await html(),
+      if (!isDashboardUri(params?.uri)) return { jsonrpc: '2.0', id, error: { code: -32602, message: `unknown resource ${params?.uri}` } };
+      return reply({ contents: [{ uri: params.uri, mimeType: MCP_APP_MIME, text: await html(),
         _meta: DASHBOARD_RESOURCE_META }] });
     }
     if (id !== undefined) return { jsonrpc: '2.0', id, error: { code: -32601, message: `method not found: ${method}` } };
