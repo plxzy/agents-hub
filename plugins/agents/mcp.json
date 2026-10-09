@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "agents": {
+      "type": "stdio",
+      "command": "/Users/you/.local/bin/node",
+      "args": [
+        "/Users/you/Development/dev-workflow/agent-workflow/mcp.mjs"
+      ]
+    }
+  }
+}

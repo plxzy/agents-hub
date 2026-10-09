@@ -1,0 +1,8 @@
+{
+  "name": "dev-workflow",
+  "owner": { "name": "effeef" },
+  "description": "Personal plugins from the dev-workflow repo.",
+  "plugins": [
+    { "name": "agents", "source": "./agents", "description": "See, run and review your own Pi agents." }
+  ]
+}

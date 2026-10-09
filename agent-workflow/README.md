@@ -144,22 +144,32 @@ First runs: "what am I working on?" in 13 s / $0.001; a small feature (agent lis
 1m46 / $0.01. Lesson: it staged whole files and so committed another session's uncommitted changes in the same file
 (86b27a1); its instructions now require checking `git diff` before staging.
 
-## Using agents from other apps (`mcp.mjs`)
+## Using agents from other apps (`ops.mjs`, `mcp.mjs`, `ui/`)
 
-A dependency-free local stdio MCP server over the same code: `list_agents`, `run_agent`, `list_runs`, `get_run`,
-`rate_run`, `list_pending`, `review_decide`, `run_eval`. Ratings and proposal decisions are described to the
-calling model as the user's to give.
+`ops.mjs` is the one list of operations other apps get, each with a JSON schema and an access level:
+**read** (`open_dashboard`, `get_status`, `list_agents`, `list_runs`, `get_run`, `list_pending`),
+**run** (`run_agent`, `start_run`, `run_eval`) and **decide** (`rate_run`, `review_decide`: the user's own decisions).
+Every surface is built from it: the stdio MCP server `mcp.mjs` (`agent mcp`), `agent call <op> '{json}'`,
+the dashboard, the Pi package in `../plugins/agents/`, and later the hosted hub. Runs go through a runner
+(`runner:` in the agent file, `local` = Pi on this Mac; only `local` exists so far).
 
-`run_agent` accepts an optional absolute `cwd` string for agents whose `workspace` is `here`
-(as reported by `list_agents`). Calling apps should pass their project folder so the agent works there
-and continuation uses that project's history. Omit it to use the MCP server's current directory.
-Passing `cwd` for a fixed-workspace agent is an error; the same home-folder restrictions apply.
+- `start_run` returns a run id at once and runs `agent run` in the background. Every run writes
+  `runs/<id>.running` while it works; `listRuns(state, { running: true })` shows those (as `interrupted` if the
+  process died without a receipt). Plain `listRuns` still returns finished receipts only.
+- `run_agent`/`start_run` accept an optional absolute `cwd` for agents whose `workspace` is `here`; calling apps
+  should pass their project folder. Passing `cwd` for a fixed-workspace agent is an error.
+- **Dashboard** (`ui/dashboard.html`): runs (detail, live status, rating), agents, review queue (accept/reject),
+  run form. `open_dashboard` points MCP App hosts at `ui://agents/dashboard.html` (`text/html;profile=mcp-app`,
+  plus the `openai/outputTemplate` alias); the ext-apps bridge is vendored in `ui/vendor/` and inlined.
+  `agent ui` serves the same page on 127.0.0.1 with a per-launch token while the command runs.
+- Pi processes started for an agent get `AGENT_RUN=1`, so the Pi package leaves them alone.
 
 Hosted ChatGPT and Dots use a separate read-only Worker instead (`../agent-readonly-service/`): `agent` publishes a
 sanitized snapshot after each run and chat when `~/.config/agent-readonly/publish.env` exists.
 
-Registered (2026-10-09) in Claude Code (`claude mcp add -s user agents -- node .../mcp.mjs`) and Codex
-(`codex mcp add agents -- node .../mcp.mjs`). Verified: Claude Code `-p` ran `network` through `run_agent` and relayed
+Registered (2026-10-09) in Claude Code (`claude mcp add -s user agents -- node .../mcp.mjs`), Codex
+(`codex mcp add agents -- node .../mcp.mjs`) and Claude Desktop; `../plugins/agents/` packages it for all three
+plus Pi (see `../plugins/README.md`). Verified: Claude Code `-p` ran `network` through `run_agent` and relayed
 its answer; Codex `exec` used the read-only tools, while `run_agent` was refused by Codex's headless approval
 policy (`never`); interactive Codex asks for approval instead. Test by hand:
 `echo "ask the network agent if my VPN is on" | claude -p --allowedTools mcp__agents__run_agent`.
