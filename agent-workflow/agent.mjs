@@ -64,6 +64,8 @@ export function loadAgents(root = ROOT) {
       workspace: expandHome(meta.workspace ?? process.cwd()),
       // Own key so it does not clash with the `memory:` field of pi-subagents extensions.
       memory: meta.memory_scopes ? list(meta.memory_scopes) : [`agent:${name}`],
+      // Skills by name from AGENT_HOME/skills/<name>/ (Pi reads SKILL.md on demand).
+      skills: meta.skills === 'none' ? 'none' : list(meta.skills).map((n) => path.join(root, 'skills', n)),
       instructions: body,
     };
   });
@@ -196,6 +198,7 @@ export function piArgs(agent, { task, prompt, sessionDir, resume }) {
     ...(agent.tools.length ? ['--tools', agent.tools.join(',')] : ['--no-tools']),
     ...(agent.model ? ['--model', agent.model] : []),
     ...(agent.thinking ? ['--thinking', agent.thinking] : []),
+    ...(agent.skills === 'none' ? ['--no-skills'] : (agent.skills ?? []).flatMap((d) => ['--skill', d])),
     '--append-system-prompt', prompt,
     '--', task,
   ];
@@ -276,6 +279,7 @@ export function chatArgs(agent, { prompt, sessionDir, resume }) {
     ...(agent.tools.length ? ['--tools', agent.tools.join(',')] : ['--no-tools']),
     ...(agent.model ? ['--model', agent.model] : []),
     ...(agent.thinking ? ['--thinking', agent.thinking] : []),
+    ...(agent.skills === 'none' ? ['--no-skills'] : (agent.skills ?? []).flatMap((d) => ['--skill', d])),
     '--append-system-prompt', prompt,
   ];
 }
