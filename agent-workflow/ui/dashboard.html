@@ -403,6 +403,10 @@ document.getElementById('expand').onclick = () => act('expand', async () => {
 document.getElementById('new').onclick = () => { S.form = { agent: S.form?.agent }; render(); };
 app.ontoolresult = (result) => {
   const data = result?.structuredContent ?? (() => { try { return JSON.parse(result?.content?.[0]?.text ?? ''); } catch { return null; } })();
+  if (data?.view === 'development' || data?.grant_id && data?.manifest?.host === 'dok-dev') {
+    S.tab = 'development'; S.detail = null; S.form = null;
+    refresh(); return;
+  }
   if (data?.agents) { setData(data); if (data.relay?.online) refresh(); } else refresh();
 };
 app.onhostcontextchanged = applyContext;

@@ -139,8 +139,23 @@ async function mount(t, f, { initial = false } = {}) {
   }
   await settle(); assert.equal(connects, 1);
   t.after(() => context.fixture.app.onteardown());
-  return { state: context.fixture.state, get, refresh: async () => { await get('refresh').onclick(); await settle(); } };
+  return { state: context.fixture.state, get, deliver: async result => { context.fixture.app.ontoolresult(result); await settle(); }, refresh: async () => { await get('refresh').onclick(); await settle(); } };
 }
+
+test('session request tool result opens Development without launching a task', async t => {
+  const f = await host(t), call = f.callTool;
+  f.callTool = async (name, args) => {
+    if (name === 'development_panel') return { structuredContent: { grants: [], host: { online: true } } };
+    const result = await call(name,args);
+    if (name === 'open_dashboard') result.structuredContent.development_available = true;
+    return result;
+  };
+  const ui = await mount(t,f);
+  await ui.deliver({structuredContent:{view:'development',grant_id:'pending-grant',manifest:{host:'dok-dev'}}});
+  assert.equal(ui.state.tab,'development');
+  assert.match(text(ui.get('view')),/New development session/);
+  assert.ok(!f.calls.includes('start_development_task'));
+});
 
 for (const [initial, snapshot] of [[false, false], [true, false], [true, true]]) test(`actual dashboard boot/refresh merge journal history (host result=${initial}, snapshot=${snapshot})`, async t => {
   const f = await host(t, { snapshot }); const ended = f.completed('r-proven', 3600000); f.completed('r-ordinary', 1000, false);

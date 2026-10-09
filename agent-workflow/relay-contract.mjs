@@ -15,7 +15,7 @@ export const RELAY_OPS = {
     input: { type: 'object', required: ['agent', 'task', 'request_id'], additionalProperties: false, properties: {
       agent: { type: 'string', maxLength: 100 }, task: { type: 'string', minLength: 1, maxLength: 16000 },
       continue: { type: 'boolean' }, request_id: requestId,
-    } }, description: 'Start a remote-allowed agent on the linked Mac. Returns run_id; use get_remote_run for status and output. Requires the Mac online and remote runs enabled. Supply a unique request_id; reuse it only for the exact same request.' },
+    } }, description: 'Start a remote-allowed agent on the linked Mac. Not the workflow development approval endpoint: use request_development for dok-dev, wait for the user approval card, then start_development_task. Returns run_id; use get_remote_run for Mac status and output. Requires the Mac online and remote runs enabled. Supply a unique request_id; reuse it only for the exact same request.' },
   rate_run: { title: 'Rate a run', appOnly: true, read: false,
     input: { type: 'object', required: ['run_id', 'rating', 'request_id', 'confirm'], additionalProperties: false, properties: {
       run_id: { type: 'string', maxLength: 100 }, rating: { type: 'string', enum: ['good', 'bad'] }, comment: { type: 'string', maxLength: 4000 }, request_id: requestId, confirm,

@@ -32,6 +32,12 @@ test('development MCP binds the authenticated owner and keeps click credentials 
   const pending=await call('request_development',{request_id:'request-0001'});
   const grant=JSON.parse(pending.content[0].text);
   assert.equal(dispatches,1);
+  assert.equal(pending.structuredContent.view,'development');
+  assert.equal(pending.structuredContent.grant_id,grant.grant_id);
+  assert.equal(pending.structuredContent.status,'pending');
+  assert.equal(pending._meta,undefined); // click credentials come only from the app-only panel
+  assert.equal((await call('start_development_task',{request_id:'request-task',grant_id:grant.grant_id,conversation_id:manifest.conversation_id,task:'Plan 1B'})).isError,true);
+  assert.equal(dispatches,1); // preparing a clone is allowed; launching Pi before approval is not
   assert.equal((await call('decide_development',{grant_id:grant.grant_id,decision:'approve',confirm:'x'.repeat(72)})).isError,true);
   const panel=await call('development_panel');
   const code=panel._meta['agents-hub/development-confirm'][grant.grant_id].token;
@@ -52,4 +58,14 @@ test('host commands are absent from MCP discovery and cannot be validated as use
   assert.ok(!tools.some(t=>t.name.startsWith('dev_')));
   assert.deepEqual(tools.find(t=>t.name==='decide_development')._meta.ui.visibility,['app']);
   assert.deepEqual(tools.find(t=>t.name==='development_panel')._meta.ui.visibility,['app']);
+  assert.match(tools.find(t=>t.name==='request_development')._meta.ui.resourceUri,/dashboard-v\d+\.html$/);
+});
+
+test('legacy workflow start explains the approval route without dispatching to either host', async () => {
+  const env={RELAY_TOKEN:'synthetic-only',RELAY:{getByName(){throw new Error('must not dispatch');}}};
+  const response=await apiFetch(new Request('https://test/mcp',{method:'POST',body:JSON.stringify({id:1,method:'tools/call',params:{name:'start_run',arguments:{agent:'workflow',task:'Plan 1B',request_id:'legacy-request'}}})}),env,'','owner');
+  const result=(await response.json()).result;
+  assert.equal(result.isError,true);
+  assert.match(result.content[0].text,/request_development/);
+  assert.match(result.content[0].text,/No task was started/);
 });

@@ -37,6 +37,13 @@ This activates a new direct launcher; it does not reload the managed supervisor.
 ## Chat-approved development sessions
 
 The hosted Agents Hub has a **Development** tab for the `workflow` agent on dok-dev.
+From Chat, the agent calls `request_development` with a unique `request_id` to
+display the approval card. After the user clicks approval, the agent checks
+`get_development` and submits the intended task through `start_development_task`
+with the returned grant and conversation IDs. `start_run` targets the Mac and
+does not create workflow grants. If Chat only exposes that older tool, refresh
+the Agents Hub connection/tool catalog or use the Development tab directly.
+
 Request a session, inspect its project/revisions/expiry, then click **Approve this
 session**. Tasks and idle follow-ups reuse the same independent clone and Pi
 conversation. Each task has a separate receipt. A busy host rejects new tasks.

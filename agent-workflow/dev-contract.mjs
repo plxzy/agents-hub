@@ -1,8 +1,9 @@
 // Public MCP operations are deliberately separate from authenticated host commands.
+import { DASHBOARD_URI } from './contract.mjs';
 const id = { type: 'string', pattern: '^[A-Za-z0-9_-]{8,80}$' };
 const schema = (properties, required = Object.keys(properties)) => ({ type: 'object', properties, required, additionalProperties: false });
 export const DEV_OPS = {
-  request_development: { description: 'Prepare a dok-dev workflow conversation and request a bounded development grant. The user approves the exact scope in the Development panel. No task starts here.', input: schema({ request_id: id, conversation_id: id }, ['request_id']) },
+  request_development: { description: 'Start the approval flow for workflow development on dok-dev. Returns a pending grant and displays its approval card. Wait for the user to click Approve this session, then check get_development and call start_development_task with the grant_id, conversation_id and intended task. No Pi task starts before approval. Do not use the Mac start_run endpoint for workflow.', input: schema({ request_id: id, conversation_id: id }, ['request_id']) },
   get_development: { read: true, description: 'Read your development grants and dok-dev availability; approval credentials are never included.', input: schema({}) },
   start_development_task: { description: 'Run a task or contextual follow-up in an approved dok-dev conversation. The same grant covers unchanged scope until expiry or revocation. Busy submissions are rejected.', input: schema({ request_id: id, grant_id: id, conversation_id: id, task: { type: 'string', minLength: 1, maxLength: 16000 } }) },
   get_development_task: { read: true, description: 'Read a private development task receipt and bounded result.', input: schema({ grant_id: id, run_id: id }) },
@@ -28,4 +29,5 @@ export function validateDevelopment(name, args, host = false) {
 }
 export const developmentTools = () => Object.entries(DEV_OPS).map(([name, op]) => ({ name, description: op.description,
   inputSchema: op.input, annotations: { readOnlyHint: op.read === true, ...(op.read ? {} : { openWorldHint: true }) },
-  ...(op.appOnly ? { _meta: { ui: { visibility: ['app'] } } } : {}) }));
+  ...(op.appOnly ? { _meta: { ui: { visibility: ['app'] } } }
+    : name === 'request_development' ? { _meta: { ui: { resourceUri: DASHBOARD_URI }, 'openai/outputTemplate': DASHBOARD_URI } } : {}) }));

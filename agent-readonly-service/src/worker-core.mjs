@@ -85,7 +85,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
       serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.3.0' },
       instructions: env.RELAY_TOKEN
-        ? 'Agents Hub: published read metadata plus a live Mac relay. Only explicitly remote-allowed agents can start. Check get_status for relay availability. Use get_remote_run for relay-started output. Ratings and reviews are user clicks in the panel, never model decisions.'
+        ? 'Agents Hub: published read metadata plus a live Mac relay. start_run is for remote-allowed Mac agents only. For workflow development on dok-dev, call request_development to show a session approval card; wait for the user click, check get_development, then call start_development_task. If these tools are missing, refresh the Agents Hub connection or use its Development panel. Use get_remote_run for Mac relay output. Ratings and reviews are user clicks in the panel, never model decisions.'
         : 'Read-only Agents Hub view of the user’s local agents and runs. Check get_status for freshness; run is explicitly unavailable.' });
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: [...(env.RELAY_TOKEN ? [
@@ -102,11 +102,16 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         try {
           const { confirm, ...value } = await developmentCall(env, owner, params.name, params.arguments ?? {});
           return reply({ content: [{ type: 'text', text: JSON.stringify(value) }],
+            ...(params.name === 'request_development' ? { structuredContent: { ...value, view: 'development',
+              next_step: 'The user must approve this session in the card. Then check get_development and submit the task with start_development_task.' } } : {}),
             ...(confirm ? { _meta: { 'agents-hub/development-confirm': confirm } } : {}) });
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
       if (env.RELAY_TOKEN && RELAY_OPS[params?.name]) {
         try {
+          if (params.name === 'start_run' && params.arguments?.agent === 'workflow') {
+            throw new Error('start_run targets the Mac and cannot approve workflow development. Call request_development with a unique request_id to display the dok-dev approval card; after the user approves, use start_development_task. If those tools are missing, refresh the Agents Hub connection or open Agents Hub > Development. No task was started.');
+          }
           const { confirm, ...value } = await requestRelay(env, params.name, params.arguments ?? {}) ?? {};
           // Confirmation codes go only to the panel: hosts pass a result's _meta to the widget, never to the model.
           return reply({ content: [{ type: 'text', text: JSON.stringify(value) }], ...(confirm ? { _meta: { 'agents-hub/confirm': confirm } } : {}) });
