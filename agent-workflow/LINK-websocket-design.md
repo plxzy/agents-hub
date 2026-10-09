@@ -1,6 +1,8 @@
 # Agents Hub WebSocket design — 2026-10-09
 
-Status: implemented and tested. Deployment and acceptance evidence are recorded separately.
+Status: implemented, tested and deployed. Hosted UI acceptance and rollback rehearsal are recorded in
+`../evidence/2026-10-09-agents-hub-websocket/VERIFICATION.md`; subsequent user-reported Dot success is recorded in
+`../evidence/2026-10-09-agents-hub-dot-acceptance/REPORT.md`.
 
 ## Architecture and boundaries
 
@@ -78,7 +80,8 @@ Real Workers-runtime coverage: storage ordering; late results after timeout; fre
 legacy receipts; conflicts; interrupted claims; restart/hibernation; ownership replacement including lost close;
 invalid clients cannot evict; duplicate alarms; saturation; UTF-8 limits; handshake timeout/redirect rejection.
 Local client tests cover serialized commands, acknowledgements, backoff, Ctrl-C, configuration refresh and expiry.
-Run existing suites, a hosted helper test and inspect its local receipt. Do not resend the user's pending Dot test.
+Completed: existing suites, hosted helper test and local receipt inspection. The user subsequently reported a
+successful Dot helper run and result fetch; do not resend that completed test merely to reconfirm it.
 Rehearse WebSocket → bridge → WebSocket including cleanup triggers. Idle measurements exclude intentional minute
 snapshots: target zero relay polling and D1 heartbeat writes, not zero Worker requests.
 

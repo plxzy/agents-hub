@@ -76,6 +76,12 @@ mutations, app-only visibility, and the existing agent/Worker tests. Runtime tes
 Deployment uses the existing `cf deploy` workflow. Do not claim a live relay or real remote run works
 from unit tests alone; verify foreground process status and a hosted-client receipt separately.
 
+Acceptance recorded on 2026-10-09: 94 tests passed, hosted UI helper execution succeeded, and the polling-bridge
+rollback procedure was rehearsed. The user subsequently reported successful Dot execution and result retrieval
+for `r-20261009T114827Z-b4e188` (“Dot relay works.”); a catalog-refresh interruption recovered on retry.
+See `../evidence/2026-10-09-agents-hub-websocket/VERIFICATION.md` and
+`../evidence/2026-10-09-agents-hub-dot-acceptance/REPORT.md` for provenance and measurement limits.
+
 ## Rollback
 
 The compatible polling bridge is commit `fd94411`, deployed Worker version
