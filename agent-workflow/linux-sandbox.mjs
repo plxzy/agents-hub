@@ -82,7 +82,7 @@ export function sandboxExecute(policy, tool, args, { signal, spawnImpl = spawn }
     child.stderr.on('data', chunk => { if (errors.length < 8192) errors += chunk.toString().slice(0, 8192 - errors.length); });
     const finish = error => {
       if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
-      if (error || failure) { reject(error || failure); return; }
+      if (error || failure) { reject(failure || error); return; }
       try { const value = JSON.parse(output); if (value.error) throw new Error(value.error); resolve(value.result); }
       catch (e) { reject(new Error('Sandbox failed: ' + (errors || e.message))); }
     };
