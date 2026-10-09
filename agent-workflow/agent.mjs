@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelGateway } from './model gateway.mjs';
+import { linuxPolicy } from './linux-sandbox.mjs';
 
 export const ROOT = process.env.AGENT_HOME ?? path.join(os.homedir(), '.agents');
 export const STATE = process.env.AGENT_WORKFLOW_STATE ?? path.join(os.homedir(), '.local/state/agent-workflow');
@@ -282,7 +283,7 @@ export function buildSystemPrompt(agent, memories) {
 }
 
 const GUARDS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'guards');
-const guardArgs = (agent) => [...(agent.guard ? ['-e', path.join(GUARDS, `${agent.guard}-bash.ts`)] : []),
+const guardArgs = (agent) => agent.linuxPolicy ? ['-e', path.join(agent.linuxPolicy.release, 'linux-tools.ts')] : [...(agent.guard ? ['-e', path.join(GUARDS, `${agent.guard}-bash.ts`)] : []),
   ...(agent.remote ? ['-e', path.join(GUARDS, 'remote.ts')] : [])];
 /** Environment for the Pi process: guards read the allowed sudo prefixes and protected paths from it. */
 export const agentEnv = (agent, root = ROOT) => ({
@@ -290,6 +291,7 @@ export const agentEnv = (agent, root = ROOT) => ({
   ...(agent.writePaths ? { AGENT_SANDBOXED: '1' } : {}),
   // Marks Pi processes started for an agent, so add-ons meant for the user's own sessions (the agents Pi package) stay out.
   AGENT_RUN: '1',
+  ...(agent.linuxPolicy ? { AGENT_LINUX_POLICY: JSON.stringify(agent.linuxPolicy) } : {}),
   AGENT_SUDO_ALLOW: JSON.stringify(agent.sudoAllow.map((p) => `sudo -n ${p}`)),
   // Never editable by an agent: its own definition, the user's accepted memory and past decisions.
   AGENT_PROTECTED: JSON.stringify([agent.file, ...['shared', 'projects', 'agents', 'rejected'].map((d) => path.join(root, 'memory', d)),
@@ -319,6 +321,8 @@ export function assertSandboxAllowed(agent, command = `agent run ${agent.name} "
 
 export const piCommand = (agent, args) => {
   assertSandboxAllowed(agent);
+  if (agent.linuxPolicy) return ['pi', ['--no-builtin-tools', '--no-extensions', '--no-mcp', '--no-skills',
+    '--no-context-files', '--no-prompt-templates', '--no-themes', ...args]];
   return agent.writePaths ? ['sandbox-exec', ['-p', sandboxProfile(agent), 'pi', ...args]] : ['pi', args];
 };
 
@@ -386,6 +390,7 @@ export function writeRunningMarker(state, { run_id, agent, kind = 'task', task, 
 export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd(), runId = newId('r') } = {}) {
   const agent = remoteSandbox(resolveWorkspace(getAgent(name, root), cwd));
   assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
+  if (process.platform === 'linux' && agent.writePaths && spawn === nodeSpawn) agent.linuxPolicy = linuxPolicy(agent, state);
   const memories = useMemory ? loadMemory(agent.memory, root) : [];
   const runsDir = path.join(state, 'runs');
   // Eval and other non-task runs keep their own sessions, so `--continue` resumes real work only.
@@ -572,6 +577,7 @@ async function main(argv) {
     if (!name) throw new Error(USAGE);
     const agent = resolveWorkspace(getAgent(name));
     assertSandboxAllowed(agent, `agent chat ${name}${resume ? ' --continue' : ''}`);
+    if (process.platform === 'linux' && agent.writePaths) agent.linuxPolicy = linuxPolicy(agent, STATE);
     const memories = loadMemory(agent.memory);
     const sessionDir = sessionDirectory(agent);
     fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });

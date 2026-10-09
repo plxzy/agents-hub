@@ -1,0 +1,16 @@
+{
+  "resolved_at": "2026-10-09",
+  "pi": "1.1.0",
+  "codex": "0.162.0",
+  "codex_multi_auth": "2.19.1",
+  "npm": "12.2.0",
+  "claude": "2.1.295",
+  "claude_linux_x64_sha256": "4503bfe11a6c7fcc1e0b39b5e0d347c04248f750b03b0977b3ad6b531fe6f358",
+  "node": "26.10.0",
+  "python": "3.14.8",
+  "uv": "0.12.23",
+  "distribution": "Debian 12",
+  "deployed_source_commit": "d5c3a16fa497cd48beefbf6aea29813f2c58eafc",
+  "base_image": "sha256:3d8ae0ba638a91551886d08a4b67e78e7a6b64469918c61ec6a10fb2c3a43628",
+  "system_packages": "Resolved and recorded from the candidate image after apt upgrade"
+}
