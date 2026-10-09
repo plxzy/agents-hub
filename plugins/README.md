@@ -40,3 +40,12 @@ Claude Code only: Codex and ChatGPT panels need their own extension format, usin
 
 Check: `claude plugin validate plugins/agents-panel` and `claude plugin test plugins/agents-panel`.
 Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin marketplace update dev-workflow`).
+
+## `agents-hub/`: hosted OAuth connection
+
+A private remote plugin for the read-only Cloudflare service. It connects to
+`https://YOUR-HUB.workers.dev/mcp` using native OAuth and owner-only Cloudflare Access.
+The local `agents/` plugin remains the entry point for running Pi agents.
+
+Private plugin: https://chatgpt.com/plugins/plugins_6ac8a29d576c8191aa112562b4131771
+Package version: `0.3.1`. Release: `pluginrel_6ac8a29dc8a08191bb5e577374b4dc45`.

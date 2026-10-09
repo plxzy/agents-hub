@@ -3,7 +3,7 @@ function readJson(response) {
 }
 
 export function createReadOnlyClient(endpoint, token, host) {
-  const base = endpoint.replace(/\/$/, '');
+  const base = endpoint.replace(/\/$/, '').replace(/\/mcp$/, '') + '/mcp';
   const request = (path) => fetch(`${base}${path}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/json' } }).then(readJson).then((body) => ({ ...body, host }));
   return {
     capabilities: { discovery: true, status: true, context: true, run: false, mutate: false },

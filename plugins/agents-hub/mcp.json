@@ -1,0 +1,9 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "agents-hub": {
+      "type": "streamable-http",
+      "url": "https://YOUR-HUB.workers.dev/mcp"
+    }
+  }
+}

@@ -12,6 +12,7 @@
     "cf": "^1.0.0-beta.13"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "^1.2.3"
+    "@cloudflare/workers-oauth-provider": "^1.2.3",
+    "jose": "^6.2.12"
   }
 }

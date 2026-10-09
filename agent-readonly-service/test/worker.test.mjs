@@ -21,7 +21,7 @@ test('worker publishes and serves only read endpoints', async () => {
   const env = { DB: db(), PUBLISH_TOKEN: 'publish', READ_TOKEN: 'read' };
   let response = await defaultFetch(new Request('https://x/v1/snapshots', { method: 'POST', headers: { authorization: 'Bearer publish', 'content-type': 'application/json' }, body: JSON.stringify({ agents: [{ name: 'helper' }], runs: [] }) }), env);
   assert.equal(response.status, 201);
-  response = await apiFetch(new Request('https://x/v1/agents'), env);
+  response = await apiFetch(new Request('https://x/mcp/v1/agents'), env);
   assert.equal(response.status, 200); assert.equal((await response.json()).items[0].name, 'helper');
   response = await apiFetch(new Request('https://x/v1/run_agent', { method: 'POST' }), env);
   assert.equal(response.status, 404);

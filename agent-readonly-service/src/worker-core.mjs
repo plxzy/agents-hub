@@ -1,3 +1,5 @@
+import { accessSubject } from './access.mjs';
+
 const KEEP_SNAPSHOTS = 20;
 const CAPABILITIES = { discovery: true, status: true, context: true, run: false, mutate: false };
 const DASHBOARD_URI = 'ui://agents-hub/dashboard.html';
@@ -57,6 +59,7 @@ const toolList = TOOLS.map(({ run, ui, ...tool }) => ({
 
 export async function apiFetch(request, env, dashboardHtml = '') {
   const url = new URL(request.url);
+  if (url.pathname.startsWith('/mcp/v1/')) url.pathname = url.pathname.slice(4);
   if (request.method !== 'POST' || url.pathname !== '/mcp') {
     if (request.method !== 'GET' || !url.pathname.startsWith('/v1/')) return json({ error: 'not_found' }, 404);
   }
@@ -102,29 +105,23 @@ export async function apiFetch(request, env, dashboardHtml = '') {
   return json({ error: 'not_found' }, 404);
 }
 
-function claim(request) {
-  // Cloudflare Access authenticates the browser before it reaches this Worker. The JWT is
-  // deliberately only used as the provider subject; Access remains the verifier.
-  const raw = request.headers.get('cf-access-jwt-assertion');
-  if (!raw) return null;
-  try { const payload = JSON.parse(atob(raw.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); return payload.sub || payload.email || null; } catch { return null; }
-}
-
 function escape(value) { return String(value).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';'); }
 
 export async function defaultFetch(request, env) {
   const url = new URL(request.url);
   if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true, service: 'agents-hub', capabilities: CAPABILITIES });
   if (url.pathname === '/authorize') {
+    if (!['GET', 'POST'].includes(request.method)) return json({ error: 'method_not_allowed' }, 405, { allow: 'GET, POST' });
     const oauth = env.OAUTH_PROVIDER;
-    const userId = claim(request);
+    const userId = await accessSubject(request, env);
     if (!userId) return json({ error: 'login_required', message: 'Sign in through Cloudflare Access before authorizing Agents Hub.' }, 401);
     try {
-      const authRequest = await oauth.parseAuthRequest(request);
-      const details = await oauth.describeConsent(authRequest);
       if (request.method === 'GET') {
+        const authRequest = await oauth.parseAuthRequest(request);
+        const details = await oauth.describeConsent(authRequest);
         const consent = await oauth.beginConsent(authRequest);
-        const html = '<!doctype html><meta charset="utf-8"><title>Authorize Agents Hub</title><h1>Allow ' + escape(details.clientName) + ' to read Agents Hub?</h1><p>Redirect: ' + escape(details.redirectHost) + '</p><form method="post"><input type="hidden" name="handle" value="' + escape(consent.handle) + '"><button name="decision" value="approve">Allow</button><button name="decision" value="deny">Deny</button></form>';
+        const publisher = details.clientDomain ? 'Published by ' + escape(details.clientDomain) : 'This app registered itself; its name is not verified.';
+        const html = '<!doctype html><meta charset="utf-8"><title>Authorize Agents Hub</title><h1>Allow ' + escape(details.clientName) + ' to read Agents Hub?</h1><p>' + publisher + '</p><p>Redirect: ' + escape(details.redirectHost) + '</p><p>Permission: agents.read — read your published agents and runs.</p>' + (details.redirectIsLoopback ? '<p>Continue only if you just started signing in from an app on your computer.</p>' : '') + '<form method="post" action="/authorize"><input type="hidden" name="handle" value="' + escape(consent.handle) + '"><button name="decision" value="approve">Allow</button><button name="decision" value="deny">Deny</button></form>';
         consent.headers.set('content-type', 'text/html; charset=utf-8');
         return new Response(html, { headers: consent.headers });
       }
@@ -134,12 +131,13 @@ export async function defaultFetch(request, env) {
         denied.headers.set('location', denied.redirectTo);
         return new Response(null, { status: 302, headers: denied.headers });
       }
-      const approved = await oauth.approveConsent(request, String(form.get('handle')), { scope: ['agents.read'], remember: { secret: env.CONSENT_SECRET, subject: userId } });
+      const approved = await oauth.approveConsent(request, String(form.get('handle')), { scope: ['agents.read'] });
       const completed = await oauth.completeAuthorization({ request: approved.request, userId, metadata: {}, scope: ['agents.read'], props: { userId } });
       approved.headers.set('location', completed.redirectTo);
       return new Response(null, { status: 302, headers: approved.headers });
     } catch (e) {
-      if (e?.redirectTo) return Response.redirect(e.redirectTo, 302);
+      if (e?.name === 'AuthorizationError' && e.redirectTo) return Response.redirect(e.redirectTo, 302);
+      if (['AuthorizationError', 'CimdFetchError'].includes(e?.name)) return json({ error: 'invalid_authorization_request' }, 400);
       throw e;
     }
   }
