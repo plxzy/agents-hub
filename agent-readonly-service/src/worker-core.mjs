@@ -2,6 +2,7 @@ import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList } from '../../agent-workflow/relay-contract.mjs';
 import { relayFetch, relayStatus, requestRelay } from './relay.mjs';
+import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 
 const KEEP_SNAPSHOTS = 20;
 const CAPABILITIES = { discovery: true, status: true, context: true, run: false, mutate: false };
@@ -18,10 +19,12 @@ async function latest(env) {
 }
 
 function meta(snap, env) {
-  const age = Date.now() - Date.parse(snap.payload.generated_at);
+  const now = Date.now(), generated = healthTime(snap.payload.generated_at, now), published = healthTime(snap.published_at, now);
   return { snapshot_id: snap.id, published_at: snap.published_at, generated_at: snap.payload.generated_at,
-    stale: !Number.isFinite(age) || age > Number(env.STALE_AFTER_MS ?? 900000), capabilities: snap.payload.capabilities ?? CAPABILITIES };
+    stale: generated.problem !== null || published.problem !== null || generated.age_ms > snapshotMaxAge(env), capabilities: snap.payload.capabilities ?? CAPABILITIES };
 }
+
+const snapshotMaxAge = (env) => Number.isFinite(Number(env.STALE_AFTER_MS)) && Number(env.STALE_AFTER_MS) >= 0 ? Number(env.STALE_AFTER_MS) : 900000;
 
 function page(items, cursor, limit = 20) {
   const n = Math.min(Math.max(Number(limit) || 20, 1), 100);
@@ -71,12 +74,10 @@ export async function apiFetch(request, env, dashboardHtml = '') {
   if (request.method !== 'POST' || url.pathname !== '/mcp') {
     if (request.method !== 'GET' || !url.pathname.startsWith('/v1/')) return json({ error: 'not_found' }, 404);
   }
-  const snap = await latest(env);
-  if (!snap) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
-  const m = meta(snap, env);
   if (url.pathname === '/mcp') {
     let msg; try { msg = await request.json(); } catch { return json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }, 400); }
     const { id, method, params } = msg ?? {};
+    // Connection, discovery and UI resources must work before the first snapshot is published.
     if (id === undefined || id === null) return new Response(null, { status: 202 });
     const reply = (result) => json({ jsonrpc: '2.0', id, result });
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
@@ -105,13 +106,26 @@ export async function apiFetch(request, env, dashboardHtml = '') {
       const tool = TOOLS.find((x) => x.name === params?.name);
       if (!tool) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool ' + params?.name } });
       try {
-        const value = tool.run({ snap, env, meta: m }, params.arguments ?? {});
-        if (params.name === 'open_dashboard' || params.name === 'get_status') value.relay = await relayStatus(env);
+        const healthRead = params.name === 'open_dashboard' || params.name === 'get_status';
+        const snap = await latest(env), m = snap ? meta(snap, env) : null;
+        if (!snap && !healthRead) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
+        const unknownStatus = { agents: null, runs: null, running: null, pending: null, last_run: null };
+        const unavailable = { generated_at: null, capabilities: CAPABILITIES, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
+        const value = snap ? tool.run({ snap, env, meta: m }, params.arguments ?? {})
+          : params.name === 'get_status' ? { ...unknownStatus, ...unavailable }
+          : { ...unavailable, status: unknownStatus, agents: [], runs: [], pending: null };
+        if (healthRead) {
+          value.relay = await relayStatus(env);
+          value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env) });
+        }
         return reply({ content: [{ type: 'text', text: tool.ui ? tool.summary(value) : JSON.stringify(value, null, 2) }], ...(tool.ui ? { structuredContent: value } : {}) });
       } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
     }
     return json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } });
   }
+  const snap = await latest(env);
+  if (!snap) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
+  const m = meta(snap, env);
   if (url.pathname === '/v1/agents') return json({ ...m, ...page(snap.payload.agents, url.searchParams.get('cursor'), url.searchParams.get('limit')) });
   if (url.pathname.startsWith('/v1/agents/')) {
     const item = snap.payload.agents.find((x) => x.name === decodeURIComponent(url.pathname.slice('/v1/agents/'.length)));

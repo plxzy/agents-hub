@@ -11,6 +11,8 @@ import { RELAY_OPS, validateRelay } from './relay-contract.mjs';
 import { containsSecret } from '../agent-readonly-service/src/snapshot.mjs';
 import { fingerprintText, encode, WIRE } from './relay-wire.mjs';
 import { publish } from '../agent-readonly-service/publisher.mjs';
+import { doctorHealth, doctorInput } from './doctor.mjs';
+import { healthLabels } from './health.mjs';
 
 export const LINK_DIR = path.join(os.homedir(), '.config/agent-readonly');
 export const LINK_CONFIG = path.join(LINK_DIR, 'link.json');
@@ -146,6 +148,16 @@ export async function serveLink({ configFile = LINK_CONFIG, signal } = {}) {
 
 export async function linkMain(args) {
   const [command = 'status'] = args;
+  if (command === 'doctor') {
+    const options = args.slice(1);
+    const inputIndex = options.indexOf('--input');
+    const input = inputIndex < 0 ? undefined : options.splice(inputIndex, 2)[1];
+    if (inputIndex >= 0 && !input || options.some((x) => x !== '--json')) throw new Error('Usage: agent link doctor [--json] [--input observations.json]');
+    const report = input ? doctorInput(input) : doctorHealth({ readConfig: readLink, state: defaultContext().state, journal: path.join(LINK_DIR, 'relay-journal') });
+    console.log(options.includes('--json') ? JSON.stringify(report, null, 2) : healthLabels(report).join('\n'));
+    process.exitCode = report.exit_code;
+    return;
+  }
   if (command === 'serve') {
     const controller = new AbortController();
     for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => controller.abort());
@@ -158,7 +170,7 @@ export async function linkMain(args) {
   if (command === 'status') {
     const c = readLink(); console.log(JSON.stringify({ endpoint: c.endpoint, remote_runs: c.enabled === true, allowed_agents: c.agents, mode: 'foreground' })); return;
   }
-  throw new Error('Usage: agent link status|on|off|serve');
+  throw new Error('Usage: agent link status|doctor|on|off|serve');
 }
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   linkMain(process.argv.slice(2)).catch((e) => { console.error(e.message); process.exitCode = 1; });

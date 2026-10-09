@@ -2,9 +2,10 @@ import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
 const relay = (env) => env.RELAY.getByName('owner-mac');
 export async function relayStatus(env) {
-  if (!env.RELAY_TOKEN || !env.RELAY) return { online: false, enabled: false, agents: [] };
+  const unavailable = () => ({ online: false, enabled: false, agents: [], available: false });
+  if (!env.RELAY_TOKEN || !env.RELAY) return unavailable();
   try { return await relay(env).status(); }
-  catch { return { online: false, enabled: false, agents: [] }; }
+  catch { return unavailable(); }
 }
 export async function relayFetch(request, env) {
   if (!env.RELAY_TOKEN) return json({ error: 'unauthorized' }, 401);

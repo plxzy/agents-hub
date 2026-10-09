@@ -112,9 +112,9 @@ tokens and cost, so you can see whether memory helped.
 
 ## Not here yet
 
-Running agents from hosted ChatGPT/Dots (they can read the catalog and runs through `agent-readonly-service/`, see
-`evidence/2026-10-09-dots-agents-connector/`; the candidate route for running is OpenAI's Secure MCP Tunnel), memory
-retrieval once notes outgrow the prompt, a writer/reviewer pair, and cloud-only agents (Cloudflare PiHarness).
+Memory retrieval once notes outgrow the prompt, a writer/reviewer pair, and cloud-only agents (Cloudflare PiHarness).
+Hosted helper-only starts already use the foreground WebSocket relay; see `LINK.md` and the dated acceptance evidence.
+That historical acceptance is separate from the local, undeployed Plan 1A health changes.
 
 ## Guards (enforced, not instructed)
 
@@ -164,8 +164,17 @@ the dashboard, the Pi package in `../plugins/agents/`, and later the hosted hub.
   `agent ui` serves the same page on 127.0.0.1 with a per-launch token while the command runs.
 - Pi processes started for an agent get `AGENT_RUN=1`, so the Pi package leaves them alone.
 
-Hosted ChatGPT and Dots use the read-only Agents Hub Worker (`../agent-readonly-service/`): `agent` publishes a
-sanitized snapshot after each run and chat when `~/.config/agent-readonly/publish.env` exists.
+Hosted ChatGPT and Dots read sanitized snapshots from the Agents Hub Worker (`../agent-readonly-service/`);
+its optional foreground Mac relay separately enables helper-only remote starts and user-click review controls.
+Published snapshot `capabilities.run:false` / `mutate:false` stay read-only even when live relay state is online
+and enabled. `agent` publishes snapshots after runs/chats when the existing publisher configuration exists.
+
+`agent link doctor --json` is a read-only one-shot report, not a relay launcher or heartbeat. It separates observed
+live state from local configuration and historical run completion, preserving unknowns where sources are unavailable.
+`--input observations.json` can inspect one existing raw hosted status/dashboard observation; it does not refresh it.
+The dashboard and existing `get_status` reuse the additive health report. See `LINK.md` for sources, sandbox limits,
+helper-only wording and exit codes (0 fresh connected/enabled or deliberately off, 1 disconnected/mismatch, 2 unknown).
+No new background service, polling fallback or unattended monitoring is introduced. This Plan 1A patch is local only.
 
 Registered (2026-10-09) in Claude Code (`claude mcp add -s user agents -- node .../mcp.mjs`), Codex
 (`codex mcp add agents -- node .../mcp.mjs`) and Claude Desktop; `../plugins/agents/` packages it for all three

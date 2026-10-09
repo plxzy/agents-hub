@@ -27,7 +27,7 @@ test('/mcp answers only with a valid Access assertion; health and publishing sta
   assert.equal((await call('/mcp')).status, 401);
   assert.equal((await call('/mcp', { 'cf-access-jwt-assertion': 'e30.eyJzdWIiOiJvd25lciJ9.fake' })).status, 401);
   assert.equal((await call('/mcp/v1/agents', {})).status, 401);
-  assert.equal((await call('/mcp', { 'cf-access-jwt-assertion': token })).status, 503); // authorized; no snapshot in this fake DB
+  assert.equal((await call('/mcp', { 'cf-access-jwt-assertion': token })).status, 200); // protocol liveness is independent of snapshot availability
   assert.equal((await hubFetch(new Request('https://hub.test/health'), env)).status, 200);
   assert.equal((await hubFetch(new Request('https://hub.test/authorize'), env)).status, 404);
   const prm = await (await hubFetch(new Request('https://hub.test/.well-known/oauth-protected-resource/mcp'), env)).json();

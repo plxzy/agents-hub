@@ -538,6 +538,7 @@ improving over time:
   agent review accept|reject <id> [reason...]
 
 other apps:
+  agent link doctor [--json] [--input observations.json]  one-shot, read-only health (exit 0 healthy/off, 1 disconnected/mismatch, 2 unknown)
   agent ui [--port n] [--no-open]     dashboard in your browser (127.0.0.1, while this runs)
   agent mcp                           MCP server on stdio (Claude, Codex, Pi)
   agent call <operation> ['{json}']   run one operation from ops.mjs and print the result as JSON`;

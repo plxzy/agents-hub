@@ -9,7 +9,7 @@ Live: `https://YOUR-HUB.workers.dev`
 
 | Endpoint | Auth | What |
 |---|---|---|
-| `GET /health` | none | Liveness and capabilities (`execute: false, mutate: false`) |
+| `GET /health` | none | Service liveness and static snapshot-surface capabilities (`run: false, mutate: false`), NOT live relay health |
 | `POST /mcp` | OAuth 2.1 bearer token | MCP + Agents Hub dashboard resource: `open_dashboard`, `list_agents`, `list_runs`, `get_run`, `get_status`, `resolve_context` |
 | `GET /mcp/v1/agents[/:name]`, `/mcp/v1/runs[/:id]`, `/mcp/v1/context` | OAuth 2.1 bearer token | The same data as REST, beneath the `/mcp` resource |
 | `GET /relay/connect` (WebSocket upgrade) | Separate machine token | Foreground Mac relay transport |
@@ -24,7 +24,17 @@ review (counts only, never their text). Any value that looks like a secret is re
 **Contract:** tool names, schemas and result shapes come from `agent-workflow/contract.mjs`, shared with the local
 server, so the one dashboard (`agent-workflow/ui/dashboard.html`, bridge inlined at build by `vite.config.ts`) reads
 both. Hosted results add `snapshot: { published_at, generated_at, stale }`; review counts that were not published are
-`null` and shown as unknown, not zero.
+`null` and shown as unknown, not zero. `get_status` and `open_dashboard` add a versioned `health` observation report:
+relay connected/disconnected/unknown and freshness, snapshot age/freshness, expected helper-only versus observed/last-known
+allowlist, enabled state, sources and timestamps. Snapshot `capabilities.run` stays false when the live relay exists;
+only live panel data exposes controls. Unavailable/malformed/future timestamps never imply healthy age zero. Missing
+run-origin evidence is explicit; sanitized snapshot runs are not automatically relay-origin. CLI and dashboard reuse
+`agent-workflow/health.mjs`; see `../agent-workflow/LINK.md` for doctor input limits and exit codes. This local patch
+has not been deployed. Authenticated MCP initialization, notifications, ping, discovery and dashboard resources work
+before any snapshot is published; snapshot-backed reads still return no_snapshot/503. Health reads return unknown
+snapshot counts and can observe the existing relay independently. On dashboard refresh, hosted snapshot/DO health
+is retained while successful live panel data contributes validated journal-backed history and local runtime metadata;
+a live unknown or incomplete history is never inferred from ordinary recent runs.
 
 **Publishing:** `agent` publishes in the background after every run and chat when
 `~/.config/agent-readonly/publish.env` exists (`AGENT_READONLY_ENDPOINT`, `AGENT_PUBLISH_TOKEN`; log in
@@ -43,5 +53,7 @@ Tests: `npm test`. Deploy: `cf deploy` (check with `cf deploy --dry-run` first).
 
 With `RELAY_TOKEN` configured, MCP also advertises `start_run`, `get_remote_run` and app-only `panel_data`,
 `panel_run`, `rate_run`, `review_decide`. `/relay/connect` uses the separate machine credential,
-outside Access, and the Worker still requires a verified Access assertion for every user MCP call. The minutely
-scheduled handler removes expired transient relay payloads. Apply `migrations/0002_relay.sql` before activation.
+outside Access, and the Worker still requires a verified Access assertion for every user MCP call. The active
+WebSocket relay uses its existing DO alarm for transient request expiry, with no active cron schedule; the Worker
+retains a no-op scheduled handler for delayed old deliveries. The older relay tables/migration remain for rollback,
+not as a live heartbeat or polling transport. The effective remote-start allowlist remains helper only.

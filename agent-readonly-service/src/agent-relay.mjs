@@ -1,7 +1,8 @@
 import { DurableObject } from 'cloudflare:workers';
 import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { WIRE, PING, PONG, encode, decode, validId, validateStatus, fingerprint } from '../../agent-workflow/relay-wire.mjs';
-const offline = () => ({ online: false, enabled: false, agents: [] });
+const iso = (ms) => Number.isFinite(ms) && Math.abs(ms) <= 8640000000000000 ? new Date(ms).toISOString() : null;
+const offline = (now) => ({ online: false, enabled: false, agents: [], observed_at: iso(now), last_seen_at: null, protocol_version: WIRE.version });
 const uncertain = (id) => ({ ok: false, kind: 'transport', error: `Relay response unavailable; action may have completed. Retry with the SAME request_id: ${id}` });
 
 export class AgentRelay extends DurableObject {
@@ -21,11 +22,14 @@ export class AgentRelay extends DurableObject {
     return this.ctx.getWebSockets().find((ws) => ws.readyState === 1 && ws.deserializeAttachment()?.session === owner);
   }
   status() {
-    const ws = this.socket();
-    if (!ws) return offline();
+    const now = Date.now(), ws = this.socket();
+    if (!ws) return offline(now);
     const a = ws.deserializeAttachment();
     const seen = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? a.connected;
-    return Date.now() - seen < WIRE.freshness ? { online: true, ...a.status } : offline();
+    const observation = { observed_at: iso(now), last_seen_at: iso(seen), protocol_version: WIRE.version };
+    return Number.isFinite(seen) && seen <= now && now - seen < WIRE.freshness
+      ? { online: true, ...a.status, ...observation }
+      : { ...offline(now), ...observation, last_known: { ...a.status, observed_at: iso(a.status_at ?? a.connected) } };
   }
   async fetch(request) {
     // Worker authenticates before forwarding. Protocol and ownership are checked before any eviction.
@@ -46,7 +50,7 @@ export class AgentRelay extends DurableObject {
       const ws = pair[1];
       const socket = crypto.randomUUID();
       this.ctx.acceptWebSocket(ws);
-      ws.serializeAttachment({ session: hello.session, socket, status: hello.status, connected: Date.now() });
+      ws.serializeAttachment({ session: hello.session, socket, status: hello.status, connected: Date.now(), status_at: Date.now() });
       ws.send(encode({ v: 1, type: 'hello', session: hello.session, socket }));
       return new Response(null, { status: 101, webSocket: pair[0] });
     });
@@ -109,7 +113,7 @@ export class AgentRelay extends DurableObject {
     try {
       const m = decode(message), a = ws.deserializeAttachment();
       if (ws !== this.socket() || m.session !== a.session || m.socket !== a.socket) throw new Error('Stale connection');
-      if (m.type === 'status') { ws.serializeAttachment({ ...a, status: validateStatus(m.status) }); return; }
+      if (m.type === 'status') { ws.serializeAttachment({ ...a, status: validateStatus(m.status), status_at: Date.now() }); return; }
       if (m.type !== 'result' || !validId(m.attempt) || !m.result || typeof m.result.ok !== 'boolean'
         || (!m.result.ok && (typeof m.result.error !== 'string' || !['terminal', 'interrupted', 'rejected'].includes(m.result.kind)))) throw new Error('Invalid result');
       encode(m.result, WIRE.resultBytes);
