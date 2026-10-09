@@ -134,3 +134,16 @@ test('hosted tool results keep confirmation codes exclusively in widget metadata
   const body = await response.json(); assert.equal(body.result._meta['agents-hub/confirm'].review.p, 'private-code');
   assert.doesNotMatch(body.result.content[0].text, /private-code/);
 });
+
+test('production Worker absorbs delayed cron delivery without a D1 binding', async (t) => {
+  const bundle = await build({ entryPoints: [new URL('../src/worker.mjs', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'browser', external: ['cloudflare:workers'],
+    plugins: [{ name: 'test-dashboard', setup(b) {
+      b.onResolve({ filter: /^virtual:agents-hub-dashboard$/ }, () => ({ path: 'dashboard', namespace: 'fixture' }));
+      b.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: 'export default "test dashboard";', loader: 'js' }));
+    } }] });
+  const mf = new Miniflare(convertV4MiniflareOptions({ modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-10-01' }));
+  t.after(() => mf.dispose());
+  const worker = await mf.getWorker();
+  const response = await worker.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+  assert.equal(response.outcome, 'ok');
+});
