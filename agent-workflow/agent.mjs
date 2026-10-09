@@ -522,7 +522,12 @@ improving over time:
   agent reflect <agent> [--runs n]    coach reviews recent runs + feedback, writes proposals
   agent review                        everything waiting for your decision
   agent review show <id>              one proposal (instruction edits as a diff)
-  agent review accept|reject <id> [reason...]`;
+  agent review accept|reject <id> [reason...]
+
+other apps:
+  agent ui [--port n] [--no-open]     dashboard in your browser (127.0.0.1, while this runs)
+  agent mcp                           MCP server on stdio (Claude, Codex, Pi)
+  agent call <operation> ['{json}']   run one operation from ops.mjs and print the result as JSON`;
 
 function flag(args, name) {
   const i = args.indexOf(name);
@@ -598,6 +603,18 @@ async function main(argv) {
       console.log(path.relative(ROOT, dest));
       commitHome(`Reject memory ${path.basename(dest, '.md')}`);
     } else throw new Error(USAGE);
+  } else if (cmd === 'mcp') {
+    (await import('./mcp.mjs')).serveStdio();
+  } else if (cmd === 'call') {
+    const [op, json] = args;
+    if (!op) throw new Error(USAGE);
+    const value = await (await import('./ops.mjs')).callOp(op, json ? JSON.parse(json) : {});
+    console.log(typeof value === 'string' ? value : JSON.stringify(value, null, 2));
+  } else if (cmd === 'ui') {
+    const port = Number(flag(args, '--port') ?? 0);
+    const { startUi } = await import('./ui/server.mjs');
+    const { url } = await startUi({ port, open: !args.includes('--no-open'), spawn: nodeSpawn });
+    console.log(`Agents dashboard: ${url}\n(only on this Mac; stops when you press Ctrl-C)`);
   } else if (['feedback', 'eval', 'reflect', 'review'].includes(cmd)) {
     await (await import('./improve.mjs')).cli(cmd, args);
   } else {

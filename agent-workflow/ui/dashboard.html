@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents</title>
+<style>
+  /* Defaults; a host's own theme variables (set inline on <html>) win over these. */
+  :root {
+    color-scheme: light dark;
+    --color-background-primary: #ffffff; --color-background-secondary: #f5f5f3; --color-background-tertiary: #ebebe8;
+    --color-text-primary: #1c1c1a; --color-text-secondary: #5f5f5a; --color-text-tertiary: #8a8a84;
+    --color-border-primary: #d9d8d3; --color-border-secondary: #e8e7e3;
+    --color-text-success: #1f7a3a; --color-text-danger: #b42318; --color-text-warning: #8a5a00; --color-text-info: #1f5fbf;
+    --color-background-success: #e6f4ea; --color-background-danger: #fdecea; --color-background-warning: #fdf3dc; --color-background-info: #e8f0fc;
+    --color-ring-primary: #1f5fbf;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --border-radius-sm: 6px; --border-radius-md: 8px; --border-radius-lg: 12px;
+  }
+  :root[data-theme="dark"] {
+    --color-background-primary: #1b1b1a; --color-background-secondary: #242422; --color-background-tertiary: #2e2e2b;
+    --color-text-primary: #ecebe6; --color-text-secondary: #a9a8a1; --color-text-tertiary: #7d7c76;
+    --color-border-primary: #3a3a37; --color-border-secondary: #2f2f2c;
+    --color-text-success: #6fcf8b; --color-text-danger: #ff8a80; --color-text-warning: #f0c060; --color-text-info: #8ab4ff;
+    --color-background-success: #1d3324; --color-background-danger: #3a1f1d; --color-background-warning: #3a3018; --color-background-info: #1d2a40;
+    --color-ring-primary: #8ab4ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--color-background-primary); color: var(--color-text-primary);
+    font: 14px/1.45 var(--font-sans); padding: var(--inset-top, 0) var(--inset-right, 0) var(--inset-bottom, 0) var(--inset-left, 0); }
+  .app { padding: 14px 16px 16px; max-width: 920px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+  .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--color-background-secondary); color: var(--color-text-secondary); }
+  .chip.on { background: var(--color-background-info); color: var(--color-text-info); }
+  .chip.attn { background: var(--color-background-warning); color: var(--color-text-warning); }
+  button { font: inherit; font-size: 13px; color: var(--color-text-primary); background: var(--color-background-secondary);
+    border: 1px solid var(--color-border-primary); border-radius: var(--border-radius-sm); padding: 4px 10px; cursor: pointer; }
+  button:hover { background: var(--color-background-tertiary); }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--color-ring-primary); outline-offset: 1px; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--color-text-primary); color: var(--color-background-primary); border-color: transparent; }
+  button.ok { color: var(--color-text-success); } button.no { color: var(--color-text-danger); }
+  nav { display: flex; gap: 2px; margin: 12px 0 10px; border-bottom: 1px solid var(--color-border-secondary); }
+  nav button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 10px; color: var(--color-text-secondary); }
+  nav button[aria-selected="true"] { color: var(--color-text-primary); border-bottom-color: var(--color-text-primary); }
+  .badge { font-size: 11px; margin-left: 4px; padding: 0 6px; border-radius: 999px; background: var(--color-background-warning); color: var(--color-text-warning); }
+  .list { display: flex; flex-direction: column; gap: 6px; }
+  .row { border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 9px 11px; background: var(--color-background-primary); }
+  .row.click { cursor: pointer; } .row.click:hover { background: var(--color-background-secondary); }
+  .line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .name { font-weight: 600; } .grow { flex: 1; min-width: 0; }
+  .muted { color: var(--color-text-secondary); } .small { font-size: 12px; }
+  .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { font-size: 12px; color: var(--color-text-tertiary); margin-top: 2px; overflow-wrap: anywhere; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; background: var(--color-background-secondary); color: var(--color-text-secondary); }
+  .pill.completed { background: var(--color-background-success); color: var(--color-text-success); }
+  .pill.failed, .pill.interrupted { background: var(--color-background-danger); color: var(--color-text-danger); }
+  .pill.running { background: var(--color-background-info); color: var(--color-text-info); }
+  .pill.unknown { background: var(--color-background-warning); color: var(--color-text-warning); }
+  .body { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; font-size: 13px; }
+  pre { font: 12px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; background: var(--color-background-secondary);
+    padding: 8px 10px; border-radius: var(--border-radius-sm); margin: 6px 0 0; max-height: 360px; overflow: auto; }
+  .actions { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+  .actions input { flex: 1; min-width: 140px; }
+  form { display: grid; gap: 8px; }
+  label { font-size: 12px; color: var(--color-text-secondary); display: grid; gap: 3px; }
+  input, textarea, select { font: inherit; color: var(--color-text-primary); background: var(--color-background-primary);
+    border: 1px solid var(--color-border-primary); border-radius: var(--border-radius-sm); padding: 6px 8px; width: 100%; }
+  textarea { min-height: 76px; resize: vertical; }
+  .empty { color: var(--color-text-tertiary); padding: 18px 4px; text-align: center; }
+  .note { font-size: 12px; color: var(--color-text-danger); margin-top: 8px; }
+  .back { margin-bottom: 8px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0 0; font-size: 12px; }
+  dt { color: var(--color-text-tertiary); } dd { margin: 0; overflow-wrap: anywhere; }
+  .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: s .8s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Agents</h1>
+    <div class="chips" id="chips"></div>
+    <button id="refresh" title="Refresh">Refresh</button>
+    <button id="new" class="primary">Run…</button>
+  </header>
+  <nav role="tablist" id="tabs"></nav>
+  <main id="view"><div class="empty">Loading…</div></main>
+  <div class="note" id="error" hidden></div>
+</div>
+<!-- MCP Apps bridge, inlined by ui/dashboard.mjs (hosts block script URLs); its own module so names can't clash. -->
+<script type="module">/*__EXT_APPS_BUNDLE__*/</script>
+<script type="module">
+const { App, applyHostStyleVariables } = globalThis.ExtApps;
+
+// ---------- state ----------
+const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null };
+const app = new App({ name: 'AgentsDashboard', version: '0.1.0' }, {}, { autoResize: true });
+
+// ---------- tiny DOM helper (text only: agent output is never parsed as HTML) ----------
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs ?? {})) {
+    if (v === undefined || v === null || v === false) continue;
+    if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (k === 'class') el.className = v;
+    else el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+const ago = (iso) => {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (!Number.isFinite(s)) return '';
+  return s < 60 ? `${Math.floor(s)}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`;
+};
+const firstLine = (t) => String(t ?? '').trim().split('\n')[0];
+const home = (p) => String(p ?? '').replace(/^\/Users\/[^/]+/, '~');
+
+// ---------- server calls ----------
+function showError(msg) { const e = document.getElementById('error'); e.textContent = msg ?? ''; e.hidden = !msg; }
+async function call(name, args = {}) {
+  const r = await app.callServerTool({ name, arguments: args });
+  const text = r?.content?.find((c) => c.type === 'text')?.text ?? '';
+  if (r?.isError) throw new Error(text.replace(/^error: /, ''));
+  if (r?.structuredContent) return r.structuredContent;
+  try { return JSON.parse(text); } catch { return text; }
+}
+async function refresh() {
+  try { setData(await call('open_dashboard')); showError(); }
+  catch (e) { showError(`Could not refresh: ${e.message}`); }
+}
+async function act(key, fn) {
+  if (S.busy.has(key)) return;
+  S.busy.add(key); render();
+  try { await fn(); showError(); } catch (e) { showError(e.message); }
+  finally { S.busy.delete(key); render(); }
+}
+
+function setData(data) {
+  S.data = data;
+  if (S.detail?.status === 'running') loadDetail(S.detail.run_id);
+  const running = data.runs.some((r) => r.status === 'running');
+  clearTimeout(S.poll);
+  if (running) S.poll = setTimeout(refresh, 4000);
+  render({ passive: true });
+}
+async function loadDetail(id) {
+  try { S.detail = await call('get_run', { run_id: id }); render({ passive: true }); } catch (e) { showError(e.message); }
+}
+
+// ---------- views ----------
+function chips() {
+  const st = S.data?.status; if (!st) return [];
+  const review = st.pending.memory + st.pending.proposals;
+  return [h('span', { class: 'chip' }, `${st.agents} agents`),
+    h('span', { class: `chip${st.running ? ' on' : ''}` }, `${st.running} running`),
+    h('span', { class: `chip${review ? ' attn' : ''}` }, `${review} to review`)];
+}
+
+function tabs() {
+  const review = S.data ? S.data.pending.length : 0;
+  return [['runs', 'Runs'], ['agents', 'Agents'], ['review', 'Review']].map(([id, label]) =>
+    h('button', { role: 'tab', 'aria-selected': String(S.tab === id), onclick: () => { S.tab = id; S.detail = null; S.form = null; render(); } },
+      label, id === 'review' && review ? h('span', { class: 'badge' }, review) : null));
+}
+
+function agentsView() {
+  if (!S.data.agents.length) return h('div', { class: 'empty' }, 'No agents yet.');
+  return h('div', { class: 'list' }, S.data.agents.map((a) => h('div', { class: 'row' },
+    h('div', { class: 'line' },
+      h('span', { class: 'name' }, a.name), h('span', { class: 'grow muted ell' }, a.description),
+      a.last_run ? h('span', { class: `pill ${a.last_run.status}` }, a.last_run.status) : null,
+      h('button', { onclick: () => { S.form = { agent: a.name }; render(); } }, 'Run…')),
+    h('div', { class: 'meta' }, [a.model, a.guard && `guard: ${a.guard}`, a.workspace === 'here' ? 'works in the folder it is started in' : home(a.workspace),
+      a.tools?.length ? `tools: ${a.tools.join(', ')}` : 'no tools', a.last_run && `last run ${ago(a.last_run.started)}`].filter(Boolean).join(' · ')))));
+}
+
+function runsView() {
+  const runs = [...S.data.runs].reverse();
+  if (!runs.length) return h('div', { class: 'empty' }, 'No runs yet.');
+  return h('div', { class: 'list' }, runs.map((r) => h('div', { class: 'row click', tabindex: 0,
+    onclick: () => { S.detail = { run_id: r.run_id, status: r.status }; loadDetail(r.run_id); render(); },
+    onkeydown: (e) => e.key === 'Enter' && e.currentTarget.click() },
+    h('div', { class: 'line' },
+      h('span', { class: `pill ${r.status}` }, r.status === 'running' ? [h('span', { class: 'spin' }), ' running'] : r.status),
+      h('span', { class: 'name' }, r.agent), h('span', { class: 'grow ell' }, firstLine(r.task)),
+      r.feedback ? h('span', { class: 'small muted' }, r.feedback === 'good' ? '👍' : '👎') : null),
+    h('div', { class: 'meta' }, [r.kind !== 'task' && r.kind, ago(r.started), r.status !== 'running' && `${r.tool_calls} tool call(s)`,
+      r.blocked && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')))));
+}
+
+function detailView() {
+  const r = S.detail;
+  const back = h('button', { class: 'back', onclick: () => { S.detail = null; render(); } }, '← All runs');
+  if (!r.agent) return h('div', {}, back, h('div', { class: 'empty' }, 'Loading…'));
+  const rateable = r.status !== 'running' && ['task', 'chat'].includes(r.kind ?? 'task');
+  const rate = (rating) => act(`rate-${r.run_id}`, async () => {
+    const comment = document.getElementById('rate-why')?.value || undefined;
+    await call('rate_run', { run_id: r.run_id, rating, comment });
+    await loadDetail(r.run_id); await refresh();
+  });
+  const output = String(r.output ?? r.error ?? '').replace(/```remember\n[\s\S]*?```/g, '').trim();
+  return h('div', {}, back, h('div', { class: 'row' },
+    h('div', { class: 'line' }, h('span', { class: `pill ${r.status}` }, r.status), h('span', { class: 'name' }, r.agent),
+      h('span', { class: 'grow muted small ell' }, r.run_id)),
+    h('div', { class: 'body' }, r.task),
+    r.status === 'running' ? h('div', { class: 'meta' }, h('span', { class: 'spin' }), ` started ${ago(r.started)}; this updates on its own`) : null,
+    output ? h('pre', {}, output) : null,
+    h('dl', {}, ...[
+      ['model', r.model], ['started', r.started && new Date(r.started).toLocaleString()], ['tools', r.tool_calls?.join(', ')],
+      ['commands', r.commands?.length ? r.commands.join('\n') : null], ['blocked', r.blocked?.length ? r.blocked.join('\n') : null],
+      ['memory used', r.memory_supplied?.length], ['memory proposed', r.memory_proposed?.length ? `${r.memory_proposed.length} (see Review)` : null],
+      ['tokens', r.usage?.totalTokens], ['workspace', home(r.workspace)], ['your rating', r.feedback ? `${r.feedback.rating}${r.feedback.comment ? ` — ${r.feedback.comment}` : ''}` : null],
+    ].filter(([, v]) => v !== null && v !== undefined && v !== '').flatMap(([k, v]) => [h('dt', {}, k), h('dd', { style: k === 'commands' || k === 'blocked' ? 'white-space:pre-wrap;font-family:var(--font-mono)' : null }, v)])),
+    rateable ? h('div', { class: 'actions' },
+      h('input', { id: 'rate-why', placeholder: 'Why (optional, your words)', 'aria-label': 'Reason for rating' }),
+      h('button', { class: 'ok', disabled: S.busy.has(`rate-${r.run_id}`), onclick: () => rate('good') }, 'Good'),
+      h('button', { class: 'no', disabled: S.busy.has(`rate-${r.run_id}`), onclick: () => rate('bad') }, 'Bad')) : null));
+}
+
+function reviewView() {
+  if (!S.data.pending.length) return h('div', { class: 'empty' }, 'Nothing waiting for your review.');
+  return h('div', { class: 'list' }, S.data.pending.map((p) => {
+    const key = `review-${p.id}`;
+    const decide = (decision) => act(key, async () => {
+      const reason = decision === 'reject' ? document.getElementById(`why-${p.id}`)?.value || undefined : undefined;
+      await call('review_decide', { id: p.id, decision, reason });
+      await refresh();
+    });
+    return h('div', { class: 'row' },
+      h('div', { class: 'line' }, h('span', { class: 'pill' }, p.kind), h('span', { class: 'name' }, p.agent ?? ''),
+        h('span', { class: 'grow muted small ell' }, p.why ?? ''), h('span', { class: 'small muted' }, p.id.slice(-6))),
+      h('div', { class: 'body' }, p.body),
+      h('div', { class: 'actions' },
+        h('input', { id: `why-${p.id}`, placeholder: 'Reason if rejecting (optional)', 'aria-label': 'Reason for rejecting' }),
+        h('button', { class: 'ok', disabled: S.busy.has(key), onclick: () => decide('accept') }, 'Accept'),
+        h('button', { class: 'no', disabled: S.busy.has(key), onclick: () => decide('reject') }, 'Reject')));
+  }));
+}
+
+function formView() {
+  const agents = S.data.agents;
+  const chosen = agents.find((a) => a.name === S.form.agent) ?? agents[0];
+  const submit = (e) => {
+    e.preventDefault();
+    const f = new FormData(e.currentTarget);
+    const args = { agent: f.get('agent'), task: String(f.get('task') ?? '').trim() };
+    if (!args.task) return showError('Write a task first.');
+    if (f.get('cwd')) args.cwd = String(f.get('cwd')).trim();
+    if (f.get('continue')) args.continue = true;
+    act('start', async () => {
+      const { run_id } = await call('start_run', args);
+      S.form = null; S.tab = 'runs'; S.detail = { run_id, status: 'running' };
+      await refresh(); await loadDetail(run_id);
+    });
+  };
+  return h('div', {}, h('button', { class: 'back', onclick: () => { S.form = null; render(); } }, '← Back'),
+    h('form', { class: 'row', onsubmit: submit },
+      h('label', {}, 'Agent', h('select', { name: 'agent', onchange: (e) => { S.form = { agent: e.target.value }; render(); } },
+        agents.map((a) => h('option', { value: a.name, selected: a.name === chosen?.name }, `${a.name} — ${a.description}`)))),
+      h('label', {}, 'Task', h('textarea', { name: 'task', required: true, placeholder: 'What should the agent do?' })),
+      chosen?.workspace === 'here' ? h('label', {}, 'Project folder (absolute path)', h('input', { name: 'cwd', required: true, placeholder: '/Users/…/Development/project' })) : null,
+      h('label', { style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', name: 'continue', style: 'width:auto' }), 'Continue its previous conversation'),
+      h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit', disabled: S.busy.has('start') }, S.busy.has('start') ? 'Starting…' : 'Start run'),
+        h('span', { class: 'small muted' }, 'Runs in the background on your Mac; you can close this.'))));
+}
+
+// Background updates (polling) wait while the user is typing in the view, so focus and text are not lost.
+const editing = () => { const a = document.activeElement; return !!a && document.getElementById('view').contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName); };
+document.addEventListener('focusout', () => setTimeout(() => { if (S.stale && !editing() && !S.form) { S.stale = false; render(); } }, 0));
+
+function render({ passive = false } = {}) {
+  document.getElementById('chips').replaceChildren(...chips());
+  document.getElementById('tabs').replaceChildren(...tabs());
+  if (!S.data) return;
+  if (passive && (editing() || S.form)) { S.stale = true; return; } // the form never needs live data
+  const view = S.form ? formView() : S.detail ? detailView() : S.tab === 'agents' ? agentsView() : S.tab === 'review' ? reviewView() : runsView();
+  // Keep what the user typed in inputs across re-renders.
+  const typed = Object.fromEntries([...document.querySelectorAll('#view input[id], #view textarea[name]')].map((el) => [el.id || el.name, el.value]));
+  document.getElementById('view').replaceChildren(view);
+  for (const [k, v] of Object.entries(typed)) { const el = document.getElementById(k) ?? document.querySelector(`#view [name="${k}"]`); if (el && !el.value) el.value = v; }
+}
+
+// ---------- host ----------
+function applyContext(ctx) {
+  if (!ctx) return;
+  if (ctx.theme) document.documentElement.dataset.theme = ctx.theme;
+  if (ctx.styles?.variables && applyHostStyleVariables) applyHostStyleVariables(ctx.styles.variables);
+  const i = ctx.safeAreaInsets;
+  if (i) for (const side of ['top', 'right', 'bottom', 'left']) document.body.style.setProperty(`--inset-${side}`, `${i[side] ?? 0}px`);
+}
+if (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
+
+document.getElementById('refresh').onclick = () => act('refresh', refresh);
+document.getElementById('new').onclick = () => { S.form = { agent: S.form?.agent }; render(); };
+app.ontoolresult = (result) => {
+  const data = result?.structuredContent ?? (() => { try { return JSON.parse(result?.content?.[0]?.text ?? ''); } catch { return null; } })();
+  if (data?.agents) setData(data); else refresh();
+};
+app.onhostcontextchanged = applyContext;
+render();
+await app.connect();
+applyContext(app.getHostContext());
+// The host normally sends the tool result right away; ask the server ourselves only if it doesn't.
+setTimeout(() => { if (!S.data) refresh(); }, globalThis.ExtApps.web ? 0 : 1500);
+</script>
+</body>
+</html>
