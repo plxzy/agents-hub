@@ -18,16 +18,24 @@ export function save(file, value) {
   const temporary = file + '.' + randomUUID();
   fs.writeFileSync(temporary, JSON.stringify(value) + '\n', { mode: 0o600, flag: 'wx', flush: true });
   fs.renameSync(temporary, file);
+  const directory = fs.openSync(path.dirname(file), 'r');
+  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
 }
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const safeOutput = text => /(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|Bearer\s+\S+|-----BEGIN.*PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}\.)/.test(text)
   ? '[redacted: output resembled a credential]' : text.slice(0, 48000);
 
 export class DevelopmentSessions {
-  constructor({ state, repository, knowledge, revision, processSession = randomUUID(), lease, limits = {} }) {
+  constructor({ state, repository, knowledge, context, revision, processSession = randomUUID(), lease, limits = {} }) {
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
+    this.context = context ? fs.realpathSync(context) : null;
     this.revision = revision; this.processSession = processSession; this.lease = lease;
+    const knowledgeManifest = read(path.join(this.knowledge, 'RELEASE.json'));
+    for (const [name, expected] of Object.entries(knowledgeManifest.files)) {
+      const file = fs.realpathSync(path.join(this.knowledge, name));
+      if (!file.startsWith(this.knowledge + path.sep) || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected) throw new Error('Reviewed knowledge integrity check failed');
+    }
     this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, ...limits };
     this.active = null;
     fs.mkdirSync(this.state, { recursive: true, mode: 0o700 });
@@ -62,7 +70,7 @@ export class DevelopmentSessions {
     fs.mkdirSync(base, { mode: 0o700 });
     // Source is the private supervisor-owned bare repository, never a supplied path.
     execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'clone', '--no-local', '--no-hardlinks', '--no-checkout', this.repository, workspace], { env: gitEnv, stdio: 'pipe' });
-    const agent = { ...getAgent('workflow', this.knowledge), workspace, writePaths: [workspace], protectPaths: [] };
+    const agent = { ...getAgent('workflow', this.knowledge), workspace, writePaths: [workspace], protectPaths: [], context: this.context };
     let policy = linuxPolicy(agent, this.state);
     await sandboxExecute(policy, 'bash', { command: 'git -c core.hooksPath=/dev/null checkout -b development-session origin/main' });
     policy = linuxPolicy(agent, this.state);
@@ -70,7 +78,8 @@ export class DevelopmentSessions {
     const sessions = path.join(base, 'pi-sessions'), agentDir = path.join(base, 'pi-config');
     fs.mkdirSync(sessions, { mode: 0o700 }); fs.mkdirSync(agentDir, { mode: 0o700 });
     agent.linuxPolicy = policy;
-    const prompt = buildSystemPrompt(agent, loadMemory(agent.memory, this.knowledge)) + '\n\n' + agent.skills.map(dir => fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).join('\n\n');
+    const prompt = buildSystemPrompt(agent, loadMemory(agent.memory, this.knowledge)) + '\n\n' + agent.skills.map(dir => fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).join('\n\n')
+      + (this.context ? `\nDated read-only Space reference is available at ${this.context}. The live Space remains the editable source. This reference is not live health evidence.` : '');
     const manifest = { host: DEVELOPMENT.host, project: DEVELOPMENT.project, agent: DEVELOPMENT.agent,
       conversation_id: id, workspace_id: hash(workspace), implementation_revision: this.revision,
       knowledge_revision: read(path.join(this.knowledge, 'RELEASE.json')).source_revision,
@@ -95,7 +104,7 @@ export class DevelopmentSessions {
     const config = this.conversation(conversation_id);
     if (config.manifest.policy_digest !== policy_digest || config.manifest.process_session !== this.processSession) throw new Error('Grant manifest mismatch');
     const leaseArgs = { grant_id, process_session: this.processSession, policy_digest, execution_state: 'running' };
-    this.active = { starting: true };
+    this.active = { starting: true, grant_id };
     try {
       this.room();
       const began = performance.now(), initial = await this.lease(leaseArgs);
@@ -105,7 +114,7 @@ export class DevelopmentSessions {
       const run_id = randomUUID(), file = path.join(this.state, 'runs', run_id + '.json');
       const receipt = { run_id, grant_id, conversation_id, manifest: config.manifest, status: 'running', started_at: Date.now() };
       save(file, receipt); save(requestFile, { fingerprint, run_id });
-      const child = spawn(process.execPath, [path.join(source, 'dev-session-worker.mjs'), path.join(this.state, 'conversations', conversation_id, 'config.json')],
+      const child = spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), path.join(this.state, 'conversations', conversation_id, 'config.json')],
         { cwd: source, stdio: ['pipe', 'pipe', 'pipe'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
       this.active = { child, run_id, grant_id };
       let stopped = false, output = '', bytes = 0, failure, killTimer, renewing = false, diskChecking = false;
@@ -154,12 +163,20 @@ export class DevelopmentSessions {
     } catch (e) { this.active = null; throw e; }
   }
   stop() { this.active?.stop?.('Operator stopped supervisor'); }
-  async export({ conversation_id, run_id }) {
+  async export({ conversation_id, run_id, grant_id, policy_digest }) {
     if (this.active) throw new Error('Export requires an idle host');
+    this.active = { exporting: true, grant_id };
+    try {
     const config = this.conversation(conversation_id), receipt = this.get(run_id);
-    if (receipt.conversation_id !== conversation_id || receipt.status !== 'completed') throw new Error('Export requires a completed matching run');
+    if (receipt.conversation_id !== conversation_id || receipt.grant_id !== grant_id || config.manifest.policy_digest !== policy_digest || receipt.status !== 'completed') throw new Error('Export requires a completed matching run and grant');
+    const leaseArgs = { grant_id, process_session: this.processSession, policy_digest, execution_state: 'running' };
+    const began = performance.now(), permit = await this.lease(leaseArgs);
+    if (!permit.authorized || permit.lease_ms <= 0 || permit.lease_ms > DEVELOPMENT.leaseMs) throw new Error('Export lease refused');
     const filename = '.git/review-' + run_id + '.bundle';
-    await sandboxExecute(config.policy, 'bash', { command: `git -c core.hooksPath=/dev/null bundle create ${filename} HEAD` });
+    const controller = new AbortController(), timer = setTimeout(() => controller.abort(), Math.max(0, permit.lease_ms - (performance.now() - began)));
+    try { await sandboxExecute(config.policy, 'bash', { command: `git -c core.hooksPath=/dev/null bundle create ${filename} HEAD` }, { signal: controller.signal }); }
+    finally { clearTimeout(timer); }
+    if (!(await this.lease(leaseArgs)).authorized) throw new Error('Export revoked before import');
     const candidate = fs.realpathSync(path.join(config.policy.workspace, filename));
     if (!candidate.startsWith(config.policy.workspace + path.sep)) throw new Error('Invalid export path');
     const fd = fs.openSync(candidate, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
@@ -182,5 +199,9 @@ export class DevelopmentSessions {
     } catch (error) { if (error.message === 'Review ref already exists with different content') throw error; }
     execFileSync('git', [...args, 'fetch', '--no-tags', '--no-write-fetch-head', target, `HEAD:${ref}`], { env: gitEnv, stdio: 'pipe' });
     return { ref, commit: head };
+    } finally {
+      this.active = null;
+      try { await this.lease({ grant_id, process_session: this.processSession, policy_digest, execution_state: 'stopped' }); } catch {}
+    }
   }
 }

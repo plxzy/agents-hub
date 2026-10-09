@@ -46,7 +46,7 @@ export function linuxPolicy(agent, state) {
   for (const name of ['space-mirror', '.context']) protectedPaths.push(path.join(workspace, name));
   return { workspace, release: dir, release_revision: revision, runtime,
     sdk: path.join(packageDir, 'dist/index.js'), timeout_ms: 600_000, output_bytes: 1_048_576,
-    readonly: (agent.skills === 'none' ? [] : agent.skills ?? []).map(p => fs.realpathSync(p)).filter(p => !inside(workspace, p)),
+    readonly: [...(agent.skills === 'none' ? [] : agent.skills ?? []), ...(agent.context ? [agent.context] : [])].map(p => fs.realpathSync(p)).filter(p => !inside(workspace, p)),
     protected: protectedPaths.filter(p => fs.existsSync(p)).map(p => fs.realpathSync(p)).filter(p => inside(workspace, p)) };
 }
 

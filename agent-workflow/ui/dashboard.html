@@ -135,6 +135,7 @@ async function call(name, args = {}) {
   const r = await app.callServerTool({ name, arguments: args });
   // One-time codes the Mac requires for the user's decisions (hosted relay only); the model never sees them.
   if (r?._meta?.['agents-hub/confirm']) S.confirm = r._meta['agents-hub/confirm'];
+  if (r?._meta?.['agents-hub/development-confirm']) S.devConfirm = r._meta['agents-hub/development-confirm'];
   const text = r?.content?.find((c) => c.type === 'text')?.text ?? '';
   if (r?.isError) throw new Error(text.replace(/^error: /, ''));
   if (r?.structuredContent) return r.structuredContent;
@@ -145,10 +146,13 @@ async function refresh() {
   S.refreshing = true;
   try {
     let data = await call('open_dashboard');
+    const developmentAvailable = data.development_available;
     if (data.relay?.online === true) {
       try { const live = await call('panel_data'); data = { ...live, health: dashboardHealth(data, live) }; }
       catch (e) { data.relay.error = e.message; }
     }
+    data.development_available = developmentAvailable;
+    if (developmentAvailable) S.development = await call('development_panel');
     setData(data); showError(data.relay?.error);
   }
   catch (e) { showError(`Could not refresh: ${e.message}`); }
@@ -198,9 +202,47 @@ const canDecide = () => S.data?.capabilities?.mutate === true;
 
 function tabs() {
   const review = S.data?.pending?.length ?? 0;
-  return [['runs', 'Runs'], ['agents', 'Agents'], ...(canDecide() ? [['review', 'Review']] : [])].map(([id, label]) =>
+  return [['runs', 'Runs'], ['agents', 'Agents'], ...(S.data?.development_available ? [['development', 'Development']] : []), ...(canDecide() ? [['review', 'Review']] : [])].map(([id, label]) =>
     h('button', { role: 'tab', 'aria-selected': String(S.tab === id), onclick: () => { S.tab = id; S.detail = null; S.form = null; render(); } },
       label, id === 'review' && review ? h('span', { class: 'badge' }, review) : null));
+}
+
+function developmentView() {
+  const d = S.development;
+  if (!d) return h('div', { class: 'empty' }, 'Refresh to load development sessions.');
+  return h('div', { class: 'list' },
+    h('div', { class: 'row' }, h('strong', {}, 'dok-dev · workflow'),
+      h('div', { class: 'muted' }, d.host?.online ? 'Connected independently of your Mac.' : 'Offline. Revocation can still be recorded here.'),
+      h('button', { disabled: !d.host?.online || S.busy.has('dev-new'), onclick: () => act('dev-new', async () => {
+        await call('request_development', { request_id: crypto.randomUUID() }); await refresh();
+      }) }, 'New development session')),
+    ...d.grants.map(g => {
+      const decision = S.devConfirm?.[g.grant_id], active = g.status === 'active';
+      return h('section', { class: 'row' },
+        h('div', { class: 'line' }, h('strong', {}, 'dev-workflow'), h('span', { class: 'pill' }, g.status)),
+        h('div', { class: 'body' }, 'Read, edit, test and commit in an independent project checkout. Export to a private review branch.'),
+        h('div', { class: 'small muted' }, `Expires ${new Date(g.expires_at).toLocaleString()}. Shell network: local tests only. Project context is sent to the model provider.`),
+        h('div', { class: 'small muted' }, 'This scope permits no merges, deployments or supervisor activation. ChatGPT may apply its own confirmation settings.'),
+        h('div', { class: 'meta' }, `Conversation ${g.manifest.conversation_id} · workspace ${g.manifest.workspace_id.slice(0, 12)}`),
+        h('details', {}, h('summary', {}, 'Approved revisions'), h('pre', {}, JSON.stringify(g.manifest, null, 2))),
+        h('div', { class: 'small' }, g.execution_confirmed_stopped ? 'Execution confirmed stopped.' : g.status === 'revoked' ? 'Revocation recorded; waiting for execution to stop.' : 'Execution may be active.'),
+        decision ? h('button', { class: decision.decision === 'approve' ? 'primary' : 'no', disabled: S.busy.has(g.grant_id), onclick: () => act(g.grant_id, async () => {
+          await call('decide_development', { grant_id: g.grant_id, decision: decision.decision, confirm: decision.token });
+          delete S.devConfirm[g.grant_id]; await refresh();
+        }) }, decision.decision === 'approve' ? 'Approve this session' : 'Revoke session') : null,
+        ['expired', 'invalidated', 'revoked'].includes(g.status) ? h('button', { disabled: !d.host?.online, onclick: () => act(g.grant_id, async () => {
+          await call('request_development', { request_id: crypto.randomUUID(), conversation_id: g.manifest.conversation_id }); await refresh();
+        }) }, 'Request approval to continue') : null,
+        active ? h('form', { onsubmit: e => { e.preventDefault(); const task = new FormData(e.target).get('task');
+          act('dev-task', async () => { S.devRun = await call('start_development_task', { request_id: crypto.randomUUID(), grant_id: g.grant_id, conversation_id: g.manifest.conversation_id, task }); await refresh(); });
+        } }, h('label', {}, 'Task or follow-up', h('textarea', { name: 'task', required: true, maxlength: 16000 })),
+          h('button', { type: 'submit', disabled: !d.host?.online || S.busy.has('dev-task') }, 'Run in this conversation')) : null);
+    }),
+    S.devRun ? h('div', { class: 'row' }, h('strong', {}, `Task: ${S.devRun.status}`), h('pre', {}, S.devRun.output ?? S.devRun.error ?? S.devRun.run_id),
+      h('button', { onclick: () => act('dev-result', async () => { S.devRun = await call('get_development_task', { grant_id: S.devRun.grant_id, run_id: S.devRun.run_id }); }) }, 'Refresh task'),
+      S.devRun.status === 'completed' ? h('button', { onclick: () => act('dev-export', async () => {
+        S.devExport = await call('export_development', { request_id: crypto.randomUUID(), grant_id: S.devRun.grant_id, run_id: S.devRun.run_id });
+      }) }, 'Export review branch') : null, S.devExport ? h('pre', {}, JSON.stringify(S.devExport, null, 2)) : null) : null);
 }
 
 function agentsView() {
@@ -318,7 +360,7 @@ function render({ passive = false } = {}) {
   document.getElementById('new').hidden = !canRun();
   if (!S.data) return;
   if (passive && (editing() || S.form)) { S.stale = true; return; } // the form never needs live data
-  const view = S.form ? formView() : S.detail ? detailView() : S.tab === 'agents' ? agentsView() : S.tab === 'review' ? reviewView() : runsView();
+  const view = S.form ? formView() : S.detail ? detailView() : S.tab === 'development' ? developmentView() : S.tab === 'agents' ? agentsView() : S.tab === 'review' ? reviewView() : runsView();
   // Keep what the user typed in inputs across re-renders.
   const typed = Object.fromEntries([...document.querySelectorAll('#view input[id], #view textarea[name]')].map((el) => [el.id || el.name, el.value]));
   document.getElementById('view').replaceChildren(view);

@@ -8,13 +8,24 @@ export async function relayStatus(env) {
   catch { return unavailable(); }
 }
 export async function relayFetch(request, env) {
-  if (!env.RELAY_TOKEN) return json({ error: 'unauthorized' }, 401);
+  const pathname = new URL(request.url).pathname;
+  const dok = pathname.startsWith('/relay/dok-dev/');
+  const token = dok ? env.DOK_RELAY_TOKEN : env.RELAY_TOKEN;
+  if (!token || dok && env.DEVELOPMENT_ENABLED !== 'true') return json({ error: 'unauthorized' }, 401);
   const digest = (s) => crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-  const [a, b] = await Promise.all([digest(request.headers.get('authorization') ?? ''), digest('Bearer ' + env.RELAY_TOKEN)]);
+  const [a, b] = await Promise.all([digest(request.headers.get('authorization') ?? ''), digest('Bearer ' + token)]);
   if (!crypto.subtle.timingSafeEqual(a, b)) return json({ error: 'unauthorized' }, 401);
-  if (new URL(request.url).pathname !== '/relay/connect') return json({ error: 'not_found' }, 404);
+  const target = dok ? env.RELAY.getByName('owner-dok-dev') : relay(env);
+  if (dok && pathname === '/relay/dok-dev/lease' && request.method === 'POST') {
+    try {
+      const text = await request.text();
+      if (text.length > 2048) throw new Error('Invalid lease');
+      return json(await target.developmentLease(JSON.parse(text)));
+    } catch { return json({ authorized: false, error: 'Lease refused' }, 403); }
+  }
+  if (pathname !== (dok ? '/relay/dok-dev/connect' : '/relay/connect')) return json({ error: 'not_found' }, 404);
   if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
-  return relay(env).fetch(request);
+  return target.fetch(request);
 }
 export async function requestRelay(env, operation, args) {
   validateRelay(operation, args);

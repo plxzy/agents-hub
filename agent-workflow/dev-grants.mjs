@@ -25,7 +25,8 @@ export class GrantAuthority {
   }
   public(r) {
     const { owner, challenge, revoke_challenge, request_fingerprint, ...safe } = r;
-    return { ...safe, status: r.status === 'active' && r.expires_at <= this.now() ? 'expired' : r.status,
+    return { ...safe, status: ['active', 'pending'].includes(r.status) && r.expires_at <= this.now() ? 'expired'
+      : ['active', 'pending'].includes(r.status) && r.manifest.process_session !== this.processSession() ? 'invalidated' : r.status,
       execution_confirmed_stopped: r.execution_state === 'stopped',
       permissions: ['read', 'edit', 'test', 'local commit', 'export review branch'],
       network: 'sandbox loopback only; inference uses the selected provider' };

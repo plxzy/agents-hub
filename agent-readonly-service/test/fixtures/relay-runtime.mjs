@@ -1,6 +1,7 @@
 // Test-only entrypoint. Never imported by the production Worker.
 import { AgentRelay } from '../../src/agent-relay.mjs';
 import { relayFetch, requestRelay, relayStatus } from '../../src/relay.mjs';
+import { developmentCall } from '../../src/development.mjs';
 export class TestRelay extends AgentRelay {
   constructor(ctx, env) { super(ctx, env); this.boot = crypto.randomUUID(); }
   inspect() { return { boot: this.boot, requests: this.sql.exec('SELECT * FROM requests').toArray(), attempts: this.sql.exec('SELECT * FROM attempts').toArray(), waiters: this.waiters.size }; }
@@ -15,6 +16,10 @@ export default {
     if (url.pathname.startsWith('/relay/')) return relayFetch(request, env);
     const stub = env.RELAY.getByName('owner-mac');
     try {
+      if (url.pathname === '/dev/call') {
+        const { owner, operation, args } = await request.json();
+        return Response.json({ value: await developmentCall(env, owner, operation, args) });
+      }
       if (url.pathname === '/status') return Response.json(await relayStatus(env));
       if (url.pathname === '/inspect') return Response.json(await stub.inspect());
       if (url.pathname === '/expire') return Response.json(await stub.expire());

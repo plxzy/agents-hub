@@ -1,0 +1,16 @@
+[Unit]
+Description=Managed dok development agent supervisor
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/docker exec --user vscode dok-dev /usr/local/bin/node @RELEASE@/agent-workflow/dev-supervisor.mjs --stop /home/vscode/.config/agent-workflow/dok.json
+ExecStart=/usr/bin/docker exec --user vscode --env HOME=/home/vscode --env PATH=/home/vscode/.local/bin:/usr/local/bin:/usr/bin:/bin dok-dev /usr/local/bin/node @RELEASE@/agent-workflow/dev-supervisor.mjs /home/vscode/.config/agent-workflow/dok.json
+ExecStop=/usr/bin/docker exec --user vscode dok-dev /usr/local/bin/node @RELEASE@/agent-workflow/dev-supervisor.mjs --stop /home/vscode/.config/agent-workflow/dok.json
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

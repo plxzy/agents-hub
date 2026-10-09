@@ -1,5 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
+import { HOST_OPS, validateDevelopment } from '../../agent-workflow/dev-contract.mjs';
+import { GrantAuthority } from '../../agent-workflow/dev-grants.mjs';
 import { WIRE, PING, PONG, encode, decode, validId, validateStatus, fingerprint } from '../../agent-workflow/relay-wire.mjs';
 const iso = (ms) => Number.isFinite(ms) && Math.abs(ms) <= 8640000000000000 ? new Date(ms).toISOString() : null;
 const offline = (now) => ({ online: false, enabled: false, agents: [], observed_at: iso(now), last_seen_at: null, protocol_version: WIRE.version });
@@ -13,10 +15,35 @@ export class AgentRelay extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY CHECK(id=1), session TEXT NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, until INTEGER NOT NULL, result TEXT)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS attempts (id TEXT PRIMARY KEY, request TEXT NOT NULL, session TEXT NOT NULL, socket TEXT NOT NULL, expires INTEGER NOT NULL)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS development_grants (id TEXT PRIMARY KEY, value TEXT NOT NULL)');
+    this.grants = new GrantAuthority({
+      get: id => { const row = this.one('SELECT value FROM development_grants WHERE id=?', id); return row && JSON.parse(row.value); },
+      put: (id, r) => this.sql.exec('INSERT INTO development_grants(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value', id, JSON.stringify(r)),
+      list: () => this.sql.exec('SELECT value FROM development_grants').toArray().map(r => JSON.parse(r.value)),
+    }, { processSession: () => this.owner() });
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG));
   }
   one(sql, ...args) { return this.sql.exec(sql, ...args).toArray()[0]; }
   owner() { return this.one('SELECT session FROM owner WHERE id=1')?.session; }
+  developmentPrevious(owner, requestId, fingerprint) {
+    const r = this.grants.store.list().find(r => r.request_id === requestId);
+    if (!r) return null;
+    if (r.owner !== owner || r.request_fingerprint !== fingerprint) throw new Error('Request ID conflict');
+    return this.grants.public(r);
+  }
+  developmentRequest(owner, requestId, fingerprint, manifest) { return this.grants.request(owner, requestId, fingerprint, manifest); }
+  developmentGet(owner, id) { return this.grants.get(owner, id); }
+  developmentAuthorize(owner, id, conversation) { return this.grants.authorize(owner, id, conversation); }
+  developmentDecide(owner, id, kind, token) { return this.grants.decide(owner, id, kind, token); }
+  developmentLease(args) { return this.grants.lease(args); }
+  async developmentPanel(owner, privateCodes = false) {
+    const grants = this.grants.list(owner), confirm = {};
+    if (privateCodes) for (const g of grants) {
+      const decision = g.status === 'pending' ? 'approve' : g.status === 'active' ? 'revoke' : null;
+      if (decision) confirm[g.grant_id] = { decision, token: await this.grants.issue(owner, g.grant_id, decision) };
+    }
+    return { host: { name: 'dok-dev', ...this.status() }, grants, ...(privateCodes ? { confirm } : {}) };
+  }
   socket() {
     const owner = this.owner();
     return this.ctx.getWebSockets().find((ws) => ws.readyState === 1 && ws.deserializeAttachment()?.session === owner);
@@ -68,7 +95,8 @@ export class AgentRelay extends DurableObject {
     await this.scheduleCleanup();
   }
   async dispatch(operation, args) {
-    validateRelay(operation, args);
+    if (Object.hasOwn(HOST_OPS, operation)) validateDevelopment(operation, args, true);
+    else validateRelay(operation, args);
     const id = args.request_id ?? crypto.randomUUID();
     const fp = await fingerprint(operation, args);
     let row = this.one('SELECT * FROM requests WHERE id=?', id);

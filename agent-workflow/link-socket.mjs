@@ -4,8 +4,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { WIRE, PING, PONG, encode, decode, validId, validateStatus } from './relay-wire.mjs';
 
 // Foreground-only. A process acquires once; every ordinary reconnect must resume its durable ownership.
-export async function serveSocket({ readConfig, execute, publish, signal, log = console.log, Socket = WebSocket }) {
-  const session = randomUUID();
+export async function serveSocket({ readConfig, execute, publish, signal, log = console.log, Socket = WebSocket, session = randomUUID(), host = 'mac' }) {
+  if (!['mac', 'dok-dev'].includes(host)) throw new Error('Unknown relay host');
   let acquired = false, failures = 0, commands = Promise.resolve(), queued = 0;
   let publishing = false;
   const snapshot = async () => {
@@ -21,7 +21,7 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
       const config = readConfig();
       const url = new URL(config.endpoint);
       if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Relay endpoint must be a credential-free HTTPS URL');
-      url.protocol = 'wss:'; url.pathname = url.pathname.replace(/\/$/, '') + '/relay/connect';
+      url.protocol = 'wss:'; url.pathname = url.pathname.replace(/\/$/, '') + (host === 'dok-dev' ? '/relay/dok-dev/connect' : '/relay/connect');
       const hello = { v: 1, session, mode: acquired ? 'resume' : 'acquire', status: validateStatus({ enabled: config.enabled === true, agents: config.agents }) };
       acquired = true; // even a lost HTTP/hello response must not reacquire ownership
       const result = await new Promise((resolve) => {
@@ -73,7 +73,7 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
             const m = decode(text);
             if (m.type === 'hello' && !ready && m.session === session && validId(m.socket)) {
               socketId = m.socket; ready = true; clearTimeout(handshake); ws.send(PING); lastPing = Date.now();
-              log('Agents Hub linked over WebSocket (foreground; Ctrl-C disconnects).'); return;
+              log(host === 'dok-dev' ? 'dok-dev linked to Agents Hub.' : 'Agents Hub linked over WebSocket (foreground; Ctrl-C disconnects).'); return;
             }
             if (!ready || m.session !== session || m.socket !== socketId) throw new Error('Invalid socket identity');
             if (m.type === 'ack') { pending.delete(m.attempt); return; }

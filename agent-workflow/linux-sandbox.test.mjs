@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { linuxPolicy, sandboxArgs, sandboxExecute } from './linux-sandbox.mjs';
 
 test('sandbox mount policy rejects writable tool/runtime roots', () => {
@@ -46,4 +48,21 @@ test('real Linux tools isolate secrets, protect files, support loopback and kill
   const size = fs.statSync(ticks).size;
   await new Promise(r => setTimeout(r, 500));
   assert.equal(fs.statSync(ticks).size, size, 'detached descendant stopped');
+  // Abrupt supervisor death must also kill the Pi child and its detached workload.
+  const helper = fileURLToPath(new URL('./parent-exec.py', import.meta.url));
+  const worker = path.join(base, 'worker.mjs');
+  const crashTicks = path.join(workspace, 'crash-ticks');
+  const ticking = `setsid node -e 'const fs=require("fs");setInterval(()=>fs.appendFileSync("crash-ticks","x"),40)' & wait`;
+  fs.writeFileSync(worker, `import {sandboxExecute} from ${JSON.stringify(new URL('./linux-sandbox.mjs', import.meta.url).href)}; await sandboxExecute(${JSON.stringify(p)},'bash',${JSON.stringify({command:ticking})});`);
+  const supervisor = spawn(process.execPath, ['--input-type=module', '-e',
+    `import {spawn} from 'node:child_process'; spawn('/usr/bin/python3',[${JSON.stringify(helper)},String(process.pid),${JSON.stringify(process.execPath)},${JSON.stringify(worker)}],{stdio:'ignore'});setInterval(()=>{},1000);`], { stdio: 'ignore' });
+  try {
+    for (let n=0;n<100&&!fs.existsSync(crashTicks);n++) await new Promise(r=>setTimeout(r,100));
+    assert.ok(fs.existsSync(crashTicks), 'detached crash-test descendant started');
+    supervisor.kill('SIGKILL');
+    await new Promise(r=>setTimeout(r,500));
+    const stoppedSize=fs.statSync(crashTicks).size;
+    await new Promise(r=>setTimeout(r,500));
+    assert.equal(fs.statSync(crashTicks).size,stoppedSize,'supervisor death killed the actual detached descendant');
+  } finally { supervisor.kill('SIGKILL'); }
 });

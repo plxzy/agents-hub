@@ -3,6 +3,8 @@ import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList } from '../../agent-workflow/relay-contract.mjs';
 import { relayFetch, relayStatus, requestRelay } from './relay.mjs';
 import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
+import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
+import { developmentCall } from './development.mjs';
 
 const KEEP_SNAPSHOTS = 20;
 const CAPABILITIES = { discovery: true, status: true, context: true, run: false, mutate: false };
@@ -68,7 +70,7 @@ const toolList = TOOLS.map(({ name, title, description, input, annotations, ui }
   ...(ui ? { icons: DASHBOARD_ICONS, _meta: DASHBOARD_TOOL_META } : {}),
 }));
 
-export async function apiFetch(request, env, dashboardHtml = '') {
+export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
   const url = new URL(request.url);
   if (url.pathname.startsWith('/mcp/v1/')) url.pathname = url.pathname.slice(4);
   if (request.method !== 'POST' || url.pathname !== '/mcp') {
@@ -86,16 +88,23 @@ export async function apiFetch(request, env, dashboardHtml = '') {
         ? 'Agents Hub: published read metadata plus a live Mac relay. Only explicitly remote-allowed agents can start. Check get_status for relay availability. Use get_remote_run for relay-started output. Ratings and reviews are user clicks in the panel, never model decisions.'
         : 'Read-only Agents Hub view of the user’s local agents and runs. Check get_status for freshness; run is explicitly unavailable.' });
     if (method === 'ping') return reply({});
-    if (method === 'tools/list') return reply({ tools: env.RELAY_TOKEN ? [
+    if (method === 'tools/list') return reply({ tools: [...(env.RELAY_TOKEN ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The unified panel uses the linked Mac when online and a published snapshot otherwise.' } : t),
       ...relayToolList(),
-    ] : toolList });
+    ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
       if (!isDashboardUri(params?.uri)) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown resource' } });
       return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_MIME, text: dashboardHtml, _meta: DASHBOARD_RESOURCE_META }].map((c) => ({ ...c, uri: params.uri })) });
     }
     if (method === 'tools/call') {
+      if (Object.hasOwn(DEV_OPS, params?.name ?? '')) {
+        try {
+          const { confirm, ...value } = await developmentCall(env, owner, params.name, params.arguments ?? {});
+          return reply({ content: [{ type: 'text', text: JSON.stringify(value) }],
+            ...(confirm ? { _meta: { 'agents-hub/development-confirm': confirm } } : {}) });
+        } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
+      }
       if (env.RELAY_TOKEN && RELAY_OPS[params?.name]) {
         try {
           const { confirm, ...value } = await requestRelay(env, params.name, params.arguments ?? {}) ?? {};
@@ -115,6 +124,7 @@ export async function apiFetch(request, env, dashboardHtml = '') {
           : params.name === 'get_status' ? { ...unknownStatus, ...unavailable }
           : { ...unavailable, status: unknownStatus, agents: [], runs: [], pending: null };
         if (healthRead) {
+          value.development_available = Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true');
           value.relay = await relayStatus(env);
           value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env) });
         }
@@ -172,8 +182,9 @@ export async function hubFetch(request, env, dashboardHtml = '', keys) {
   const { pathname } = new URL(request.url);
   if (pathname.startsWith('/relay/')) return relayFetch(request, env);
   if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
-    if (!(await accessSubject(request, env, keys))) return unauthorized();
-    return apiFetch(request, env, dashboardHtml);
+    const owner = await accessSubject(request, env, keys);
+    if (!owner) return unauthorized();
+    return apiFetch(request, env, dashboardHtml, owner);
   }
   return defaultFetch(request, env);
 }

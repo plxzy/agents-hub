@@ -9,11 +9,11 @@ const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 test('WebSocket relay in real Workers runtime', async (t) => {
   const bundle = await build({ entryPoints: [new URL('./fixtures/relay-runtime.mjs', import.meta.url).pathname], bundle: true, write: false, format: 'esm', external: ['cloudflare:workers'], platform: 'browser' });
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: "relay-test", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-10-01',
-    durableObjects: { RELAY: { className: 'TestRelay', useSQLite: true } }, bindings: { RELAY_TOKEN: token } }] }));
+    durableObjects: { RELAY: { className: 'TestRelay', useSQLite: true } }, bindings: { RELAY_TOKEN: token, DOK_RELAY_TOKEN: 'dok-test-only', DEVELOPMENT_ENABLED: 'true' } }] }));
   t.after(() => mf.dispose());
   const api = async (route, body) => (await mf.dispatchFetch('https://test/' + route, body ? { method: 'POST', body: JSON.stringify(body) } : {})).json();
   const connect = async (session, mode = 'acquire', options = {}) => {
-    const res = await mf.dispatchFetch('https://test/relay/connect', { headers: { upgrade: 'websocket', authorization: 'Bearer ' + (options.token ?? token),
+    const res = await mf.dispatchFetch('https://test/relay/' + (options.dok ? 'dok-dev/' : '') + 'connect', { headers: { upgrade: 'websocket', authorization: 'Bearer ' + (options.token ?? token),
       'x-relay-hello': encode({ v: options.version ?? 1, session, mode, status: { enabled: true, agents: ['helper'] } }) } });
     if (res.status !== 101) { if (![400,401,409].includes(res.status)) console.error('connect failed', res.status, await res.clone().text()); return res; }
     const ws = res.webSocket; const messages = []; const waiting = [];
@@ -25,6 +25,38 @@ test('WebSocket relay in real Workers runtime', async (t) => {
     return { ws, hello, next, send: (m) => ws.send(encode({ v: 1, session, socket: hello.socket, ...m })) };
   };
   let client;
+  await t.test('dok has separate credentials, durable owner grants and offline revocation', async () => {
+    assert.equal((await connect('dok-process-one', 'acquire', { dok: true })).status, 401);
+    const dok = await connect('dok-process-one', 'acquire', { dok: true, token: 'dok-test-only' });
+    const dev = (operation, args = {}, owner = 'owner-one') => api('dev/call', { owner, operation, args });
+    const pending = dev('request_development', { request_id: 'dev-request-one' });
+    const m = await dok.next(); assert.equal(m.operation, 'dev_prepare');
+    const manifest = { host: 'dok-dev', project: 'dev-workflow', agent: 'workflow', conversation_id: 'conversation-0001', workspace_id: 'workspace-0001',
+      implementation_revision: 'revision-0001', knowledge_revision: 'knowledge-0001', policy_digest: 'policy-00001', process_session: 'dok-process-one' };
+    dok.send({ type: 'result', attempt: m.attempt, id: m.id, result: { ok: true, value: manifest } }); await dok.next();
+    const grant = (await pending).value;
+    const panel = (await dev('development_panel')).value;
+    const confirm = panel.confirm[grant.grant_id].token;
+    assert.deepEqual((await dev('get_development', {}, 'other')).value.grants, []);
+    assert.ok((await dev('decide_development', { grant_id: grant.grant_id, decision: 'approve', confirm }, 'other')).error);
+    assert.equal((await dev('decide_development', { grant_id: grant.grant_id, decision: 'approve', confirm })).value.status, 'active');
+    const lease = async (execution_state = 'running', machineToken = 'dok-test-only') => {
+      const r = await mf.dispatchFetch('https://test/relay/dok-dev/lease', { method: 'POST', headers: { authorization: 'Bearer ' + machineToken },
+        body: JSON.stringify({ grant_id: grant.grant_id, policy_digest: manifest.policy_digest, process_session: manifest.process_session, execution_state }) });
+      return { status: r.status, value: await r.json() };
+    };
+    assert.equal((await lease('running', token)).status, 401);
+    assert.equal((await lease()).value.authorized, true);
+    const revoke = (await dev('development_panel')).value.confirm[grant.grant_id].token;
+    dok.ws.close();
+    const revoked = (await dev('decide_development', { grant_id: grant.grant_id, decision: 'revoke', confirm: revoke })).value;
+    assert.equal(revoked.execution_confirmed_stopped, false);
+    await mf.unsafeEvictDurableObject('relay-test', 'TestRelay', { name: 'owner-dok-dev', webSockets: 'hibernate' });
+    assert.equal((await lease()).value.authorized, false);
+    assert.equal((await lease('stopped')).value.stopped, true);
+    const after = (await dev('get_development')).value.grants[0];
+    assert.equal(after.status, 'revoked'); assert.equal(after.execution_confirmed_stopped, true);
+  });
   await t.test('authentication, protocol and ownership validation precede eviction', async () => {
     assert.equal((await connect('process-one', 'acquire', { token: 'publisher-token' })).status, 401);
     assert.match((await api('call', { operation: 'panel_data', args: {} })).error, /offline/);

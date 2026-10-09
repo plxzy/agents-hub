@@ -39,16 +39,17 @@ export async function executeSession(config, task) {
     modelRuntime, model, thinkingLevel: 'medium', noTools: 'builtin', tools: Object.keys(factories), customTools,
     resourceLoader: trustedLoader(sdk, config.prompt), sessionManager,
     settingsManager: sdk.SettingsManager.inMemory({ packages: [], extensions: [], skills: [], enableSkillCommands: false }) });
-  let output = '', calls = [];
+  let output = '', calls = [], failed = false;
   const unsubscribe = session.subscribe(event => {
     if (event.type === 'tool_execution_start') calls.push(event.toolName);
     if (event.type === 'message_end' && event.message.role === 'assistant') {
+      if (['error', 'aborted'].includes(event.message.stopReason)) failed = true;
       output = (event.message.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('\n').slice(0, 64000);
     }
   });
   const abort = () => { void session.abort(); };
   process.once('SIGTERM', abort);
-  try { await session.prompt(task); return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id }; }
+  try { await session.prompt(task); if (failed) throw new Error('Model turn failed'); return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id }; }
   finally { unsubscribe(); process.removeListener('SIGTERM', abort); session.dispose(); }
 }
 
