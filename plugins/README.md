@@ -24,3 +24,15 @@ Installed 2026-10-09 in all three (configs backed up in `~/.local/state/agent-wo
 hand-added user-scope `agents` server was removed (the plugin's `plugin:agents:agents` replaces it). Codex keeps
 its `[mcp_servers.agents]` entry: it has the same name, so Codex lists one server, and it carries
 `tool_timeout_sec = 900`, which long `run_agent` calls need.
+
+## `agents-panel/`: a side panel in Claude Code (a mod)
+
+A Claude Code mod (hooks module, `hooks/register.tsx`): a docked **Agents** pane beside the conversation in
+the terminal and the desktop Code tab. It shows the agent count, running runs, the last 8 runs (press one for its
+output), and what waits for your review with Accept/Reject buttons (your clicks; the model never sees them), plus
+a footer status. It refreshes every 4 s while a run is going, otherwise every 30 s; `/agents-panel` reopens it.
+It draws only: data comes from `agent call open_dashboard | get_run | review_decide` (the operations catalog).
+Claude Code only: Codex and ChatGPT panels need their own extension format, using the same operations.
+
+Check: `claude plugin validate plugins/agents-panel` and `claude plugin test plugins/agents-panel`.
+Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin marketplace update dev-workflow`).

@@ -1,8 +1,19 @@
 {
   "name": "dev-workflow",
-  "owner": { "name": "effeef" },
+  "owner": {
+    "name": "effeef"
+  },
   "description": "Personal plugins from the dev-workflow repo.",
   "plugins": [
-    { "name": "agents", "source": "./agents", "description": "See, run and review your own Pi agents." }
+    {
+      "name": "agents",
+      "source": "./agents",
+      "description": "See, run and review your own Pi agents."
+    },
+    {
+      "name": "agents-panel",
+      "source": "./agents-panel",
+      "description": "Claude Code side panel: running and recent agent runs, run output, review items."
+    }
   ]
 }
