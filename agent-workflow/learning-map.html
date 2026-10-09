@@ -124,7 +124,8 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
     <li class="done"><b>pi-subagents</b><span>experiment 1: named agents + memory</span><em class="pill ok">tried</em></li>
     <li class="done"><b>Pi Fabric</b><span>experiment 2: worker + reviewer</span><em class="pill ok">first pass</em></li>
     <li class="done"><b>Pi Durable</b><span>experiment 3: kill -9 mid-task, resume</span><em class="pill ok">tried</em></li>
-    <li class="now"><b>Pick a base</b><span>try nicobailon pi-subagents (1b), then choose</span><em class="pill now">next</em></li>
+    <li class="done"><b>pi-subagents (nicobailon)</b><span>experiment 1b: richer, sees your agents</span><em class="pill ok">tried</em></li>
+    <li class="now"><b>Pick a base</b><span>try the two subagent packages in the TUI, choose one</span><em class="pill now">next</em></li>
     <li><b>Cloudflare?</b><span>only if something must live while the Mac sleeps</span><em class="pill later">decide</em></li>
     <li><b>Dots sees agents</b><span>a list/read tool Dots can call</span><em class="pill later">later</em></li>
     <li><b>vm</b><span>real project work</span><em class="pill later">later</em></li>
@@ -150,19 +151,19 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
 </section>
 
 <section aria-labelledby="cmp-h">
-  <div class="head"><h2 id="cmp-h">Three ways to run the same helper agent</h2>
+  <div class="head"><h2 id="cmp-h">Four ways to run the same helper agent</h2>
   <p>Same question set, same Mac, 9 Oct. Numbers are single runs, so read them as hints.</p></div>
   <div class="tablebox"><table>
-    <thead><tr><th></th><th>Plain Pi + my wrapper</th><th>pi-subagents 0.19.0</th><th>Pi Fabric 0.110.1</th></tr></thead>
+    <thead><tr><th></th><th>Plain Pi + my wrapper</th><th>tintinweb pi-subagents 0.19.0</th><th>nicobailon pi-subagents 0.76.1</th><th>Pi Fabric 0.110.1</th></tr></thead>
     <tbody>
-      <tr><th>Size</th><td>~300 lines, no deps</td><td>4 deps</td><td><span class="num">231</span> packages, <span class="num">416 MB</span>, own Pi 1.1.0 + Pi Durable inside</td></tr>
-      <tr><th>An agent is</th><td><code>agents/helper.md</code></td><td><code>.pi/agents/helper.md</code> (almost same format)</td><td>written on the fly by the model in a TypeScript program</td></tr>
-      <tr><th>How you call it</th><td><code>agent run helper "…"</code></td><td><code>@helper …</code> in the TUI; from the CLI via the main model</td><td>ask in plain words; model writes <code>agents.run(…)</code></td></tr>
-      <tr><th>Memory</th><td>agent proposes, you accept</td><td>agent writes its own <code>MEMORY.md</code>, no review</td><td>recall over past sessions (not tested)</td></tr>
-      <tr><th>Per-run record</th><td>yes: memory used, tools, tokens, cost</td><td>transcript file only</td><td>yes: turns, tool calls, model, cost per child</td></tr>
-      <tr><th>Permissions</th><td><code>--tools</code> allowlist</td><td><code>tools:</code> per agent, worktree option</td><td><code>readOnly</code>, <code>shell: "deny"</code>, approvals, budgets</td></tr>
-      <tr><th>What we saw</th><td>memory cut tokens <span class="num">20.9k → 14.4k</span>; <code>--continue</code> recalled the last answer</td><td>main model rewrote the task and blocked memory saving; reused memory: <span class="num">6 → 3</span> tool calls</td><td>worked first try in <span class="num">62 s</span>; reviewer caught 1 imprecision; final reply dropped the worker's text</td></tr>
-      <tr><th>Feels like</th><td>a script</td><td>Claude Code's agents inside Pi</td><td>a programmable runtime</td></tr>
+      <tr><th>Size</th><td>~300 lines, no deps</td><td>4 deps</td><td>5 deps; 13 built-in agents, 20 commands</td><td><span class="num">231</span> packages, <span class="num">416 MB</span>, own Pi 1.1.0 + Pi Durable inside</td></tr>
+      <tr><th>An agent is</th><td><code>agents/helper.md</code></td><td><code>.pi/agents/helper.md</code> (almost same format)</td><td><code>.pi/agents/*.md</code>, also finds <code>~/.agents/agents/</code></td><td>written on the fly by the model in a TypeScript program</td></tr>
+      <tr><th>How you call it</th><td><code>agent run helper "…"</code></td><td><code>@helper …</code> in the TUI; from the CLI via the main model</td><td><code>/run helper …</code> (broken headless on Pi 1.1.0) or ask the main model</td><td>ask in plain words; model writes <code>agents.run(…)</code></td></tr>
+      <tr><th>Memory</th><td>agent proposes, you accept</td><td>agent writes its own <code>MEMORY.md</code>, no review</td><td>agent appends to its <code>MEMORY.md</code>, no review</td><td>recall over past sessions (not tested)</td></tr>
+      <tr><th>Per-run record</th><td>yes: memory used, tools, tokens, cost</td><td>transcript file only</td><td>run + mission records, status, cost command</td><td>yes: turns, tool calls, model, cost per child</td></tr>
+      <tr><th>Permissions</th><td><code>--tools</code> allowlist</td><td><code>tools:</code> per agent, worktree option</td><td><code>tools</code>/<code>excludeTools</code>, worktrees, spawn budgets, watchdog</td><td><code>readOnly</code>, <code>shell: "deny"</code>, approvals, budgets</td></tr>
+      <tr><th>What we saw</th><td>memory cut tokens <span class="num">20.9k → 14.4k</span>; <code>--continue</code> recalled the last answer</td><td>main model rewrote the task and blocked memory saving; reused memory: <span class="num">6 → 3</span> tool calls</td><td>delegation: 7 main-model calls, ~54k tokens, 35 s; memory note correct on first try</td><td>worked first try in <span class="num">62 s</span>; reviewer caught 1 imprecision; final reply dropped the worker's text</td></tr>
+      <tr><th>Feels like</th><td>a script</td><td>Claude Code's agents inside Pi</td><td>a full agent team kit</td><td>a programmable runtime</td></tr>
     </tbody>
   </table></div>
 </section>
@@ -236,7 +237,7 @@ footer { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line)
   </dl>
 </section>
 
-<footer>Evidence: <code>evidence/2026-10-09-pi-subagents/</code>, <code>evidence/2026-10-09-pi-fabric/</code>, <code>evidence/2026-10-09-pi-durable/</code>, <code>agent-workflow/README.md</code> in the dev-workflow repo. Test folders: <code>~/Development/pi-dev/experiments/</code>.</footer>
+<footer>Evidence: <code>evidence/2026-10-09-pi-subagents/</code>, <code>evidence/2026-10-09-pi-subagents-nicobailon/</code>, <code>evidence/2026-10-09-pi-fabric/</code>, <code>evidence/2026-10-09-pi-durable/</code>, <code>agent-workflow/README.md</code> in the dev-workflow repo. Test folders: <code>~/Development/pi-dev/experiments/</code>.</footer>
 </div>
 
 <script>
@@ -246,9 +247,9 @@ const LAYERS = {
     found: ["pi-subagents' <code>@mentions</code> skip the main model only inside the TUI", "From the CLI, a leading <code>@</code> is read as a file to attach"],
     next: "Dots or ChatGPT as a client comes at step 7, once there is a small list/read API to call." },
   orch: { title: "Orchestration", q: "How do several agents get named, started, steered and reviewed?",
-    have: ["Experiment 1: tintinweb pi-subagents 0.19.0 (27 Aug, predates Pi 1.0, hence the typebox warning)", "Not yet tried: nicobailon pi-subagents 0.76.1 (6 Oct, Pi 1.0-ready peer deps, far more downloads)", "Experiment 2: Pi Fabric (programs that call agents, councils, actors, budgets)"],
-    found: ["pi-subagents replaces most of my wrapper", "Fabric did worker + reviewer from one plain request, but the model writes the orchestration each time", "In both, the delegating model can change what the agent is told"],
-    next: "Experiment 1b: nicobailon pi-subagents. Then try the winners in the TUI and pick one. Don't run two orchestrators together." },
+    have: ["Experiment 1: tintinweb pi-subagents 0.19.0 (27 Aug, predates Pi 1.0, hence the typebox warning)", "Experiment 1b: nicobailon pi-subagents 0.76.1 (6 Oct): 13 built-in agents, review loops, councils, and it finds your own agents in ~/.agents/agents/", "Experiment 2: Pi Fabric (programs that call agents, councils, actors, budgets)"],
+    found: ["nicobailon: headless /run crashes on Pi 1.1.0 (stale ctx); delegated calls work but cost ~54k main-model tokens", "nicobailon memory saved a correct note on the first try", "pi-subagents replaces most of my wrapper", "Fabric did worker + reviewer from one plain request, but the model writes the orchestration each time", "In both, the delegating model can change what the agent is told"],
+    next: "Try tintinweb and nicobailon in the TUI (direct @mention vs /run) and pick one. Don't run two orchestrators together." },
   harness: { title: "Harness", q: "What does one agent do each turn: prompt, tools, model?",
     have: ["Pi 1.1.0 with your providers and extensions", "Agents as <code>.md</code> files with <code>--tools</code> allowlists, as you already did"],
     found: ["Nothing fundamental changed here. Every option on this page is built on top of plain Pi.", "Fabric ships its own Pi 1.1.0 for child agents"],
