@@ -112,9 +112,9 @@ tokens and cost, so you can see whether memory helped.
 
 ## Not here yet
 
-Cloudflare reporting, a list/read API that Dots or other clients can call, more agents, and a
-writer/reviewer pair. The earlier `contracts/` and `cloudflare/agent-registry/` work is the
-candidate for that later step.
+Running agents from hosted ChatGPT/Dots (they can read the catalog and runs through `agent-readonly-service/`, see
+`evidence/2026-10-09-dots-agents-connector/`; the candidate route for running is OpenAI's Secure MCP Tunnel), memory
+retrieval once notes outgrow the prompt, a writer/reviewer pair, and cloud-only agents (Cloudflare PiHarness).
 
 ## Guards (enforced, not instructed)
 
@@ -154,6 +154,9 @@ calling model as the user's to give.
 (as reported by `list_agents`). Calling apps should pass their project folder so the agent works there
 and continuation uses that project's history. Omit it to use the MCP server's current directory.
 Passing `cwd` for a fixed-workspace agent is an error; the same home-folder restrictions apply.
+
+Hosted ChatGPT and Dots use a separate read-only Worker instead (`../agent-readonly-service/`): `agent` publishes a
+sanitized snapshot after each run and chat when `~/.config/agent-readonly/publish.env` exists.
 
 Registered (2026-10-09) in Claude Code (`claude mcp add -s user agents -- node .../mcp.mjs`) and Codex
 (`codex mcp add agents -- node .../mcp.mjs`). Verified: Claude Code `-p` ran `network` through `run_agent` and relayed
