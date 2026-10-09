@@ -126,6 +126,7 @@ const list = (v, sep, unit) => (Array.isArray(v) ? (v.length ? v.join(sep) : nul
 // ---------- server calls ----------
 function showError(msg) { const e = document.getElementById('error'); e.textContent = msg ?? ''; e.hidden = !msg; }
 async function call(name, args = {}) {
+  if (S.data?.relay && ['start_run', 'rate_run', 'review_decide'].includes(name)) args = { ...args, request_id: crypto.randomUUID() };
   const r = await app.callServerTool({ name, arguments: args });
   const text = r?.content?.find((c) => c.type === 'text')?.text ?? '';
   if (r?.isError) throw new Error(text.replace(/^error: /, ''));
@@ -135,7 +136,14 @@ async function call(name, args = {}) {
 async function refresh() {
   if (S.refreshing || S.closed) return;
   S.refreshing = true;
-  try { setData(await call('open_dashboard')); showError(); }
+  try {
+    let data = await call('open_dashboard');
+    if (data.relay?.online) {
+      try { data = await call('panel_data'); }
+      catch (e) { data.relay.error = e.message; }
+    }
+    setData(data); showError(data.relay?.error);
+  }
   catch (e) { showError(`Could not refresh: ${e.message}`); }
   finally { S.refreshing = false; scheduleRefresh(); }
 }
@@ -160,7 +168,7 @@ function setData(data) {
   render({ passive: true });
 }
 async function loadDetail(id) {
-  try { S.detail = await call('get_run', { run_id: id }); render({ passive: true }); } catch (e) { showError(e.message); }
+  try { S.detail = await call(S.data?.relay?.online && !S.data?.snapshot ? 'panel_run' : 'get_run', { run_id: id }); render({ passive: true }); } catch (e) { showError(e.message); }
 }
 
 // ---------- views ----------
@@ -170,6 +178,7 @@ function chips() {
   const review = st.pending ? st.pending.memory + st.pending.proposals : null;
   const snap = S.data.snapshot;
   return [h('span', { class: 'chip' }, `${st.agents} agents`),
+    S.data.relay ? h('span', { class: 'chip' }, S.data.relay.online ? (S.data.relay.enabled ? 'Mac linked' : 'Mac linked · remote runs off') : 'Mac offline') : null,
     h('span', { class: `chip${st.running ? ' on' : ''}` }, `${st.running} running`),
     h('span', { class: `chip${review ? ' attn' : ''}` }, review === null ? 'review: unknown' : `${review} to review`),
     snap ? h('span', { class: `chip${snap.stale ? ' attn' : ''}`, title: `Published ${snap.published_at ?? '?'}` },
@@ -191,7 +200,7 @@ function agentsView() {
     h('div', { class: 'line' },
       h('span', { class: 'name' }, a.name), h('span', { class: 'grow muted ell' }, a.description),
       a.last_run ? h('span', { class: `pill ${a.last_run.status}` }, a.last_run.status) : null,
-      canRun() ? h('button', { onclick: () => { S.form = { agent: a.name }; render(); } }, 'Run…') : null),
+      canRun() && a.remote_allowed !== false ? h('button', { onclick: () => { S.form = { agent: a.name }; render(); } }, 'Run…') : null),
     h('div', { class: 'meta' }, [a.model, a.guard && `guard: ${a.guard}`, a.workspace === 'here' ? 'works in the folder it is started in' : home(a.workspace),
       a.tools?.length ? `tools: ${a.tools.join(', ')}` : 'no tools', a.last_run && `last run ${ago(a.last_run.started)}`].filter(Boolean).join(' · ')))));
 }
@@ -264,7 +273,7 @@ function reviewView() {
 
 function formView() {
   if (!canRun()) return h('div', { class: 'empty' }, 'Running agents is unavailable on this hosted read-only surface.');
-  const agents = S.data.agents;
+  const agents = S.data.agents.filter((a) => a.remote_allowed !== false);
   const chosen = agents.find((a) => a.name === S.form.agent) ?? agents[0];
   const submit = (e) => {
     e.preventDefault();
@@ -287,7 +296,7 @@ function formView() {
       chosen?.workspace === 'here' ? h('label', {}, 'Project folder (absolute path)', h('input', { name: 'cwd', required: true, placeholder: '/Users/…/Development/project' })) : null,
       h('label', { style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', name: 'continue', style: 'width:auto' }), 'Continue its previous conversation'),
       h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit', disabled: S.busy.has('start') }, S.busy.has('start') ? 'Starting…' : 'Start run'),
-        h('span', { class: 'small muted' }, 'Runs in the background on your Mac; you can close this.'))));
+        h('span', { class: 'small muted' }, S.data?.relay ? 'Runs on your Mac. Keep the relay Terminal open for live access.' : 'Runs on your Mac; you can close this dashboard.'))));
 }
 
 // Background updates (polling) wait while the user is typing in the view, so focus and text are not lost.
@@ -331,7 +340,7 @@ document.getElementById('expand').onclick = () => act('expand', async () => {
 document.getElementById('new').onclick = () => { S.form = { agent: S.form?.agent }; render(); };
 app.ontoolresult = (result) => {
   const data = result?.structuredContent ?? (() => { try { return JSON.parse(result?.content?.[0]?.text ?? ''); } catch { return null; } })();
-  if (data?.agents) setData(data); else refresh();
+  if (data?.agents) { setData(data); if (data.relay?.online) refresh(); } else refresh();
 };
 app.onhostcontextchanged = applyContext;
 app.onteardown = async () => { S.closed = true; clearTimeout(S.poll); return {}; };

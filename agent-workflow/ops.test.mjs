@@ -81,8 +81,7 @@ test('dashboard data and MCP App wiring', async () => {
   const tool = toolList().find((t) => t.name === 'open_dashboard');
   assert.equal(tool._meta.ui.resourceUri, DASHBOARD_URI);
   assert.equal(tool._meta['openai/outputTemplate'], DASHBOARD_URI);
-  assert.deepEqual(tool._meta['openai/ui'].entrypoints, [{ type: 'global' }, { type: 'thread' }]);
-  assert.ok(tool.icons[0].src.startsWith('data:image/svg+xml,'));
+  assert.equal(tool._meta['openai/ui'], undefined, 'only the hosted App owns navigation');
   assert.equal(tool.title, 'Agents on this Mac', 'local entrypoint is distinct from the hosted dashboard');
 
   const handle = createServer({ ctx, html: async () => '<html>dash</html>' });

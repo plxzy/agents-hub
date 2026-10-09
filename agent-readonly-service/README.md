@@ -1,8 +1,9 @@
 # Agents Hub hosted service
 
 A Cloudflare Worker (deployed with the `cf` CLI and `@cloudflare/vite-plugin`) that serves the authenticated,
-sanitized, read-only Agents Hub view of local agents and recent runs to ChatGPT and Dots. Local Pi stays the only
-place agents run; this service cannot run agents or change anything.
+Agents Hub view of local agents and recent runs to ChatGPT and Dots. Local Pi stays the only place agents run.
+The optional foreground outbound Mac relay adds allowlisted starts and app-only review controls to the same hosted entry;
+offline access remains a sanitized read-only snapshot. See `../agent-workflow/LINK.md` for its protocol and limits.
 
 Live: `https://YOUR-HUB.workers.dev`
 
@@ -11,6 +12,7 @@ Live: `https://YOUR-HUB.workers.dev`
 | `GET /health` | none | Liveness and capabilities (`execute: false, mutate: false`) |
 | `POST /mcp` | OAuth 2.1 bearer token | MCP + Agents Hub dashboard resource: `open_dashboard`, `list_agents`, `list_runs`, `get_run`, `get_status`, `resolve_context` |
 | `GET /mcp/v1/agents[/:name]`, `/mcp/v1/runs[/:id]`, `/mcp/v1/context` | OAuth 2.1 bearer token | The same data as REST, beneath the `/mcp` resource |
+| `POST /relay/poll`, `/relay/complete` | Separate machine token | Foreground Mac relay transport |
 | `POST /v1/snapshots` | Bearer publish token | Used only by `publisher.mjs`; keeps the newest 20 snapshots |
 
 **What is published** (`src/snapshot.mjs`): agent name, description, model, tools, skill names, guard, workspace (with
@@ -38,3 +40,8 @@ request (`src/access.mjs`), so preview URLs or a missing Access app fail closed.
 The former OAuth KV namespace was deleted on 2026-10-09.
 
 Tests: `npm test`. Deploy: `cf deploy` (check with `cf deploy --dry-run` first).
+
+With `RELAY_TOKEN` configured, MCP also advertises `start_run`, `get_remote_run` and app-only `panel_data`,
+`panel_run`, `rate_run`, `review_decide`. `/relay/poll` and `/relay/complete` use the separate machine credential,
+outside Access, and the Worker still requires a verified Access assertion for every user MCP call. The minutely
+scheduled handler removes expired transient relay payloads. Apply `migrations/0002_relay.sql` before activation.

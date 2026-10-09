@@ -320,6 +320,12 @@ export const piCommand = (agent, args) => {
   return agent.writePaths ? ['sandbox-exec', ['-p', sandboxProfile(agent), 'pi', ...args]] : ['pi', args];
 };
 
+export function remoteSandbox(agent, env = process.env) {
+  if (env.AGENT_REMOTE_RUN !== '1') return agent;
+  // Even normally unsandboxed read-only helpers cannot inspect the relay/publisher credentials.
+  return { ...agent, writePaths: agent.writePaths ?? [], guard: agent.guard ?? 'readonly' };
+}
+
 export function piArgs(agent, { task, prompt, sessionDir, resume }) {
   return [
     ...guardArgs(agent),
@@ -376,7 +382,7 @@ export function writeRunningMarker(state, { run_id, agent, kind = 'task', task, 
 }
 
 export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd(), runId = newId('r') } = {}) {
-  const agent = resolveWorkspace(getAgent(name, root), cwd);
+  const agent = remoteSandbox(resolveWorkspace(getAgent(name, root), cwd));
   assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
   const memories = useMemory ? loadMemory(agent.memory, root) : [];
   const runsDir = path.join(state, 'runs');
@@ -538,7 +544,9 @@ function flag(args, name) {
 
 async function main(argv) {
   const [cmd, ...args] = argv;
-  if (cmd === 'list') {
+  if (cmd === 'link') {
+    await (await import('./link.mjs')).linkMain(args);
+  } else if (cmd === 'list') {
     for (const a of loadAgents()) console.log(formatAgentListEntry(a));
   } else if (cmd === 'run') {
     const runId = flag(args, '--run-id'); // set by start_run (ops.mjs), which already told the caller this id

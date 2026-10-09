@@ -36,7 +36,7 @@ export const RUNNERS = {
   local: {
     run: (name, task, { resume, cwd, root, state }) => runAgent(name, task, { resume, cwd, root, state }),
     /** Starts `agent run` in the background and returns its run id at once; the run writes its own receipt. */
-    start: (name, task, { resume, cwd, root, state, spawn = nodeSpawn }) => {
+    start: (name, task, { resume, cwd, root, state, remote = false, spawn = nodeSpawn }) => {
       const definition = getAgent(name, root);
       const agent = resolveWorkspace(definition, cwd ?? process.cwd());
       assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
@@ -45,7 +45,7 @@ export const RUNNERS = {
       const log = fs.openSync(path.join(state, 'runs', `${runId}.log`), 'a', 0o600);
       const child = spawn(process.execPath, [AGENT_CLI, 'run', '--run-id', runId, ...(resume ? ['--continue'] : []), name, task], {
         cwd: cwd ?? process.cwd(), detached: true, stdio: ['ignore', log, log],
-        env: { ...process.env, AGENT_HOME: root, AGENT_WORKFLOW_STATE: state },
+        env: { ...process.env, AGENT_HOME: root, AGENT_WORKFLOW_STATE: state, ...(remote ? { AGENT_REMOTE_RUN: '1' } : {}) },
       });
       child.unref();
       // Written here too, so the run is visible before the child gets going.
@@ -100,10 +100,10 @@ export const OPS = [
       + 'Same arguments as run_agent. Use for long tasks or when you should not wait.',
     input: { type: 'object', required: ['agent', 'task'], additionalProperties: false, properties: AGENT_ARGS },
     annotations: { readOnlyHint: false, openWorldHint: true },
-    run: ({ agent, task, cwd, continue: resume = false }, { root, state, spawn }) => {
+    run: ({ agent, task, cwd, continue: resume = false }, { root, state, spawn, remote }) => {
       const definition = getAgent(agent, root);
       validateCwd(definition, cwd);
-      const run_id = runnerFor(definition).start(agent, task, { resume, cwd, root, state, spawn });
+      const run_id = runnerFor(definition).start(agent, task, { resume, cwd, root, state, spawn, remote });
       return { run_id, status: 'running' };
     },
   },

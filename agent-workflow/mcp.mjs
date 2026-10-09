@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DASHBOARD_URI, OPS, defaultContext } from './ops.mjs';
-import { DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS } from './contract.mjs';
+import { DASHBOARD_RESOURCE_META } from './contract.mjs';
 
 const MCP_APP_MIME = 'text/html;profile=mcp-app';
 const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
@@ -14,8 +14,9 @@ const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(va
 export function toolList(ops = OPS) {
   return ops.map((op) => ({
     name: op.name, title: op.title, description: op.description, inputSchema: op.input, annotations: { title: op.title, ...op.annotations },
+    // The hosted App owns navigation. Local tools retain the inline widget without a second global/thread entry.
     ...(op.ui ? { title: 'Agents on this Mac', annotations: { title: 'Agents on this Mac', ...op.annotations },
-      icons: DASHBOARD_ICONS, _meta: DASHBOARD_TOOL_META } : {}),
+      _meta: { ui: { resourceUri: op.ui }, 'openai/outputTemplate': op.ui } } : {}),
   }));
 }
 

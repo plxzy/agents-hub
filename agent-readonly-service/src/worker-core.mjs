@@ -1,5 +1,7 @@
 import { DASHBOARD_URI, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
+import { RELAY_OPS, relayToolList } from '../../agent-workflow/relay-contract.mjs';
+import { relayFetch, relayStatus, requestRelay } from './relay.mjs';
 
 const KEEP_SNAPSHOTS = 20;
 const CAPABILITIES = { discovery: true, status: true, context: true, run: false, mutate: false };
@@ -79,19 +81,31 @@ export async function apiFetch(request, env, dashboardHtml = '') {
     const reply = (result) => json({ jsonrpc: '2.0', id, result });
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
       serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.3.0' },
-      instructions: 'Read-only Agents Hub view of the user’s local agents and runs. Check get_status for freshness; run is explicitly unavailable.' });
+      instructions: env.RELAY_TOKEN
+        ? 'Agents Hub: published read metadata plus a live Mac relay. Only explicitly remote-allowed agents can start. Check get_status for relay availability. Use get_remote_run for relay-started output. Ratings and reviews are user clicks in the panel, never model decisions.'
+        : 'Read-only Agents Hub view of the user’s local agents and runs. Check get_status for freshness; run is explicitly unavailable.' });
     if (method === 'ping') return reply({});
-    if (method === 'tools/list') return reply({ tools: toolList });
+    if (method === 'tools/list') return reply({ tools: env.RELAY_TOKEN ? [
+      ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The unified panel uses the linked Mac when online and a published snapshot otherwise.' } : t),
+      ...relayToolList(),
+    ] : toolList });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
       if (params?.uri !== DASHBOARD_URI) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown resource' } });
       return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_MIME, text: dashboardHtml, _meta: DASHBOARD_RESOURCE_META }] });
     }
     if (method === 'tools/call') {
+      if (env.RELAY_TOKEN && RELAY_OPS[params?.name]) {
+        try {
+          const value = await requestRelay(env, params.name, params.arguments ?? {});
+          return reply({ content: [{ type: 'text', text: JSON.stringify(value) }] });
+        } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
+      }
       const tool = TOOLS.find((x) => x.name === params?.name);
       if (!tool) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool ' + params?.name } });
       try {
         const value = tool.run({ snap, env, meta: m }, params.arguments ?? {});
+        if (params.name === 'open_dashboard' || params.name === 'get_status') value.relay = await relayStatus(env);
         return reply({ content: [{ type: 'text', text: tool.ui ? tool.summary(value) : JSON.stringify(value, null, 2) }], ...(tool.ui ? { structuredContent: value } : {}) });
       } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
     }
@@ -141,6 +155,7 @@ export async function defaultFetch(request, env) {
  */
 export async function hubFetch(request, env, dashboardHtml = '', keys) {
   const { pathname } = new URL(request.url);
+  if (pathname.startsWith('/relay/')) return relayFetch(request, env);
   if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
     if (!(await accessSubject(request, env, keys))) return unauthorized();
     return apiFetch(request, env, dashboardHtml);
