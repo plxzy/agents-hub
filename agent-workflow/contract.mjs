@@ -11,7 +11,7 @@
 //               hosted hub: { published_at, generated_at, stale }.
 //   get_run     the run itself (local: the full receipt; hosted: its brief), plus `snapshot` on the hosted hub.
 
-export const DASHBOARD_URI = 'ui://agents-hub/dashboard.html';
+export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v2.html';
 
 // MCP Extensions: the same app opens from navigation or beside a conversation, without a model call.
 // https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#mcp-app-entrypoints

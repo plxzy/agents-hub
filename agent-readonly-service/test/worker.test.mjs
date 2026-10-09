@@ -51,7 +51,7 @@ test('MCP endpoint lists read-only tools and answers from the latest snapshot', 
   assert.deepEqual(JSON.parse(body.result.content[0].text).agents[0].tools, ['read', 'ls']);
   body = await (await apiFetch(rpc({ id: 3, method: 'tools/call', params: { name: 'get_run', arguments: { run_id: 'r1' } } }), env)).json();
   assert.equal(JSON.parse(body.result.content[0].text).title, 'hi');
-  body = await (await apiFetch(rpc({ id: 4, method: 'resources/list' }), env)).json(); assert.equal(body.result.resources[0].uri, 'ui://agents-hub/dashboard.html');
+  body = await (await apiFetch(rpc({ id: 4, method: 'resources/list' }), env)).json(); assert.equal(body.result.resources[0].uri, 'ui://agents-hub/dashboard-v2.html');
   assert.equal((await apiFetch(rpc({ method: 'notifications/initialized' }), env)).status, 202);
 });
 
