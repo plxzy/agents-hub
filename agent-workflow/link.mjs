@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { callOp, defaultContext, dashboardData } from './ops.mjs';
@@ -32,16 +32,43 @@ function scrub(value) {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, scrub(v)]));
   return value;
 }
+// One-time confirmation codes for the user's own decisions. panel_data hands them to the panel in the result's
+// `_meta` (which hosts give the widget, not the model); a decision without a matching unused code is refused, even
+// if a host ignored the tools' app-only visibility. In memory only: restarting `agent link serve` voids them.
+const CONFIRM_TTL = 30 * 60 * 1000;
+export const confirmations = new Map();
+function issue(kind, target, now = Date.now()) {
+  for (const [k, v] of confirmations) {
+    if (v.expires < now) confirmations.delete(k);
+    else if (v.kind === kind && v.target === target && v.expires - now > CONFIRM_TTL / 2) return k; // panels refresh often
+  }
+  const code = randomBytes(18).toString('base64url');
+  confirmations.set(code, { kind, target, expires: now + CONFIRM_TTL });
+  return code;
+}
+function redeem(code, kind, target) {
+  const c = typeof code === 'string' ? confirmations.get(code) : undefined;
+  if (!c || c.kind !== kind || c.target !== target || c.expires < Date.now()) {
+    throw new Error('This decision needs a click in the Agents Hub panel (refresh the panel and try again).');
+  }
+  confirmations.delete(code);
+}
+// Remote tasks come from outside the Mac and their answers go back out: only agents without a shell or file-changing
+// tools may be started remotely (they then also run under guards/remote.ts).
+const REMOTE_TOOLS = new Set(['read', 'grep', 'find', 'ls']);
+export const remoteSafe = (agent) => Array.isArray(agent.tools) && agent.tools.every((t) => REMOTE_TOOLS.has(t));
+
 export async function executeJob(job, { config, ctx = defaultContext(), journal = path.join(LINK_DIR, 'relay-journal'), execute = callOp } = {}) {
   validateRelay(job.operation, job.args);
   if (typeof job.id !== 'string' || !/^[a-zA-Z0-9_-]{8,80}$/.test(job.id) || !Number.isFinite(job.expires) || job.expires <= Date.now()) throw new Error('Expired or invalid request');
-  const { request_id, ...args } = job.args;
+  const { request_id, confirm, ...args } = job.args;
   const op = RELAY_OPS[job.operation];
   if (!op.read && request_id !== job.id) throw new Error('Request id mismatch');
   if (job.operation === 'start_run') {
     if (config.enabled !== true || !config.agents.includes(args.agent)) throw new Error('Remote runs disabled or agent not allowed on this Mac');
     const agent = getAgent(args.agent, ctx.root);
     if (agent.workspace === 'here') throw new Error('Remote workspace: here agents are not supported yet');
+    if (!remoteSafe(agent)) throw new Error('Agents with a shell or file-changing tools cannot be started remotely');
   }
   const fingerprint = createHash('sha256').update(job.operation + '\n' + JSON.stringify(job.args)).digest('hex');
   const receipt = path.join(journal, job.id + '.json');
@@ -57,10 +84,18 @@ export async function executeJob(job, { config, ctx = defaultContext(), journal 
       return old.value;
     }
   }
+  try {
+    if (job.operation === 'review_decide') redeem(confirm, 'review', args.id);
+    if (job.operation === 'rate_run') redeem(confirm, 'rate', args.run_id);
+  } catch (e) { fs.rmSync(receipt, { force: true }); throw e; } // nothing ran: this request id stays usable
   let value;
   if (job.operation === 'panel_data') {
     value = dashboardData(ctx);
-    value.agents = value.agents.map((a) => ({ ...a, remote_allowed: config.agents.includes(a.name) }));
+    value.agents = value.agents.map((a) => ({ ...a, remote_allowed: config.agents.includes(a.name) && remoteSafe(getAgent(a.name, ctx.root)) }));
+    value.confirm = {
+      review: Object.fromEntries(value.pending.map((p) => [p.id, issue('review', p.id)])),
+      rate: Object.fromEntries(value.runs.filter((r) => r.status !== 'running').map((r) => [r.run_id, issue('rate', r.run_id)])),
+    };
     value.capabilities.run = config.enabled === true && config.agents.length > 0;
     value.relay = { online: true, enabled: config.enabled === true, agents: config.agents };
   } else if (job.operation === 'get_remote_run') {
@@ -97,12 +132,14 @@ export async function serveLink({ configFile = LINK_CONFIG, signal } = {}) {
   }
   fs.writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
   let published = 0;
+  let busyUntil = 0;
   try {
     while (!signal?.aborted) {
       try {
         const config = readLink(configFile);
         const { job } = await post(config, 'poll', { enabled: config.enabled === true, agents: config.agents });
         if (job) {
+          busyUntil = Date.now() + 30000;
           let result;
           try { result = { ok: true, value: await executeJob(job, { config: readLink(configFile) }) }; }
           catch (e) { result = { ok: false, error: e.message }; }
@@ -111,7 +148,9 @@ export async function serveLink({ configFile = LINK_CONFIG, signal } = {}) {
         }
         if (Date.now() - published > 60000) { await publish(); published = Date.now(); }
       } catch (e) { console.error(new Date().toISOString(), e.message); }
-      try { await sleep(2000, undefined, { signal }); } catch (e) { if (e.name !== 'AbortError') throw e; }
+      // Right after a job (a panel usually asks for more) poll again at once, then every 1 s for 30 s, then every 3 s.
+      const pause = busyUntil - Date.now() > 29500 ? 0 : Date.now() < busyUntil ? 1000 : 3000;
+      try { if (pause) await sleep(pause, undefined, { signal }); } catch (e) { if (e.name !== 'AbortError') throw e; }
     }
   } finally { fs.unlinkSync(lock); }
 }

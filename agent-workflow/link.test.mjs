@@ -48,3 +48,27 @@ test('remote helpers get the hard credential sandbox even without write_paths', 
   assert.equal(agent.guard, 'readonly');
   assert.match(sandboxProfile(agent), /\.config\/agent-readonly/);
 });
+
+test('agents with a shell cannot be started remotely, and remote runs load the remote guard', async (t) => {
+  const f = fixture(t); let calls = 0; f.execute = async () => { calls++; return { run_id: 'r-x' }; };
+  fs.writeFileSync(path.join(f.ctx.root, 'agents', 'helper.md'), `---\nname: helper\ntools: bash, read\nworkspace: ${f.ctx.root}\n---\nTest\n`);
+  await assert.rejects(executeJob(job('request-shell'), f), /shell/);
+  assert.equal(calls, 0);
+  const { piArgs } = await import('./agent.mjs');
+  const args = piArgs(remoteSandbox({ name: 'h', tools: ['read'], skills: 'none' }, { AGENT_REMOTE_RUN: '1' }), { task: 't', prompt: 'p', sessionDir: '/tmp/s' });
+  assert.ok(args.some((a) => a.endsWith('guards/remote.ts')));
+});
+
+test('decisions need a one-time code that only panel_data hands out', async (t) => {
+  const f = fixture(t); const { confirmations } = await import('./link.mjs');
+  f.execute = async (name) => (name === 'review_decide' ? 'accepted' : 'rated');
+  const decide = (id, confirm) => executeJob({ id, operation: 'review_decide', expires: Date.now() + 20000,
+    args: { id: 'p-1', decision: 'accept', request_id: id, ...(confirm ? { confirm } : {}) } }, f);
+  await assert.rejects(decide('request-noconf'), /Missing confirm/);
+  await assert.rejects(decide('request-badconf', 'x'.repeat(24)), /click in the Agents Hub panel/);
+  confirmations.set('c'.repeat(24), { kind: 'review', target: 'p-1', expires: Date.now() + 60000 });
+  assert.equal(await decide('request-badconf', 'c'.repeat(24)), 'accepted'); // a refused attempt leaves its id usable
+  await assert.rejects(decide('request-again', 'c'.repeat(24)), /click in the Agents Hub panel/); // one use only
+  confirmations.set('d'.repeat(24), { kind: 'rate', target: 'p-1', expires: Date.now() + 60000 });
+  await assert.rejects(decide('request-kind', 'd'.repeat(24)), /click in the Agents Hub panel/); // wrong kind
+});

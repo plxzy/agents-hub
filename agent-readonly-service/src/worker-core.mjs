@@ -97,8 +97,9 @@ export async function apiFetch(request, env, dashboardHtml = '') {
     if (method === 'tools/call') {
       if (env.RELAY_TOKEN && RELAY_OPS[params?.name]) {
         try {
-          const value = await requestRelay(env, params.name, params.arguments ?? {});
-          return reply({ content: [{ type: 'text', text: JSON.stringify(value) }] });
+          const { confirm, ...value } = await requestRelay(env, params.name, params.arguments ?? {}) ?? {};
+          // Confirmation codes go only to the panel: hosts pass a result's _meta to the widget, never to the model.
+          return reply({ content: [{ type: 'text', text: JSON.stringify(value) }], ...(confirm ? { _meta: { 'agents-hub/confirm': confirm } } : {}) });
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
       const tool = TOOLS.find((x) => x.name === params?.name);

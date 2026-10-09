@@ -50,3 +50,25 @@ test('off switch and allowlist fail closed; unclaimed timed-out work is removed'
   await assert.rejects(requestRelay(env, 'panel_data', {}, { wait: async () => {} }), /response unavailable/);
   assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM relay_jobs').first()).n, 0);
 });
+
+test('confirmation codes reach the panel only in _meta, and an idle heartbeat is not rewritten every poll', async (t) => {
+  const env = fixture(t);
+  const { apiFetch } = await import('../src/worker-core.mjs');
+  const exec = env.DB.prepare;
+  env.DB.prepare = (sql) => (sql.includes('FROM snapshots') ? { first: async () => ({ id: 's', published_at: new Date().toISOString(),
+    payload: JSON.stringify({ generated_at: new Date().toISOString(), agents: [], runs: [] }) }) } : exec(sql));
+  const state = { enabled: true, agents: ['helper'] };
+  await relayFetch(rpc('poll', state), env);
+  const seen = (await env.DB.prepare('SELECT seen FROM relay_status').first()).seen;
+  await relayFetch(rpc('poll', state), env);
+  assert.equal((await env.DB.prepare('SELECT seen FROM relay_status').first()).seen, seen);
+  const call = apiFetch(new Request('https://x/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'panel_data', arguments: {} } }) }), env);
+  for (let n = 0; n < 20; n++) {
+    const { job } = await (await relayFetch(rpc('poll', state), env)).json();
+    if (job) { await relayFetch(rpc('complete', { id: job.id, result: { ok: true, value: { agents: [], confirm: { review: { 'p-1': 'secret-code' } } } } }), env); break; }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  const body = await (await call).json();
+  assert.deepEqual(body.result._meta['agents-hub/confirm'], { review: { 'p-1': 'secret-code' } });
+  assert.doesNotMatch(body.result.content[0].text, /secret-code/);
+});

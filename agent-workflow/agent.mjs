@@ -281,7 +281,8 @@ export function buildSystemPrompt(agent, memories) {
 }
 
 const GUARDS = path.join(path.dirname(fileURLToPath(import.meta.url)), 'guards');
-const guardArgs = (agent) => (agent.guard ? ['-e', path.join(GUARDS, `${agent.guard}-bash.ts`)] : []);
+const guardArgs = (agent) => [...(agent.guard ? ['-e', path.join(GUARDS, `${agent.guard}-bash.ts`)] : []),
+  ...(agent.remote ? ['-e', path.join(GUARDS, 'remote.ts')] : [])];
 /** Environment for the Pi process: guards read the allowed sudo prefixes and protected paths from it. */
 export const agentEnv = (agent, root = ROOT) => ({
   ...process.env,
@@ -323,7 +324,7 @@ export const piCommand = (agent, args) => {
 export function remoteSandbox(agent, env = process.env) {
   if (env.AGENT_REMOTE_RUN !== '1') return agent;
   // Even normally unsandboxed read-only helpers cannot inspect the relay/publisher credentials.
-  return { ...agent, writePaths: agent.writePaths ?? [], guard: agent.guard ?? 'readonly' };
+  return { ...agent, writePaths: agent.writePaths ?? [], guard: agent.guard ?? 'readonly', remote: true };
 }
 
 export function piArgs(agent, { task, prompt, sessionDir, resume }) {

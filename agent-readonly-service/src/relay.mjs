@@ -22,9 +22,11 @@ export async function relayFetch(request, env) {
   const now = Date.now();
   if (new URL(request.url).pathname === '/relay/poll') {
     if (typeof body.enabled !== 'boolean' || !Array.isArray(body.agents) || body.agents.length > 100 || body.agents.some((x) => typeof x !== 'string' || x.length > 100)) return json({ error: 'bad_status' }, 400);
-    await env.DB.prepare('DELETE FROM relay_jobs WHERE expires < ?').bind(now - 300000).run();
-    await env.DB.prepare('INSERT INTO relay_status (id, seen, enabled, agents) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET seen=excluded.seen, enabled=excluded.enabled, agents=excluded.agents')
-      .bind(now, Number(body.enabled), JSON.stringify(body.agents)).run();
+    // Old jobs are removed by the Worker's minutely schedule. The heartbeat is written only when something changed
+    // or every 5 s, so an idle relay costs a few thousand D1 row writes a day instead of one per poll.
+    const agents = JSON.stringify(body.agents);
+    await env.DB.prepare('INSERT INTO relay_status (id, seen, enabled, agents) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET seen=excluded.seen, enabled=excluded.enabled, agents=excluded.agents WHERE relay_status.seen < ? OR relay_status.enabled != excluded.enabled OR relay_status.agents != excluded.agents')
+      .bind(now, Number(body.enabled), agents, now - 5000).run();
     // Atomic claim. Never redeliver a claimed job after a disconnect or Mac crash.
     const job = await env.DB.prepare("UPDATE relay_jobs SET state = 'claimed' WHERE id = (SELECT id FROM relay_jobs WHERE state = 'pending' AND expires > ? ORDER BY created LIMIT 1) RETURNING id, operation, args, expires")
       .bind(now).first();

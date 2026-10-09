@@ -1,5 +1,6 @@
 // Explicit relay surface: no arbitrary shell commands or generic callOp exposed remotely.
 const empty = { type: 'object', properties: {}, additionalProperties: false };
+const confirm = { type: 'string', pattern: '^[A-Za-z0-9_-]{20,64}$', description: 'One-time code from the panel; only the panel has it.' };
 const requestId = { type: 'string', pattern: '^[a-zA-Z0-9_-]{8,80}$', description: 'Reuse only for the exact same request.' };
 export const RELAY_OPS = {
   get_remote_run: { title: 'Get a remote run', read: true,
@@ -16,12 +17,12 @@ export const RELAY_OPS = {
       continue: { type: 'boolean' }, request_id: requestId,
     } }, description: 'Start a remote-allowed agent on the linked Mac. Returns run_id; use get_remote_run for status and output. Requires the Mac online and remote runs enabled. Supply a unique request_id; reuse it only for the exact same request.' },
   rate_run: { title: 'Rate a run', appOnly: true, read: false,
-    input: { type: 'object', required: ['run_id', 'rating', 'request_id'], additionalProperties: false, properties: {
-      run_id: { type: 'string', maxLength: 100 }, rating: { type: 'string', enum: ['good', 'bad'] }, comment: { type: 'string', maxLength: 4000 }, request_id: requestId,
+    input: { type: 'object', required: ['run_id', 'rating', 'request_id', 'confirm'], additionalProperties: false, properties: {
+      run_id: { type: 'string', maxLength: 100 }, rating: { type: 'string', enum: ['good', 'bad'] }, comment: { type: 'string', maxLength: 4000 }, request_id: requestId, confirm,
     } }, description: 'Record a rating only from the user’s explicit click in the panel.' },
   review_decide: { title: 'Review a proposal', appOnly: true, read: false,
-    input: { type: 'object', required: ['id', 'decision', 'request_id'], additionalProperties: false, properties: {
-      id: { type: 'string', maxLength: 120 }, decision: { type: 'string', enum: ['accept', 'reject'] }, reason: { type: 'string', maxLength: 4000 }, request_id: requestId,
+    input: { type: 'object', required: ['id', 'decision', 'request_id', 'confirm'], additionalProperties: false, properties: {
+      id: { type: 'string', maxLength: 120 }, decision: { type: 'string', enum: ['accept', 'reject'] }, reason: { type: 'string', maxLength: 4000 }, request_id: requestId, confirm,
     } }, description: 'Accept or reject a proposal only from the user’s explicit click in the panel.' },
 };
 export function validateRelay(name, args) {
