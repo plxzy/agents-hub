@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { getAgent, loadMemory, buildSystemPrompt } from './agent.mjs';
 import { linuxPolicy, sandboxExecute } from './linux-sandbox.mjs';
 import { DEVELOPMENT, digest } from './dev-grants.mjs';
+import { DEVELOPMENT_RUNTIME, runtimeMatches } from './dev-runtime.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
@@ -53,6 +54,25 @@ export class DevelopmentSessions {
     const s = fs.statfsSync(this.state);
     if (s.bavail * s.bsize < this.limits.freeBytes) throw new Error('Host free-space watermark reached');
   }
+  // Operator-only migration. Deliberately absent from all Hub/host operations.
+  // Stop the managed supervisor first; files and Pi history remain in place.
+  migrate(conversation_id) {
+    if (this.active) throw new Error('Stop execution before migration');
+    const config = this.conversation(conversation_id);
+    if (config.manifest.knowledge_revision !== read(path.join(this.knowledge, 'RELEASE.json')).source_revision) throw new Error('Knowledge migration requires separate review');
+    const agent = { ...getAgent('workflow', this.knowledge), workspace: config.policy.workspace,
+      writePaths: [config.policy.workspace], protectPaths: [], context: this.context };
+    config.policy = linuxPolicy(agent, this.state);
+    const file = path.join(this.state, 'conversations', conversation_id, 'config.json');
+    return (async () => {
+      config.manifest = { ...config.manifest, implementation_revision: this.revision, runtime: DEVELOPMENT_RUNTIME,
+        policy_digest: await digest({ policy: config.policy, prompt: config.prompt, runtime: DEVELOPMENT_RUNTIME, limits: this.limits, revision: this.revision }),
+        process_session: this.processSession };
+      fs.copyFileSync(file, file + '.before-migration-' + randomUUID());
+      save(file, config);
+      return config.manifest;
+    })();
+  }
   async prepare({ conversation_id } = {}) {
     if (this.active) throw new Error('Development host is busy; retry when idle');
     this.room();
@@ -83,7 +103,8 @@ export class DevelopmentSessions {
     const manifest = { host: DEVELOPMENT.host, project: DEVELOPMENT.project, agent: DEVELOPMENT.agent,
       conversation_id: id, workspace_id: hash(workspace), implementation_revision: this.revision,
       knowledge_revision: read(path.join(this.knowledge, 'RELEASE.json')).source_revision,
-      policy_digest: await digest({ policy, prompt, limits: this.limits, revision: this.revision }), process_session: this.processSession };
+      runtime: DEVELOPMENT_RUNTIME,
+      policy_digest: await digest({ policy, prompt, runtime: DEVELOPMENT_RUNTIME, limits: this.limits, revision: this.revision }), process_session: this.processSession };
     save(path.join(base, 'config.json'), { conversation_id: id, policy, prompt, sessions, agentDir, manifest });
     return manifest;
   }
@@ -115,7 +136,7 @@ export class DevelopmentSessions {
       const receipt = { run_id, grant_id, conversation_id, manifest: config.manifest, status: 'running', started_at: Date.now() };
       save(file, receipt); save(requestFile, { fingerprint, run_id });
       const child = spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), path.join(this.state, 'conversations', conversation_id, 'config.json')],
-        { cwd: source, stdio: ['pipe', 'pipe', 'pipe'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
+        { cwd: source, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
       this.active = { child, run_id, grant_id };
       let stopped = false, output = '', bytes = 0, failure, killTimer, renewing = false, diskChecking = false;
       const stop = reason => {
@@ -123,6 +144,15 @@ export class DevelopmentSessions {
         child.kill('SIGTERM'); killTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
       };
       this.active.stop = stop;
+      let runtime;
+      child.on('message', message => {
+        if (message?.type !== 'runtime' || !runtimeMatches(message.runtime, config.manifest.runtime)
+          || message.runtime?.conversation_id !== conversation_id || message.runtime?.policy_digest !== policy_digest) {
+          stop('Pi runtime identity mismatch'); return;
+        }
+        runtime = message.runtime;
+        save(file, { ...receipt, runtime });
+      });
       // This watchdog is outside the credential-owning Pi child and all shell namespaces.
       const watchdog = setInterval(() => { if (performance.now() >= deadline) stop('Execution lease expired'); }, 100);
       const renew = setInterval(async () => {
@@ -150,7 +180,9 @@ export class DevelopmentSessions {
         clearInterval(watchdog); clearInterval(renew); clearInterval(disk); clearTimeout(timeout); clearTimeout(killTimer);
         let result = {};
         try { if (code === 0 && !failure) result = JSON.parse(output); } catch { failure = 'Invalid Pi result'; }
+        if (code === 0 && !failure && (!runtime || !runtimeMatches(result.runtime, config.manifest.runtime))) failure = 'Missing verified Pi runtime';
         save(file, { ...receipt, status: failure || code !== 0 ? 'interrupted' : 'completed', stopped_at: Date.now(),
+          ...(runtime ? { runtime } : {}),
           ...(failure ? { error: failure } : {}), output: safeOutput(result.output ?? ''), tool_calls: result.tool_calls ?? [],
           ...(/^[a-f0-9]{40,64}$/.test(result.commit ?? '') ? { commit: result.commit } : {}) });
         this.active = null;

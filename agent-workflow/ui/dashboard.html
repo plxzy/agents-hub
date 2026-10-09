@@ -233,6 +233,7 @@ function developmentView() {
         h('div', { class: 'small muted' }, `Expires ${new Date(g.expires_at).toLocaleString()}. Shell network: local tests only. Project context is sent to the model provider.`),
         h('div', { class: 'small muted' }, 'This scope permits no merges, deployments or supervisor activation. ChatGPT may apply its own confirmation settings.'),
         h('div', { class: 'meta' }, `Conversation ${g.manifest.conversation_id} · workspace ${g.manifest.workspace_id.slice(0, 12)}`),
+        h('div', { class: 'meta' }, g.manifest.runtime ? `Pi · ${g.manifest.runtime.provider}/${g.manifest.runtime.model} · ${g.manifest.runtime.thinking} thinking` : 'Runtime identity was not recorded by this older grant.'),
         h('details', {}, h('summary', {}, 'Approved revisions'), h('pre', {}, JSON.stringify(g.manifest, null, 2))),
         ...(g.run_ids ?? []).map(run_id => h('button', { onclick: () => act('dev-result', async () => {
           S.devRun = await call('get_development_task', { grant_id: g.grant_id, run_id }); S.devExport = null;
@@ -251,6 +252,7 @@ function developmentView() {
           h('button', { type: 'submit', disabled: !d.host?.online || S.busy.has('dev-task') }, 'Run in this conversation')) : null);
     }),
     S.devRun ? h('div', { class: 'row' }, h('strong', {}, `Task: ${S.devRun.status}`), h('pre', {}, S.devRun.output ?? S.devRun.error ?? S.devRun.run_id),
+      S.devRun.runtime ? h('pre', {}, JSON.stringify(S.devRun.runtime, null, 2)) : null,
       h('button', { onclick: () => act('dev-result', async () => { S.devRun = await call('get_development_task', { grant_id: S.devRun.grant_id, run_id: S.devRun.run_id }); }) }, 'Refresh task'),
       S.devRun.status === 'completed' ? h('button', { onclick: () => act('dev-export', async () => {
         S.devExport = await developmentRequest('export_development', { grant_id: S.devRun.grant_id, run_id: S.devRun.run_id });

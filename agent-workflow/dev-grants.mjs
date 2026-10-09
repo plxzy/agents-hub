@@ -13,8 +13,10 @@ export function validManifest(m) {
   for (const k of ['conversation_id', 'workspace_id', 'implementation_revision', 'knowledge_revision', 'policy_digest', 'process_session']) {
     if (typeof m[k] !== 'string' || !/^[a-zA-Z0-9_.-]{8,128}$/.test(m[k])) throw new Error('Invalid manifest ' + k);
   }
-  return Object.fromEntries(['host', 'project', 'agent', 'conversation_id', 'workspace_id', 'implementation_revision',
-    'knowledge_revision', 'policy_digest', 'process_session'].map(k => [k, m[k]]));
+  if (m.runtime && (m.runtime.engine !== 'pi-sdk' || m.runtime.provider !== 'openai' || m.runtime.model !== 'gpt-6.1-sol' || !['medium', 'high'].includes(m.runtime.thinking))) throw new Error('Invalid runtime identity');
+  return { ...Object.fromEntries(['host', 'project', 'agent', 'conversation_id', 'workspace_id', 'implementation_revision',
+    'knowledge_revision', 'policy_digest', 'process_session'].map(k => [k, m[k]])),
+    ...(m.runtime ? { runtime: { engine: m.runtime.engine, provider: m.runtime.provider, model: m.runtime.model, thinking: m.runtime.thinking } } : {}) };
 }
 export class GrantAuthority {
   constructor(store, { now = Date.now, processSession = () => null } = {}) { this.store = store; this.now = now; this.processSession = processSession; }

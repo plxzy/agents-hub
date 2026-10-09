@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { sandboxExecute } from './linux-sandbox.mjs';
+import { DEVELOPMENT_RUNTIME, observedRuntime, runtimeMatches } from './dev-runtime.mjs';
 
 export function trustedLoader(sdk, prompt) {
   const extensions = { extensions: [], errors: [], runtime: sdk.createExtensionRuntime() };
@@ -20,7 +21,10 @@ export function trustedLoader(sdk, prompt) {
 }
 
 export async function executeSession(config, task) {
+  if (!runtimeMatches(config.manifest.runtime)) throw new Error('Runtime requires a new approved manifest');
   const sdk = await import(config.policy.sdk);
+  const piVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(config.policy.sdk), '../package.json'), 'utf8')).version;
+  let runtime;
   const factories = { read: 'createReadTool', grep: 'createGrepTool', find: 'createFindTool', ls: 'createLsTool',
     write: 'createWriteTool', edit: 'createEditTool', bash: 'createBashTool' };
   const customTools = Object.entries(factories).map(([name, factory]) => {
@@ -28,15 +32,19 @@ export async function executeSession(config, task) {
     return { name, label: name, description: definition.description, parameters: definition.parameters,
       execute: (_id, args, signal) => sandboxExecute(config.policy, name, args, { signal }) };
   });
+  customTools.push({ name: 'session_runtime', label: 'Session runtime',
+    description: 'Read trusted Pi session identity, actual provider/model/thinking and executor. Pi and agent launchers are intentionally absent from sandbox PATH; you are already the workflow agent. This does not launch another agent.',
+    parameters: { type: 'object', properties: {}, additionalProperties: false },
+    execute: async () => ({ content: [{ type: 'text', text: JSON.stringify(runtime) }], details: runtime }) });
   const modelRuntime = await sdk.ModelRuntime.create({ authPath: path.join(os.homedir(), '.pi/agent/auth.json'),
     modelsPath: null, allowModelNetwork: false });
-  const model = modelRuntime.getModel('openai', 'gpt-6.1-sol');
+  const model = modelRuntime.getModel(DEVELOPMENT_RUNTIME.provider, DEVELOPMENT_RUNTIME.model);
   if (!model) throw new Error('Pinned model unavailable');
   const previous = sdk.SessionManager.findById(config.policy.workspace, config.conversation_id, config.sessions);
   const sessionManager = previous ? sdk.SessionManager.open(previous, config.sessions, config.policy.workspace)
     : sdk.SessionManager.create(config.policy.workspace, config.sessions, { id: config.conversation_id });
   const { session } = await sdk.createAgentSession({ cwd: config.policy.workspace, agentDir: config.agentDir,
-    modelRuntime, model, thinkingLevel: 'medium', noTools: 'builtin', tools: Object.keys(factories), customTools,
+    modelRuntime, model, thinkingLevel: DEVELOPMENT_RUNTIME.thinking, noTools: 'builtin', tools: [...Object.keys(factories), 'session_runtime'], customTools,
     resourceLoader: trustedLoader(sdk, config.prompt), sessionManager,
     settingsManager: sdk.SettingsManager.inMemory({ packages: [], extensions: [], skills: [], enableSkillCommands: false }) });
   let output = '', calls = [], failed = false;
@@ -50,11 +58,19 @@ export async function executeSession(config, task) {
   const abort = () => { void session.abort(); };
   process.once('SIGTERM', abort);
   try {
-    await session.prompt(task); if (failed) throw new Error('Model turn failed');
+    // Continuations can restore old settings. Apply the operator-approved setting and
+    // inspect SDK getters before inference or any tool execution.
+    await session.setModel(model);
+    session.setThinkingLevel(DEVELOPMENT_RUNTIME.thinking);
+    runtime = { ...observedRuntime(session, piVersion), host: config.manifest.host,
+      implementation_revision: config.manifest.implementation_revision, policy_digest: config.manifest.policy_digest };
+    process.send?.({ type: 'runtime', runtime });
+    await session.prompt(`Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are already the Pi workflow agent. The shell is an isolated Linux tool sandbox; host launchers and credentials are intentionally hidden. Use session_runtime to read this identity.\n\n${task}`); if (failed) throw new Error('Model turn failed');
+    observedRuntime(session, piVersion);
     const git = await sandboxExecute(config.policy, 'bash', { command: 'git -c core.hooksPath=/dev/null rev-parse HEAD' });
     const commit = git.content?.find(c => c.type === 'text')?.text?.trim();
     if (!/^[a-f0-9]{40,64}$/.test(commit ?? '')) throw new Error('Cannot identify task commit');
-    return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id, commit };
+    return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id, commit, runtime };
   }
   finally { unsubscribe(); process.removeListener('SIGTERM', abort); session.dispose(); }
 }

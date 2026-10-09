@@ -54,6 +54,17 @@ offline; the panel distinguishes recording it from confirming that work stopped.
 Expiry preserves the conversation and files. Continuing requires a new grant.
 An operator runtime upgrade requires explicit conversation migration.
 
+The managed runtime pins `openai/gpt-6.1-sol` with **high** thinking. This overrides
+the reviewed interactive agent's default. New grant manifests expose the requested
+runtime; the worker inspects Pi SDK model/thinking getters before inference and
+fails if they differ. Running and completed receipts carry `runtime` evidence with
+source `trusted-pi-session`. The agent can read it through `session_runtime`; it
+does not need `pi` or `agent` in its sandbox PATH and must not launch itself again.
+An operator release upgrade invalidates grants. Stop the supervisor, install the
+fixed release, explicitly migrate selected conversations with `DevelopmentSessions.migrate`,
+then restart. Migration preserves the clone and Pi transcript and backs up the old
+configuration; execution requires another user approval.
+
 Tools run in separate Linux namespaces with an empty `/proc`, isolated network
 and private temporary home. Local HTTP fixtures work inside one tool invocation.
 Project context still goes to the selected model provider. The installed SDK,

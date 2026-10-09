@@ -31,6 +31,15 @@ test('card scope changes invalidate approval and duplicate input cannot change m
   await assert.rejects(a.decide('owner', g.grant_id, 'approve', token));
   assert.throws(() => a.request('owner', 'request-0001', 'changed-input', manifest));
 });
+test('runtime selection is public and bound to the exact approval', async () => {
+  const {a,manifest,store}=fixture();
+  const runtime={engine:'pi-sdk',provider:'openai',model:'gpt-6.1-sol',thinking:'high'};
+  const g=a.request('owner','runtime-request','runtime-input',{...manifest,runtime});
+  assert.deepEqual(g.manifest.runtime,runtime);
+  const code=await a.issue('owner',g.grant_id,'approve');
+  const changed=store.get(g.grant_id);changed.manifest.runtime.thinking='medium';store.put(g.grant_id,changed);
+  await assert.rejects(a.decide('owner',g.grant_id,'approve',code));
+});
 test('expiry, revocation while disconnected and supervisor restart deny leases', async () => {
   const f = fixture(), { a, g } = f;
   await a.decide('owner', g.grant_id, 'approve', await a.issue('owner', g.grant_id, 'approve'));
