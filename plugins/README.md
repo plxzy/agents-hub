@@ -19,3 +19,8 @@ uses relative paths. In Pi processes that `agent` starts for an agent (`AGENT_RU
 
 After changing the plugin: bump `version` in both manifests, then update it in each app
 (`claude plugin update agents@dev-workflow`, `codex plugin marketplace upgrade dev-workflow`; Pi reads the folder).
+
+Installed 2026-10-09 in all three (configs backed up in `~/.local/state/agent-workflow/backups/`). Claude Code's
+hand-added user-scope `agents` server was removed (the plugin's `plugin:agents:agents` replaces it). Codex keeps
+its `[mcp_servers.agents]` entry: it has the same name, so Codex lists one server, and it carries
+`tool_timeout_sec = 900`, which long `run_agent` calls need.
