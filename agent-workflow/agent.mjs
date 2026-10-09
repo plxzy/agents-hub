@@ -165,6 +165,34 @@ export function loadMemory(scopes, root = ROOT) {
 
 export const listCandidates = (root = ROOT) => readItems(path.join(root, 'memory/candidates'));
 
+function candidateAge(created, now) {
+  const elapsed = now - Date.parse(created);
+  if (!Number.isFinite(elapsed)) return 'age unknown';
+  const seconds = Math.max(0, Math.floor(elapsed / 1000));
+  for (const [unit, size] of [['d', 86400], ['h', 3600], ['m', 60], ['s', 1]]) {
+    if (seconds >= size || size === 1) return `${Math.floor(seconds / size)}${unit} ago`;
+  }
+}
+
+export function formatCandidateList(candidates, now = Date.now()) {
+  const items = candidates.map(({ meta, body }, index) => {
+    const lines = [];
+    let line = '    ';
+    for (const word of body.trim().split(/\s+/)) {
+      if (line.length > 4 && line.length + word.length + 1 > 90) {
+        lines.push(line);
+        line = '    ';
+      }
+      line += `${line.length > 4 ? ' ' : ''}${word}`;
+    }
+    lines.push(line);
+    return `${index + 1}. ${meta.id.slice(-6)} · ${meta.scope} · proposed by ${meta.proposed_by ?? 'unknown'} · ${candidateAge(meta.created, now)}\n`
+      + `   source run: ${meta.source_run ?? 'unknown'}\n${lines.join('\n')}`;
+  });
+  return [`${candidates.length} candidate${candidates.length === 1 ? '' : 's'} waiting for review`, ...items,
+    'agent memory accept <n|id> · agent memory reject <n|id> [reason]'].join('\n\n');
+}
+
 /** Extracts ```remember blocks; an optional first line `scope: x` selects the scope. */
 export function extractRemember(text, agent) {
   const out = [];
@@ -189,10 +217,16 @@ export function saveCandidates(proposals, { agent, runId, root = ROOT }) {
   });
 }
 
-function findCandidate(id, root) {
-  const item = listCandidates(root).find((c) => c.meta.id === id);
-  if (!item) throw new Error(`no candidate ${id}`);
-  return item;
+function findCandidate(selector, root) {
+  const candidates = listCandidates(root);
+  const value = String(selector ?? '');
+  // Consider every interpretation, including all-digit hex suffixes that are also list numbers.
+  const matches = candidates.filter((c, index) => c.meta.id === value
+    || (/^[a-f0-9]{6}$/i.test(value) && c.meta.id.slice(-6).toLowerCase() === value.toLowerCase())
+    || (/^[1-9]\d*$/.test(value) && index + 1 === Number(value)));
+  if (!matches.length) throw new Error(`no candidate ${value}`);
+  if (matches.length > 1) throw new Error(`ambiguous candidate ${value}; use a full id`);
+  return matches[0];
 }
 
 export function acceptCandidate(id, { root = ROOT, scope, supersedes } = {}) {
@@ -200,7 +234,7 @@ export function acceptCandidate(id, { root = ROOT, scope, supersedes } = {}) {
   const meta = { ...item.meta, scope: scope ?? item.meta.scope, status: 'accepted', accepted: new Date().toISOString(), supersedes };
   const dir = scopeDir(meta.scope, root);
   fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, `${id}.md`);
+  const dest = path.join(dir, `${item.meta.id}.md`);
   fs.writeFileSync(dest, formatFrontmatter(meta, item.body));
   fs.rmSync(item.file);
   return dest;
@@ -219,7 +253,7 @@ export function rejectCandidate(id, { root = ROOT, reason } = {}) {
   const item = findCandidate(id, root);
   const dir = path.join(root, 'memory/rejected');
   fs.mkdirSync(dir, { recursive: true });
-  const dest = path.join(dir, `${id}.md`);
+  const dest = path.join(dir, `${item.meta.id}.md`);
   fs.writeFileSync(dest, formatFrontmatter({ ...item.meta, status: 'rejected', rejected: new Date().toISOString(), reason }, item.body));
   fs.rmSync(item.file);
   return dest;
@@ -438,8 +472,9 @@ const USAGE = `usage:
   agent runs [n]                      recent run receipts
   agent show <run_id>
   agent memory                        candidates waiting for review
-  agent memory accept <id> [--scope s] [--supersedes id]
-  agent memory reject <id> [reason...]
+  agent memory accept <n|id> [--scope s] [--supersedes id]
+  agent memory reject <n|id> [reason...]
+    n: current list number; id: full id or unique 6-hex suffix (ambiguous matches refused).
   agent memory add <scope> <text...>   write a note yourself (scope: shared | project:<p> | agent:<a>)
 
 improving over time:
@@ -510,19 +545,19 @@ async function main(argv) {
   } else if (cmd === 'memory') {
     const [sub, id, ...rest] = args;
     if (!sub) {
-      const c = listCandidates();
-      if (!c.length) console.log('no candidates');
-      for (const i of c) console.log(`${i.meta.id}  ${i.meta.scope}  (from ${i.meta.source_run})\n  ${i.body.replace(/\n+/g, ' ')}\n`);
+      console.log(formatCandidateList(listCandidates()));
     } else if (sub === 'accept') {
-      console.log(path.relative(ROOT, acceptCandidate(id, { scope: flag(rest, '--scope'), supersedes: flag(rest, '--supersedes') })));
-      commitHome(`Accept memory ${id}`);
+      const dest = acceptCandidate(id, { scope: flag(rest, '--scope'), supersedes: flag(rest, '--supersedes') });
+      console.log(path.relative(ROOT, dest));
+      commitHome(`Accept memory ${path.basename(dest, '.md')}`);
     } else if (sub === 'add') {
       if (!id || !rest.length) throw new Error(USAGE);
       console.log(addMemory(id, rest.join(' ')));
       commitHome(`Add memory note (${id})`);
     } else if (sub === 'reject') {
-      console.log(path.relative(ROOT, rejectCandidate(id, { reason: rest.join(' ') || undefined })));
-      commitHome(`Reject memory ${id}`);
+      const dest = rejectCandidate(id, { reason: rest.join(' ') || undefined });
+      console.log(path.relative(ROOT, dest));
+      commitHome(`Reject memory ${path.basename(dest, '.md')}`);
     } else throw new Error(USAGE);
   } else if (['feedback', 'eval', 'reflect', 'review'].includes(cmd)) {
     await (await import('./improve.mjs')).cli(cmd, args);

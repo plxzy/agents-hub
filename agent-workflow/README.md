@@ -16,8 +16,8 @@ agent run helper --continue "and how do I run it?"     # same Pi session
 agent run helper --no-memory "..."                      # baseline without reviewed memory
 agent runs                                              # receipts
 agent memory                                            # candidates to review
-agent memory accept <id> [--scope s] [--supersedes old-id]
-agent memory reject <id> [reason]
+agent memory accept <n|id> [--scope s] [--supersedes old-id]
+agent memory reject <n|id> [reason]
 agent memory add <scope> "text"                         # write a note yourself
 node --test agent-workflow/                             # tests
 ```
@@ -91,6 +91,13 @@ self-written memory. `agent chat` loads accepted notes but does not capture prop
    are read-only and propose notes as ```` ```remember ```` blocks; the launcher saves those as
    candidates. Only `agent memory accept` makes them active; `--supersedes` retires an older item.
 4. **Retrieval:** not built. Add it when the notes outgrow the prompt.
+
+`agent memory` shows a count and numbered candidates with their six-hex ID suffix, scope,
+proposer, age, source run, and indented note text wrapped at about 90 columns. Accept/reject
+use the full ID, a unique six-hex suffix, or the current list number; ambiguous matches are
+refused (use the full ID). Numbers follow the displayed filename order and shift after a
+candidate is accepted/rejected, so refresh the list before using another number. `--scope`
+overrides the accepted scope; `--supersedes` still takes the older note's full ID.
 
 Every receipt records which memory IDs were supplied, which were proposed, model, tool calls,
 tokens and cost, so you can see whether memory helped.

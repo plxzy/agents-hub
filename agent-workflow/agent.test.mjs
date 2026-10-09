@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
   agentEnv, assertSandboxAllowed, commitHome, piCommand, acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
-  loadMemory, parseFrontmatter, piArgs, rejectCandidate, runAgent, formatAgentListEntry, resolveWorkspace, sessionDirectory, sandboxProfile,
+  loadMemory, parseFrontmatter, formatFrontmatter, formatCandidateList, piArgs, rejectCandidate, runAgent, formatAgentListEntry, resolveWorkspace, sessionDirectory, sandboxProfile,
 } from './agent.mjs';
 
 function fixture() {
@@ -153,6 +153,82 @@ test('superseded and rejected items are not supplied', async () => {
   const ids = loadMemory(agent.memory, root).map((m) => m.meta.id);
   assert.deepEqual(ids, [b]);
   assert.match(buildSystemPrompt(agent, loadMemory(agent.memory, root)), /new fact/);
+});
+
+test('candidate list is numbered, spaced, wrapped, and includes review context', () => {
+  const now = Date.parse('2026-10-10T12:00:00Z');
+  const item = (id, created, body) => ({ meta: { id, created, scope: 'shared', proposed_by: 'demo', source_run: 'r-demo' }, body });
+  const output = formatCandidateList([
+    item('m-first-abcdef', '2026-10-10T10:00:00Z', 'A long note with evidence. '.repeat(10).trim()),
+    item('m-second-123456', '2026-10-10T11:57:00Z', 'Second\nnote.'),
+  ], now);
+  assert.match(output, /^2 candidates waiting for review\n\n1\. abcdef · shared · proposed by demo · 2h ago\n   source run: r-demo\n/);
+  assert.match(output, /\n\n2\. 123456 .*3m ago\n   source run: r-demo\n    Second note\./);
+  assert.ok(output.split('\n').filter((l) => l.startsWith('    ')).every((l) => l.length <= 90));
+  assert.ok(output.endsWith('agent memory accept <n|id> · agent memory reject <n|id> [reason]'));
+  assert.match(formatCandidateList([], now), /^0 candidates waiting for review\n\nagent memory accept/);
+  assert.match(formatCandidateList([item('m-x-abcdef', 'invalid', 'Note')], now), /^1 candidate waiting for review[\s\S]*age unknown/);
+  for (const [offset, age] of [[86400000, '1d'], [10000, '10s'], [-1000, '0s']]) {
+    assert.ok(formatCandidateList([item('m-x-abcdef', new Date(now - offset).toISOString(), 'Note')], now).includes(`${age} ago`));
+  }
+});
+
+function candidateFixture(root, ids) {
+  const dir = path.join(root, 'memory/candidates');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const id of ids) fs.writeFileSync(path.join(dir, `${id}.md`), formatFrontmatter({
+    id, scope: 'agent:demo', proposed_by: 'demo', source_run: 'r-demo', created: '2026-10-10T10:00:00Z', status: 'candidate',
+  }, `Note ${id}`));
+}
+
+test('accept/reject resolve full ids, suffixes and current numbers without renaming notes', (t) => {
+  const { root } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ids = ['m-a-abcdef', 'm-b-123456', 'm-c-fedcba', 'm-d-654321'];
+  candidateFixture(root, ids);
+  const accepted = acceptCandidate('ABCDEF', { root, scope: 'shared', supersedes: 'm-old' });
+  assert.equal(path.basename(accepted), `${ids[0]}.md`);
+  assert.equal(loadMemory(['shared'], root)[0].meta.supersedes, 'm-old');
+  const rejected = rejectCandidate('2', { root, reason: 'not useful' });
+  assert.equal(path.basename(rejected), `${ids[2]}.md`);
+  assert.equal(parseFrontmatter(fs.readFileSync(rejected, 'utf8')).meta.reason, 'not useful');
+  assert.equal(path.basename(acceptCandidate(ids[1], { root })), `${ids[1]}.md`);
+  assert.equal(path.basename(rejectCandidate('654321', { root })), `${ids[3]}.md`);
+  for (const selector of ['0', '-1', '1', 'abc', undefined]) {
+    assert.throws(() => acceptCandidate(selector, { root }), /no candidate/);
+  }
+});
+
+test('ambiguous suffixes are refused without modifying candidates; full ids still work', (t) => {
+  const { root } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ids = ['m-a-abcdef', 'm-b-abcdef'];
+  candidateFixture(root, ids);
+  assert.throws(() => acceptCandidate('abcdef', { root }), /ambiguous candidate.*full id/);
+  assert.throws(() => rejectCandidate('abcdef', { root }), /ambiguous candidate/);
+  assert.deepEqual(listCandidates(root).map((c) => c.meta.id), ids);
+  acceptCandidate(ids[0], { root });
+  rejectCandidate('abcdef', { root });
+});
+
+test('memory CLI lists candidates and keeps accept flags and reject reasons working', (t) => {
+  const { root } = fixture();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const ids = ['m-a-abcdef', 'm-b-fedcba'];
+  candidateFixture(root, ids);
+  const cli = (...args) => spawnSync(process.execPath, [new URL('./agent.mjs', import.meta.url).pathname, ...args],
+    { encoding: 'utf8', env: { ...process.env, AGENT_HOME: root } });
+  const listed = cli('memory');
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, /2 candidates waiting for review\n\n1\. abcdef/);
+  assert.match(cli().stdout, /accept <n\|id>[\s\S]*unique 6-hex suffix/);
+  const accepted = cli('memory', 'accept', '1', '--scope', 'shared', '--supersedes', 'm-old');
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(accepted.stdout.trim(), `memory/shared/${ids[0]}.md`);
+  assert.equal(loadMemory(['shared'], root)[0].meta.supersedes, 'm-old');
+  const rejected = cli('memory', 'reject', 'fedcba', 'wrong', 'scope');
+  assert.equal(rejected.status, 0, rejected.stderr);
+  assert.equal(parseFrontmatter(fs.readFileSync(path.join(root, 'memory/rejected', `${ids[1]}.md`), 'utf8')).meta.reason, 'wrong scope');
 });
 
 test('continue flag resumes the agent session', () => {
