@@ -388,3 +388,12 @@ test('agents with write_paths run Pi in a sandbox that only allows those writes'
   assert.match(profile, /\(deny file-read\* file-write\* .*"\/h\/.codex\/auth.json"/);
   assert.deepEqual(piCommand({ ...agent, writePaths: null }, ['-p']), ['pi', ['-p']]);
 });
+
+test('runs publish the read-only snapshot only for the real state folder and when configured', async () => {
+  const { publishInBackground } = await import('./agent.mjs');
+  const calls = [];
+  const spawn = (...a) => { calls.push(a); return { unref() {} }; };
+  assert.equal(publishInBackground({ state: '/tmp/not-the-real-state', spawn }), false);
+  assert.equal(publishInBackground({ spawn, config: '/nonexistent/publish.env' }), false);
+  assert.equal(calls.length, 0);
+});

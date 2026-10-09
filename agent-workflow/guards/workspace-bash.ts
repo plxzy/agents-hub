@@ -14,7 +14,7 @@ const protectedPaths: string[] = (() => {
 	try { return JSON.parse(process.env.AGENT_PROTECTED ?? "[]"); } catch { return []; }
 })();
 
-const secrets = /(auth\.json|openai-accounts\.json|multi-auth|\.credentials|credentials\.json|\/\.ssh\b|\/\.aws\b|\/\.netrc|Keychains|\/Cookies\b|(^|[\s/'"])\.env(\.|\b)|security\s+(find-\w+-password|dump-keychain|export))/;
+const secrets = /(auth\.json|agent-readonly\/publish\.env|openai-accounts\.json|multi-auth|\.credentials|credentials\.json|\/\.ssh\b|\/\.aws\b|\/\.netrc|Keychains|\/Cookies\b|(^|[\s/'"])\.env(\.|\b)|security\s+(find-\w+-password|dump-keychain|export))/;
 
 // Checked per segment of a compound command (split on ; && || | and newlines).
 const forbidden: [RegExp, string][] = [

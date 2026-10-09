@@ -1,33 +1,41 @@
-import fs from 'node:fs/promises';
+// Publishes a sanitized snapshot of the local agents and run receipts to the read-only Worker.
+// Reads agents and runs through agent-workflow itself, so the snapshot matches what `agent list` shows.
+// Endpoint and token come from the environment or from ~/.config/agent-readonly/publish.env (mode 600),
+// a folder the agent sandbox cannot read.
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { listRuns, loadAgents } from '../agent-workflow/agent.mjs';
 import { sanitizeSnapshot } from './src/snapshot.mjs';
 
-const home = process.env.AGENT_HOME ?? path.join(process.env.HOME, '.agents');
-const state = process.env.AGENT_WORKFLOW_STATE ?? path.join(process.env.HOME, '.local/state/agent-workflow');
+export const CONFIG = path.join(os.homedir(), '.config/agent-readonly/publish.env');
 
-async function files(dir, suffix) { try { return (await fs.readdir(dir)).filter((x) => x.endsWith(suffix)); } catch { return []; } }
-async function loadAgents() {
-  const dir = path.join(home, 'agents'); const names = await files(dir, '.md'); const result = [];
-  for (const file of names) { try {
-    const source = await fs.readFile(path.join(dir, file), 'utf8'); const frontmatter = source.match(/^---\n([\s\S]*?)\n---/);
-    const data = {}; for (const line of (frontmatter?.[1] ?? '').split('\n')) { const m = line.match(/^([A-Za-z_]+):\s*(.*)$/); if (m) data[m[1]] = m[2].trim(); }
-    data.name ??= file.replace(/\.md$/, ''); result.push(data);
-  } catch {} }
-  return result;
-}
-async function loadRuns() {
-  const names = await files(path.join(state, 'runs'), '.json'); const result = [];
-  for (const file of names) { try { result.push(JSON.parse(await fs.readFile(path.join(state, 'runs', file), 'utf8'))); } catch {} }
-  return result;
+export function readConfig(file = CONFIG, env = process.env) {
+  const values = {};
+  if (fs.existsSync(file)) {
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      const m = /^\s*([A-Z_]+)\s*=\s*(.*?)\s*$/.exec(line);
+      if (m) values[m[1]] = m[2];
+    }
+  }
+  return { endpoint: env.AGENT_READONLY_ENDPOINT ?? values.AGENT_READONLY_ENDPOINT, token: env.AGENT_PUBLISH_TOKEN ?? values.AGENT_PUBLISH_TOKEN };
 }
 
-export async function buildSnapshot(context = []) { return sanitizeSnapshot({ generated_at: new Date().toISOString(), agents: await loadAgents(), runs: await loadRuns(), context }); }
-export async function publish(endpoint, token, context = []) {
-  if (!endpoint || !token) throw new Error('endpoint and token are required');
-  const payload = await buildSnapshot(context);
-  const response = await fetch(`${endpoint.replace(/\/$/, '')}/v1/snapshots`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+export function buildSnapshot({ root, state, context = [] } = {}) {
+  return sanitizeSnapshot({ generated_at: new Date().toISOString(), agents: loadAgents(root), runs: listRuns(state), context });
+}
+
+export async function publish({ endpoint, token } = readConfig(), options = {}) {
+  if (!endpoint || !token) throw new Error(`endpoint and token are required (env or ${CONFIG})`);
+  const response = await fetch(`${endpoint.replace(/\/$/, '')}/v1/snapshots`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(buildSnapshot(options)),
+  });
   if (!response.ok) throw new Error(`publish failed: HTTP ${response.status}`);
   return response.json();
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) publish(process.env.AGENT_READONLY_ENDPOINT, process.env.AGENT_PUBLISH_TOKEN).then((x) => console.log(JSON.stringify(x))).catch((e) => { console.error(e.message); process.exitCode = 1; });
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv.includes('--dry-run')) console.log(JSON.stringify(buildSnapshot(), null, 2));
+  else publish().then((x) => console.log(JSON.stringify(x))).catch((e) => { console.error(e.message); process.exitCode = 1; });
+}

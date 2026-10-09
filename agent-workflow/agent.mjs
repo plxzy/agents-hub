@@ -292,7 +292,7 @@ export const agentEnv = (agent, root = ROOT) => ({
 
 // Credential stores no sandboxed agent may read or write (Pi's own login under ~/.pi stays readable for Pi itself).
 const SECRET_PATHS = ['.ssh', '.aws', '.docker/config.json', '.netrc', '.config/gh', '.config/gcloud', '.codex/auth.json',
-  '.codex/multi-auth', '.claude/.credentials.json', 'Library/Keychains', 'Library/Cookies', 'Library/Application Support/Google/Chrome'];
+  '.codex/multi-auth', '.claude/.credentials.json', '.config/agent-readonly', 'Library/Keychains', 'Library/Cookies', 'Library/Application Support/Google/Chrome'];
 
 /** macOS sandbox profile: writes in the home folder only to write_paths and Pi's own folders; no credential stores. */
 export function sandboxProfile(agent, { home = os.homedir(), state = STATE } = {}) {
@@ -405,7 +405,19 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
     exit_code: exitCode, ...summary, raw_events: rawFile,
   };
   fs.writeFileSync(path.join(runsDir, `${runId}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
+  publishInBackground({ state });
   return receipt;
+}
+
+// Keeps the hosted read-only view (agent-readonly-service) current: after each run or chat, publish a sanitized
+// snapshot in the background when ~/.config/agent-readonly/publish.env exists. Never blocks or fails a run.
+const PUBLISHER = path.join(path.dirname(fileURLToPath(import.meta.url)), '../agent-readonly-service/publisher.mjs');
+export const PUBLISH_CONFIG = path.join(os.homedir(), '.config/agent-readonly/publish.env');
+export function publishInBackground({ state = STATE, spawn = nodeSpawn, config = PUBLISH_CONFIG } = {}) {
+  if (state !== STATE || process.env.AGENT_PUBLISH === '0' || !fs.existsSync(config) || !fs.existsSync(PUBLISHER)) return false;
+  const log = fs.openSync(path.join(state, 'publish.log'), 'a', 0o600);
+  spawn(process.execPath, [PUBLISHER], { detached: true, stdio: ['ignore', log, log] }).unref();
+  return true;
 }
 
 /** Opens an interactive Pi session as the agent (same prompt, tools, memory and session folder). */
@@ -531,6 +543,7 @@ async function main(argv) {
       receipt.memory_proposed = saveCandidates(extractRemember(receipt.all_text, agent), { agent, runId: receipt.run_id });
       delete receipt.all_text;
       fs.writeFileSync(path.join(runsDir, `${receipt.run_id}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
+      publishInBackground();
       console.log(`\nsaved chat as ${receipt.run_id} (${receipt.turns} message(s), $${receipt.usage.cost.toFixed(4)})${receipt.memory_proposed.length ? `, ${receipt.memory_proposed.length} memory proposal(s)` : ''}. Rate it: agent feedback last good|bad "why"`);
     }
   } else if (cmd === 'runs') {
