@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
-import { setTimeout as sleep } from 'node:timers/promises';
+import timers from 'node:timers/promises';
 import { WIRE, PING, PONG, encode, decode, validId, validateStatus } from './relay-wire.mjs';
 
 // Foreground-only. A process acquires once; every ordinary reconnect must resume its durable ownership.
@@ -101,7 +101,7 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
       failures = result.ready ? 0 : failures + 1;
       const cap = Math.min(30000, 1000 * 2 ** Math.min(failures, 5));
       log('Relay disconnected; resuming the same process session.');
-      try { await sleep(Math.max(1000, cap * (0.5 + Math.random() * 0.5)), undefined, { signal }); }
+      try { await timers.setTimeout(Math.max(1000, cap * (0.5 + Math.random() * 0.5)), undefined, { signal }); }
       catch (e) { if (e.name !== 'AbortError') throw e; }
     }
   } finally { clearInterval(snapshots); await commands; }

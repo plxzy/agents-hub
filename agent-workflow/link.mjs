@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { serveSocket } from './link-socket.mjs';
+import { acquireLinkLock } from './link-lock.mjs';
 import { callOp, defaultContext, dashboardData } from './ops.mjs';
 import { getAgent } from './agent.mjs';
 import { RELAY_OPS, validateRelay } from './relay-contract.mjs';
@@ -122,18 +123,10 @@ export async function executeJob(job, { config, ctx = defaultContext(), journal 
   return value;
 }
 
-export async function serveLink({ configFile = LINK_CONFIG, signal } = {}) {
-  const lock = path.join(path.dirname(configFile), 'link.lock');
-  fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-  if (fs.existsSync(lock)) {
-    const pid = Number(fs.readFileSync(lock, 'utf8'));
-    let alive = false; try { process.kill(pid, 0); alive = true; } catch {}
-    if (alive) throw new Error('A relay process is already running');
-    fs.unlinkSync(lock);
-  }
-  fs.writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 });
+export async function serveLink({ configFile = LINK_CONFIG, signal, serve = serveSocket } = {}) {
+  const release = acquireLinkLock(path.join(path.dirname(configFile), 'link.lock'));
   try {
-    await serveSocket({ readConfig: () => readLink(configFile), signal, publish,
+    await serve({ readConfig: () => readLink(configFile), signal, publish,
       execute: async (job, config) => {
         try { return { ok: true, value: await executeJob(job, { config }) }; }
         catch (e) {
@@ -143,7 +136,14 @@ export async function serveLink({ configFile = LINK_CONFIG, signal } = {}) {
         }
       },
     });
-  } finally { fs.unlinkSync(lock); }
+  } finally { release(); }
+}
+
+export async function serveForeground(options = {}) {
+  const controller = new AbortController(), abort = () => controller.abort();
+  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, abort);
+  try { await serveLink({ ...options, signal: controller.signal }); }
+  finally { for (const sig of ['SIGTERM', 'SIGINT']) process.removeListener(sig, abort); }
 }
 
 export async function linkMain(args) {
@@ -158,11 +158,7 @@ export async function linkMain(args) {
     process.exitCode = report.exit_code;
     return;
   }
-  if (command === 'serve') {
-    const controller = new AbortController();
-    for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => controller.abort());
-    return serveLink({ signal: controller.signal });
-  }
+  if (command === 'serve') return serveForeground();
   if (command === 'on' || command === 'off') {
     const c = readLink(); c.enabled = command === 'on'; save(LINK_CONFIG, c);
     console.log(`Remote starts ${c.enabled ? 'enabled' : 'disabled'}; already-started runs continue.`); return;
