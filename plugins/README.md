@@ -51,7 +51,7 @@ The former `agents-hub` plugin package (read-only remote plugin) was removed on 
 ## ChatGPT/Codex panel (MCP Extensions)
 
 Both MCP servers advertise `open_dashboard` as a **global** navigation entry and a **thread** content-tab entry,
-named **Agents Hub dashboard**. These open the same dashboard without asking a model to call a tool. The host
+named **Agents on this Mac** locally and **Agents Hub dashboard** for the hosted App. These open the same dashboard without asking a model to call a tool. The host
 chooses placement: the global entry opens a permanent app tab with a conversation, and the thread entry opens
 beside the current conversation. The normal inline widget still works in other MCP Apps hosts.
 

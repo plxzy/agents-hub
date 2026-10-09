@@ -83,7 +83,7 @@ test('dashboard data and MCP App wiring', async () => {
   assert.equal(tool._meta['openai/outputTemplate'], DASHBOARD_URI);
   assert.deepEqual(tool._meta['openai/ui'].entrypoints, [{ type: 'global' }, { type: 'thread' }]);
   assert.ok(tool.icons[0].src.startsWith('data:image/svg+xml,'));
-  assert.notEqual(tool.title, 'Agents Hub', 'thread entrypoint has a descriptive title');
+  assert.equal(tool.title, 'Agents on this Mac', 'local entrypoint is distinct from the hosted dashboard');
 
   const handle = createServer({ ctx, html: async () => '<html>dash</html>' });
   const call = await handle({ id: 1, method: 'tools/call', params: { name: 'open_dashboard', arguments: {} } });

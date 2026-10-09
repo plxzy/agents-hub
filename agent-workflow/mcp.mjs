@@ -14,7 +14,8 @@ const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(va
 export function toolList(ops = OPS) {
   return ops.map((op) => ({
     name: op.name, title: op.title, description: op.description, inputSchema: op.input, annotations: { title: op.title, ...op.annotations },
-    ...(op.ui ? { icons: DASHBOARD_ICONS, _meta: DASHBOARD_TOOL_META } : {}),
+    ...(op.ui ? { title: 'Agents on this Mac', annotations: { title: 'Agents on this Mac', ...op.annotations },
+      icons: DASHBOARD_ICONS, _meta: DASHBOARD_TOOL_META } : {}),
   }));
 }
 
