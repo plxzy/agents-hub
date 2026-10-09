@@ -30,7 +30,11 @@ allowlist, enabled state, sources and timestamps. Snapshot `capabilities.run` st
 only live panel data exposes controls. Unavailable/malformed/future timestamps never imply healthy age zero. Missing
 run-origin evidence is explicit; sanitized snapshot runs are not automatically relay-origin. CLI and dashboard reuse
 `agent-workflow/health.mjs`; see `../agent-workflow/LINK.md` for doctor input limits and exit codes. This local patch
-has not been deployed.
+has not been deployed. Authenticated MCP initialization, notifications, ping, discovery and dashboard resources work
+before any snapshot is published; snapshot-backed reads still return no_snapshot/503. Health reads return unknown
+snapshot counts and can observe the existing relay independently. On dashboard refresh, hosted snapshot/DO health
+is retained while successful live panel data contributes validated journal-backed history and local runtime metadata;
+a live unknown or incomplete history is never inferred from ordinary recent runs.
 
 **Publishing:** `agent` publishes in the background after every run and chat when
 `~/.config/agent-readonly/publish.env` exists (`AGENT_READONLY_ENDPOINT`, `AGENT_PUBLISH_TOKEN`; log in

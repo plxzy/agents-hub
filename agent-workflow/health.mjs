@@ -61,6 +61,20 @@ export function healthOf(data = {}, { now = Date.now(), snapshotMaxAge = 900000,
   };
 }
 
+/** Keep hosted snapshot/DO observations, adding only journal-backed history and runtime metadata from the live panel. */
+export function dashboardHealth(hosted, live, { now = Date.now() } = {}) {
+  const h = hosted.health ?? healthOf(hosted, { now }), local = live.health;
+  if (!local) return h;
+  const run = local.last_successful_relay_run;
+  const proven = healthOf({ last_successful_relay_run: run?.source === 'relay-journal' && run.historical === true
+    ? { ...run, origin: 'relay-journal' } : null }, { now }).last_successful_relay_run;
+  const history = proven ?? h.last_successful_relay_run;
+  return { ...h, last_successful_relay_run: history,
+    history_limitation: history ? 'historical completion, not a heartbeat' : run ? 'live history lacks valid journal-backed completion evidence'
+      : local.history_limitation ?? h.history_limitation,
+    versions: { ...h.versions, node: typeof local.versions?.node === 'string' ? local.versions.node : h.versions.node } };
+}
+
 export function healthLabels(h) {
   const age = h.snapshot.age_ms === null ? 'age unknown' : `age ${Math.floor(h.snapshot.age_ms / 1000)}s`;
   const allowed = h.allowlist.observed?.join(', ') || (h.allowlist.observed ? 'none' : 'unknown');

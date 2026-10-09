@@ -97,7 +97,7 @@
 <script type="module">/*__HEALTH_BUNDLE__*/</script>
 <script type="module">
 const { App, applyHostStyleVariables } = globalThis.ExtApps;
-const { healthOf, healthLabels } = globalThis.AgentsHealth;
+const { healthOf, healthLabels, dashboardHealth } = globalThis.AgentsHealth;
 
 // ---------- state ----------
 const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null };
@@ -146,7 +146,7 @@ async function refresh() {
   try {
     let data = await call('open_dashboard');
     if (data.relay?.online === true) {
-      try { const live = await call('panel_data'); data = { ...live, health: data.health ?? healthOf(data) }; }
+      try { const live = await call('panel_data'); data = { ...live, health: dashboardHealth(data, live) }; }
       catch (e) { data.relay.error = e.message; }
     }
     setData(data); showError(data.relay?.error);
@@ -164,7 +164,8 @@ function scheduleRefresh() {
 async function act(key, fn) {
   if (S.busy.has(key)) return;
   S.busy.add(key); render();
-  try { await fn(); showError(); } catch (e) { showError(e.message); }
+  // Refresh owns its banner, including a successful snapshot fallback after a failed live read.
+  try { await fn(); if (key !== 'refresh') showError(); } catch (e) { showError(e.message); }
   finally { S.busy.delete(key); render(); }
 }
 

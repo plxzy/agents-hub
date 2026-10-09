@@ -74,14 +74,10 @@ export async function apiFetch(request, env, dashboardHtml = '') {
   if (request.method !== 'POST' || url.pathname !== '/mcp') {
     if (request.method !== 'GET' || !url.pathname.startsWith('/v1/')) return json({ error: 'not_found' }, 404);
   }
-  const snap = await latest(env);
-  if (!snap && url.pathname !== '/mcp') return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
-  const m = snap ? meta(snap, env) : null;
   if (url.pathname === '/mcp') {
     let msg; try { msg = await request.json(); } catch { return json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }, 400); }
     const { id, method, params } = msg ?? {};
-    // Preserve the existing no-snapshot gate for old methods; only the two health reads are additive exceptions.
-    if (!snap && !(method === 'tools/call' && ['get_status', 'open_dashboard'].includes(params?.name))) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
+    // Connection, discovery and UI resources must work before the first snapshot is published.
     if (id === undefined || id === null) return new Response(null, { status: 202 });
     const reply = (result) => json({ jsonrpc: '2.0', id, result });
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
@@ -111,7 +107,8 @@ export async function apiFetch(request, env, dashboardHtml = '') {
       if (!tool) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool ' + params?.name } });
       try {
         const healthRead = params.name === 'open_dashboard' || params.name === 'get_status';
-        if (!snap && !healthRead) return reply({ content: [{ type: 'text', text: 'error: no published snapshot available' }], isError: true });
+        const snap = await latest(env), m = snap ? meta(snap, env) : null;
+        if (!snap && !healthRead) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
         const unknownStatus = { agents: null, runs: null, running: null, pending: null, last_run: null };
         const unavailable = { generated_at: null, capabilities: CAPABILITIES, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
         const value = snap ? tool.run({ snap, env, meta: m }, params.arguments ?? {})
@@ -126,6 +123,9 @@ export async function apiFetch(request, env, dashboardHtml = '') {
     }
     return json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } });
   }
+  const snap = await latest(env);
+  if (!snap) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
+  const m = meta(snap, env);
   if (url.pathname === '/v1/agents') return json({ ...m, ...page(snap.payload.agents, url.searchParams.get('cursor'), url.searchParams.get('limit')) });
   if (url.pathname.startsWith('/v1/agents/')) {
     const item = snap.payload.agents.find((x) => x.name === decodeURIComponent(url.pathname.slice('/v1/agents/'.length)));
