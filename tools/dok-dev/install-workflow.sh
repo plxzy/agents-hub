@@ -3,6 +3,8 @@
 set -euo pipefail
 repo=${1:?usage: install-workflow.sh REPOSITORY KNOWLEDGE_RELEASE}
 knowledge=$(realpath "${2:?knowledge release required}")
+context=${4:-}
+if test -n "$context"; then context=$(realpath "$context"); fi
 test -f "$knowledge/RELEASE.json"
 revision=$(git -C "$repo" rev-parse "${3:-HEAD}^{commit}")
 base="$HOME/.local/share/agent-workflow/releases"
@@ -18,8 +20,8 @@ if test ! -d "$release"; then
 fi
 # The wrapper contains resolved release paths; updating the checkout does not reload it.
 wrapper=$(mktemp "$HOME/.local/bin/.agent-XXXXXX")
-printf '#!/bin/bash\nexport PATH="$HOME/.local/bin:$PATH"\nexport AGENT_HOME=%q\nexec /usr/local/bin/node %q "$@"\n' \
-  "$knowledge" "$release/agent-workflow/agent.mjs" > "$wrapper"
+printf '#!/bin/bash\nexport PATH="$HOME/.local/bin:$PATH"\nexport AGENT_HOME=%q\nexport AGENT_CONTEXT_ROOT=%q\nexec /usr/local/bin/node %q "$@"\n' \
+  "$knowledge" "$context" "$release/agent-workflow/agent.mjs" > "$wrapper"
 chmod 700 "$wrapper"
 if test -e "$HOME/.local/bin/agent"; then
   cp -P "$HOME/.local/bin/agent" "$base/previous-launcher-$(date -u +%Y%m%dT%H%M%SZ)"

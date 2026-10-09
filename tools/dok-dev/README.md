@@ -31,7 +31,7 @@ Mac changes reach it only through an explicit `git push dok main:main`.
 Remote development results use review branches and are never merged automatically.
 
 Operator installation accepts an optional revision as its third argument:
-`bash tools/dok-dev/install-workflow.sh REPO KNOWLEDGE_RELEASE REVISION`.
+`bash tools/dok-dev/install-workflow.sh REPO KNOWLEDGE_RELEASE REVISION [CONTEXT_DIRECTORY]`.
 This activates a new direct launcher; it does not reload the managed supervisor.
 
 ## Chat-approved development sessions
