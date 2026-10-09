@@ -90,6 +90,22 @@ redirections, launchctl, network/VPN/DNS changes, installs, sudo outside `sudo_a
 tells the model to give the user the command instead. Blocked attempts are recorded in run receipts as
 `blocked` and shown to the coach. Tests: `node --test agent-workflow/guards/`.
 
+
+### Developer agents (`guard: workspace` + `write_paths`)
+
+`workflow` (2026-10-09) edits, tests and commits like a developer. Two layers keep that bounded:
+- **Sandbox (hard):** with `write_paths:` in the agent file, `agent` starts Pi under macOS `sandbox-exec`. Writes in the
+  home folder are denied except in `write_paths` and Pi's own folders; credential stores (`~/.ssh`, keychains, cookies,
+  `~/.codex/auth.json`, …) can't be read. Verified: a write to `~` fails with "Operation not permitted".
+- **Guard (policy):** `guards/workspace-bash.ts` blocks sudo, process kills, system/app settings, installs outside the
+  project, git push and history rewrites, mentions of credential files, and the user's own decisions (`agent memory`,
+  `agent feedback`, `agent review accept|reject`). `edit`/`write`/bash file changes to protected paths are blocked:
+  the agent's own definition, accepted/rejected memory, rejected proposals, and `protect_paths:`.
+
+First runs: "what am I working on?" in 13 s / $0.001; a small feature (agent list details) with a test and commit in
+1m46 / $0.01. Lesson: it staged whole files and so committed another session's uncommitted changes in the same file
+(86b27a1); its instructions now require checking `git diff` before staging.
+
 ## Using agents from other apps (`mcp.mjs`)
 
 A dependency-free local stdio MCP server over the same code: `list_agents`, `run_agent`, `list_runs`, `get_run`,
