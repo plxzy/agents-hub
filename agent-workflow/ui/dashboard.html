@@ -85,6 +85,7 @@
     <h1>Agents</h1>
     <div class="chips" id="chips"></div>
     <button id="refresh" title="Refresh">Refresh</button>
+    <button id="expand" title="Full screen" hidden>Expand</button>
     <button id="new" class="primary">Run…</button>
   </header>
   <nav role="tablist" id="tabs"></nav>
@@ -98,7 +99,7 @@ const { App, applyHostStyleVariables } = globalThis.ExtApps;
 
 // ---------- state ----------
 const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null };
-const app = new App({ name: 'AgentsDashboard', version: '0.1.0' }, {}, { autoResize: true });
+const app = new App({ name: 'AgentsDashboard', version: '0.1.0' }, { availableDisplayModes: ['inline', 'fullscreen'] }, { autoResize: true });
 
 // ---------- tiny DOM helper (text only: agent output is never parsed as HTML) ----------
 function h(tag, attrs = {}, ...kids) {
@@ -292,10 +293,20 @@ function applyContext(ctx) {
   if (ctx.styles?.variables && applyHostStyleVariables) applyHostStyleVariables(ctx.styles.variables);
   const i = ctx.safeAreaInsets;
   if (i) for (const side of ['top', 'right', 'bottom', 'left']) document.body.style.setProperty(`--inset-${side}`, `${i[side] ?? 0}px`);
+  // Inline in the chat by default; hosts that offer full screen get a toggle.
+  if (ctx.displayMode) S.mode = ctx.displayMode;
+  if (ctx.availableDisplayModes) S.modes = ctx.availableDisplayModes;
+  const expand = document.getElementById('expand');
+  expand.hidden = !S.modes?.includes('fullscreen');
+  expand.textContent = S.mode === 'fullscreen' ? 'Collapse' : 'Expand';
 }
 if (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.dataset.theme = 'dark';
 
 document.getElementById('refresh').onclick = () => act('refresh', refresh);
+document.getElementById('expand').onclick = () => act('expand', async () => {
+  const r = await app.requestDisplayMode({ mode: S.mode === 'fullscreen' ? 'inline' : 'fullscreen' });
+  applyContext({ displayMode: r?.mode });
+});
 document.getElementById('new').onclick = () => { S.form = { agent: S.form?.agent }; render(); };
 app.ontoolresult = (result) => {
   const data = result?.structuredContent ?? (() => { try { return JSON.parse(result?.content?.[0]?.text ?? ''); } catch { return null; } })();
