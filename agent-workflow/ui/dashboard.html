@@ -31,7 +31,7 @@
   #agents-hub-ui { display: block; width: 100%; margin: 0; min-height: 100%; background: var(--color-background-primary); color: var(--color-text-primary);
     font: 14px/1.45 var(--font-sans); padding: var(--inset-top, 0) var(--inset-right, 0) var(--inset-bottom, 0) var(--inset-left, 0); }
   #agents-hub-ui .app { display: block; width: 100%; min-width: 0; padding: 14px 16px 16px; max-width: 920px; margin: 0 auto; }
-  #agents-hub-ui header { display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin: 0; }
+  #agents-hub-ui .header { display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: 10px; flex-wrap: wrap; margin: 0; }
   #agents-hub-ui h1 { font-size: 16px; font-weight: 600; margin: 0; }
   #agents-hub-ui .chips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
   #agents-hub-ui .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--color-background-secondary); color: var(--color-text-secondary); }
@@ -47,12 +47,12 @@
   #agents-hub-ui button:disabled { opacity: .5; cursor: default; }
   #agents-hub-ui button.primary { background: var(--color-text-primary); color: var(--color-background-primary); border-color: transparent; }
   #agents-hub-ui button.ok { color: var(--color-text-success); } #agents-hub-ui button.no { color: var(--color-text-danger); }
-  #agents-hub-ui nav { display: flex; gap: 2px; margin: 12px 0 10px; border-bottom: 1px solid var(--color-border-secondary); }
-  #agents-hub-ui main, #agents-hub-ui section { display: block; }
-  #agents-hub-ui nav button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 10px; color: var(--color-text-secondary); }
-  #agents-hub-ui nav button[aria-selected="true"] { color: var(--color-text-primary); border-bottom-color: var(--color-text-primary); }
+  #agents-hub-ui .tabs { display: flex; gap: 2px; margin: 12px 0 10px; border-bottom: 1px solid var(--color-border-secondary); }
+  #agents-hub-ui section { display: block; }
+  #agents-hub-ui .tabs button { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 10px; color: var(--color-text-secondary); }
+  #agents-hub-ui .tabs button[aria-selected="true"] { color: var(--color-text-primary); border-bottom-color: var(--color-text-primary); }
   #agents-hub-ui .badge { font-size: 11px; margin-left: 4px; padding: 0 6px; border-radius: 999px; background: var(--color-background-warning); color: var(--color-text-warning); }
-  #agents-hub-ui #view { display: block; width: 100%; min-width: 0; margin: 0; padding: 0; }
+  #agents-hub-ui .view { display: block; width: 100%; min-width: 0; margin: 0; padding: 0; }
   #agents-hub-ui .list { display: flex; width: 100%; min-width: 0; flex-direction: column; gap: 6px; margin: 0; padding: 0; }
   #agents-hub-ui .row { display: block; width: 100%; min-width: 0; margin: 0; border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 9px 11px; background: var(--color-background-primary); }
   #agents-hub-ui .row.click { cursor: pointer; } #agents-hub-ui .row.click:hover { background: var(--color-background-secondary); }
@@ -89,15 +89,15 @@
 <body>
 <div id="agents-hub-ui">
 <div class="app">
-  <header>
+  <div class="header">
     <h1>Agents Hub</h1>
     <div class="chips" id="chips"></div>
     <button id="refresh" title="Refresh">Refresh</button>
     <button id="expand" title="Full screen" hidden>Expand</button>
     <button id="new" class="primary" hidden>Run…</button>
-  </header>
-  <nav role="tablist" id="tabs"></nav>
-  <main id="view"><div class="empty">Loading…</div></main>
+  </div>
+  <div class="tabs" role="tablist" id="tabs"></div>
+  <div class="view" id="view"><div class="empty">Loading…</div></div>
   <div class="note" id="error" role="status" aria-live="polite" hidden></div>
 </div>
 </div>

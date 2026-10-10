@@ -46,7 +46,11 @@ test('the dashboard inlines the MCP Apps bridge and loads nothing from the netwo
 test('the dashboard isolates its styles from the embedding host', () => {
   const html = dashboardHtml();
   assert.match(html, /<div id="agents-hub-ui">\s*<div class="app">/);
-  assert.match(html, /#agents-hub-ui header \{ display: flex;[^}]*align-items: flex-start;/);
+  assert.match(html, /<div class="header">/);
+  assert.match(html, /#agents-hub-ui \.header \{ display: flex;[^}]*align-items: flex-start;/);
+  assert.doesNotMatch(html, /<header[ >]/);
+  assert.doesNotMatch(html, /<nav[ >]/);
+  assert.doesNotMatch(html, /<main[ >]/);
   assert.match(html, /#agents-hub-ui \.list \{ display: flex; width: 100%;/);
   assert.match(html, /#agents-hub-ui \.row \{ display: block; width: 100%;/);
   assert.match(html, /#agents-hub-ui \.row\s*\{/);
