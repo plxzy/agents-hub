@@ -22,14 +22,14 @@ const error = atom({ plugin: 'agents-panel', key: 'error' } as const, null)
 const tab = atom({ plugin: 'agents-panel', key: 'tab' } as const, 'runs')
 const rejecting = atom({ plugin: 'agents-panel', key: 'rejecting' } as const, null)
 const form = atom({ plugin: 'agents-panel', key: 'form' } as const, null)
-const localAgents = atom({ plugin: 'agents-panel', key: 'localAgents' } as const, [])
+const starting = atom({ plugin: 'agents-panel', key: 'starting' } as const, false)
 
 // The module's own: the session's folder (for agents that work "here") and the one refresh timer.
 let sessionCwd = ''
 let timer: { cancel(): void } | undefined
 
 async function call($: Engine, op: string, args: Record<string, unknown> = {}) {
-  const { exitCode, stdout, stderr } = await $.process.run([NODE, AGENT, 'call', op, JSON.stringify(args)], { timeoutMs: 20000 })
+  const { exitCode, stdout, stderr } = await $.process.run([NODE, AGENT, 'call', op, JSON.stringify(args)], { timeoutMs: 40000 })
   if (exitCode !== 0) throw new Error((stderr || stdout).trim().split('\n').pop() || `agent call ${op} failed`)
   return JSON.parse(stdout)
 }
@@ -58,10 +58,13 @@ async function refresh($: Engine): Promise<Snapshot | null> {
   try {
     const d = await call($, 'open_dashboard')
     const runs: Run[] = (d.runs ?? []).map((r: Run) => ({
-      run_id: r.run_id, agent: r.agent, status: r.status, task: firstLine(r.task ?? (r as Run & { title?: string }).title, 200), started: r.started, ended: r.ended, tool_calls: r.tool_calls,
+      run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: firstLine(r.task ?? (r as Run & { title?: string }).title, 200), started: r.started, ended: r.ended, tool_calls: r.tool_calls,
     }))
     const snap: Snapshot = {
       at: d.generated_at,
+      runnerSelection: d.runner_selection === 1,
+      targets: (d.run_targets ?? []).map((t: any) => ({ ...t, agents: (t.agents ?? []).map((a: any) => ({ ...a, here: a.workspace === 'here' })) })),
+      startRequests: d.start_requests ?? [],
       source: d.source ?? 'local',
       decisionMessage: d.decision_message ?? '',
       counts: { running: d.status?.running ?? runs.filter(r => r.status === 'running').length,
@@ -91,7 +94,7 @@ async function tick($: Engine) {
   timer?.cancel()
   const snap = await refresh($)
   const shown = await read($, detail)
-  if (shown?.status === 'running') await openRun($, shown.run_id)
+  if (shown && ['running', 'unknown'].includes(shown.status)) await openRun($, shown.run_id)
   timer = $.clock.after(snap?.running.length ? FAST_MS : SLOW_MS, () => void tick($))
 }
 
@@ -101,9 +104,9 @@ async function openRun($: Engine, runId: string) {
     const text = String(r.output ?? r.error ?? (r.status === 'running' ? '_Still running…_' : '_No output._'))
     const took = r.ended && r.started ? span(Date.parse(r.ended) - Date.parse(r.started)) : ''
     const tokens = r.usage?.total_tokens ?? r.usage?.totalTokens
-    const meta = [String(r.model ?? '').split('/').pop(), took, r.tool_calls != null && `${r.tool_calls} tool calls`, tokens && `${tokens} tokens`]
+    const meta = [r.runner ?? 'mac', String(r.model ?? '').split('/').pop(), took, r.tool_calls != null && `${r.tool_calls} tool calls`, tokens && `${tokens} tokens`]
       .filter(Boolean).join(' · ')
-    await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, task: String(r.task ?? r.title ?? ''), text: text.slice(0, 20000), meta }))
+    await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: String(r.task ?? r.title ?? ''), text: text.slice(0, 20000), meta }))
   } catch (err) {
     await fail($)(err)
   }
@@ -122,29 +125,38 @@ async function decide($: Engine, id: string, decision: 'accept' | 'reject', reas
 }
 
 async function start($: Engine, f: Form, task: string) {
-  if (!task.trim()) return
+  if (!task.trim() || await read($, starting)) return
   try {
-    const args: Record<string, unknown> = { agent: f.agent, task: task.trim() }
-    if (f.cwd) args.cwd = f.cwd
-    const { run_id } = await call($, 'start_run', args)
+    const snap = await read($, snapshot)
+    if (!snap?.runnerSelection) throw new Error('Update the local operations before selecting a runner.')
+    const target = snap.targets.find(t => t.id === f.runner), agent = target?.agents.find(a => a.name === f.agent)
+    if (!target?.available || !agent || agent.reason) throw new Error(target?.reason ?? agent?.reason ?? 'Select an available agent.')
+    await update($, starting, () => true)
+    const args: Record<string, unknown> = { runner: f.runner, agent: f.agent, task: task.trim(), request_id: crypto.randomUUID() }
+    if (f.runner === 'mac' && f.cwd) args.cwd = f.cwd
+    const result = await call($, 'start_selected_run', args)
+    await tick($)
+    if (!result.run_id) throw new Error(result.message ?? 'Start unresolved. Check the saved request below.')
     await update($, form, () => null)
     await update($, tab, () => 'runs' as Tab)
+    await openRun($, result.run_id)
+  } catch (err) { await fail($)(err) }
+  finally { await update($, starting, () => false) }
+}
+
+async function checkStart($: Engine, requestId: string) {
+  try {
+    const result = await call($, 'get_selected_start', { request_id: requestId })
     await tick($)
-    await openRun($, run_id)
-  } catch (err) {
-    await fail($)(err)
-  }
+    if (result.run_id) await openRun($, result.run_id)
+    else throw new Error(result.message ?? 'Start still unresolved; no new task was submitted.')
+  } catch (err) { await fail($)(err) }
 }
 
 async function openStart($: Engine) {
-  try {
-    const agents = await call($, 'list_agents')
-    await update($, localAgents, () => agents.map((a: { name: string; description?: string; workspace?: string }) => ({
-      name: a.name, description: firstLine(a.description, 120), here: a.workspace === 'here',
-    })))
-    await update($, form, () => null)
-    await update($, tab, () => 'start' as Tab)
-  } catch (err) { await fail($)(err) }
+  await refresh($)
+  await update($, form, () => ({ runner: 'dok', agent: '', cwd: '' }))
+  await update($, tab, () => 'start' as Tab)
 }
 
 export const register: Register = on => {
@@ -175,7 +187,7 @@ export const register: Register = on => {
     const current = await read($, tab)
     const rejectId = await read($, rejecting)
     const f = await read($, form)
-    const locals = await read($, localAgents)
+    const isStarting = await read($, starting)
     const now = snap ? Date.parse(snap.at) : 0
     const width = Math.max(30, (e.props.bodyColumns ?? 50) - 6)
 
@@ -235,7 +247,7 @@ export const register: Register = on => {
       <Box key={`row-${r.run_id}`} flexDirection="column" paddingX={1} hover={{ backgroundColor: 'subtle' }}>
         <Box flexDirection="row" gap={1} justifyContent="space-between">
           <Box flexDirection="row" gap={1}>
-            <Text color={statusColor(r.status)}>{GLYPH[r.status] ?? '·'}</Text>
+            <Text color={statusColor(r.status)}>{`${GLYPH[r.status] ?? '·'} ${r.runner ?? 'mac'}`}</Text>
             <Button key={`run-${r.run_id}`} plain onPress={() => void openRun($, r.run_id)}>{r.agent}</Button>
           </Box>
           <Text dimColor>{r.status === 'running' ? `running ${ago(r.started, now)}` : `${ago(r.ended ?? r.started, now)} ago`}</Text>
@@ -300,18 +312,38 @@ export const register: Register = on => {
       </Box>
     )
 
-    const chosen: AgentInfo | undefined = locals.find(a => a.name === f?.agent) ?? locals[0]
-    const startView = snap && chosen && Input && Select && (
+    const runner = f?.runner ?? 'dok'
+    const target = snap?.targets.find(t => t.id === runner)
+    const choices = target?.agents ?? []
+    const chosen = choices.find(a => a.name === f?.agent) ?? choices[0]
+    const startView = snap && Input && Select && (
       <Box flexDirection="column" gap={1} borderStyle="round" borderDimColor paddingX={1}>
-        <Text bold>Runs on this Mac</Text>
-        <Select key="agent" label="Agent" value={chosen.name}
-          options={locals.map(a => ({ key: `opt-${a.name}`, value: a.name, label: a.name }))}
-          onSelect={(value: string) => void update($, form, () => ({ agent: value, cwd: locals.find(a => a.name === value)?.here ? sessionCwd : '' }))} />
-        <Text dimColor wrap="wrap">{chosen.description}</Text>
-        {chosen.here && <Text dimColor wrap="wrap">{`Works in this session's folder: ${sessionCwd}`}</Text>}
-        <Input key="task" label="Task" placeholder="What should it do?" submitLabel="Start"
-          onSubmit={(value: string) => void start($, { agent: chosen.name, cwd: chosen.here ? sessionCwd : '' }, value)} />
-        <Text dimColor>{snap.source === 'local' ? 'Runs in the background on this Mac.' : 'Shares running status and the final receipt with the Hub.'}</Text>
+        <Text bold>{runner === 'mac' ? 'Runs on this Mac' : 'Runs on dok'}</Text>
+        {!snap.runnerSelection && <Text color="error">Update the local operations before selecting a runner.</Text>}
+        <Select key="runner" label="Runner" value={runner}
+          options={[{ key: 'dok', value: 'dok', label: 'dok' }, { key: 'mac', value: 'mac', label: 'This Mac' }]}
+          onSelect={(value: string) => { if (!isStarting) void update($, form, () => ({ runner: value as 'mac' | 'dok', agent: '', cwd: '' })) }} />
+        {target?.reason && <Text color="warning" wrap="wrap">{target.reason}</Text>}
+        {chosen && <Select key="agent" label="Agent" value={chosen.name}
+          options={choices.map(a => ({ key: `opt-${a.name}`, value: a.name, label: a.name }))}
+          onSelect={(value: string) => { if (!isStarting) void update($, form, () => ({ runner, agent: value, cwd: '' })) }} />}
+        {chosen && <Text dimColor wrap="wrap">{chosen.description}</Text>}
+        {chosen?.reason && <Text color="warning" wrap="wrap">{chosen.reason}</Text>}
+        <Text dimColor wrap="wrap">{runner === 'mac'
+          ? `Local directory: ${chosen?.here ? sessionCwd : chosen?.workspace ?? 'not selected'}`
+          : `Remote checkout: ${chosen?.repo ?? 'not available'}. Tasks that change files return review branches; this Mac's working tree is untouched.`}</Text>
+        {chosen?.model && <Text dimColor>{`Model: ${chosen.model}`}</Text>}
+        <Input key="task" label="Task" placeholder="What should it do?" submitLabel={isStarting ? 'Starting…' : 'Start'}
+          onSubmit={(value: string) => void start($, { runner, agent: chosen?.name ?? '', cwd: runner === 'mac' && chosen?.here ? sessionCwd : '' }, value)} />
+        {isStarting && <Text dimColor>Waiting for the original start response…</Text>}
+        {snap.startRequests.map(r => (
+          <Box key={`request-${r.request_id}`} flexDirection="column">
+            <Text wrap="wrap">{`${r.runner} · ${r.state} · ${firstLine(r.task, 80)}`}</Text>
+            <Text dimColor>{r.request_id}</Text>
+            {r.run_id ? <Button key={`request-run-${r.request_id}`} onPress={() => void openRun($, r.run_id!)}>Open run</Button>
+              : r.state === 'unknown' ? <Button key={`check-${r.request_id}`} onPress={() => void checkStart($, r.request_id)}>Check original request</Button> : <Text dimColor>{r.message}</Text>}
+          </Box>
+        ))}
       </Box>
     )
 
@@ -326,7 +358,6 @@ export const register: Register = on => {
         {current === 'review' && reviewView}
         {current === 'agents' && agentsView}
         {current === 'start' && startView}
-        {current === 'start' && !chosen && <Text dimColor>No agents configured on this Mac.</Text>}
       </Box>
     )
   })

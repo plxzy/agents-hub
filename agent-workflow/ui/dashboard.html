@@ -93,7 +93,7 @@
   </header>
   <nav role="tablist" id="tabs"></nav>
   <main id="view"><div class="empty">Loading…</div></main>
-  <div class="note" id="error" hidden></div>
+  <div class="note" id="error" role="status" aria-live="polite" hidden></div>
 </div>
 <!-- MCP Apps bridge, inlined by ui/dashboard.mjs (hosts block script URLs); its own module so names can't clash. -->
 <script type="module">/*__EXT_APPS_BUNDLE__*/</script>
@@ -212,8 +212,8 @@ function chips() {
       h('summary', {}, runner), h('ul', {}, ...details.map((text) => h('li', {}, text))))];
 }
 // Only explicit capabilities can expose Run controls.
-const canRun = () => S.data?.capabilities?.run === true && (!S.data?.relay || S.data.relay.online === true && S.data.relay.enabled === true);
-const allowedForRun = (a) => S.data?.relay ? a.remote_allowed === true : a.remote_allowed !== false;
+const canRun = () => S.data?.transport === 'mac' ? S.data.runner_selection === 1 : S.data?.capabilities?.run === true && (!S.data?.relay || S.data.relay.online === true && S.data.relay.enabled === true);
+const allowedForRun = (a) => S.data?.transport === 'mac' ? true : S.data?.relay ? a.remote_allowed === true : a.remote_allowed !== false;
 const canDecide = () => S.data?.capabilities?.mutate === true;
 
 function tabs() {
@@ -287,7 +287,7 @@ function runsView() {
       h('span', { class: `pill ${r.status}` }, r.status === 'running' ? [h('span', { class: 'spin' }), ' running'] : r.status),
       h('span', { class: 'name' }, r.agent), h('span', { class: 'grow ell' }, r.title ?? firstLine(r.task)),
       r.feedback ? h('span', { class: 'small muted' }, r.feedback === 'good' ? '👍' : '👎') : null),
-    h('div', { class: 'meta' }, [r.kind !== 'task' && r.kind, ago(r.started), r.status !== 'running' && `${r.tool_calls} tool call(s)`,
+    h('div', { class: 'meta' }, [r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null), r.kind !== 'task' && r.kind, ago(r.started), r.status !== 'running' && `${r.tool_calls} tool call(s)`,
       r.blocked > 0 && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')))));
 }
 
@@ -309,7 +309,7 @@ function detailView() {
     r.status === 'running' ? h('div', { class: 'meta' }, h('span', { class: 'spin' }), ` started ${ago(r.started)}; this updates on its own`) : null,
     output ? h('pre', {}, output) : null,
     h('dl', {}, ...[
-      ['model', r.model], ['started', r.started && new Date(r.started).toLocaleString()], ['tools', list(r.tool_calls, ', ', 'call(s)')],
+      ['runner', r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null)], ['model', r.model], ['started', r.started && new Date(r.started).toLocaleString()], ['tools', list(r.tool_calls, ', ', 'call(s)')],
       ['commands', r.commands?.length ? r.commands.join('\n') : null], ['blocked', list(r.blocked, '\n', 'attempt(s)')],
       ['memory used', r.memory_supplied?.length], ['memory proposed', r.memory_proposed?.length ? `${r.memory_proposed.length} (see Review)` : null],
       ['tokens', r.usage?.totalTokens ?? r.tokens], ['workspace', r.workspace && home(r.workspace)],
@@ -343,31 +343,67 @@ function reviewView() {
 }
 
 function formView() {
-  if (!canRun()) return h('div', { class: 'empty' }, 'Run is unavailable here. Remote starts need dok online, enabled, and ready to run the selected agent.');
-  const agents = S.data.agents.filter(allowedForRun);
-  const chosen = agents.find((a) => a.name === S.form.agent) ?? agents[0];
-  const submit = (e) => {
+  const local = S.data?.transport === 'mac';
+  const supported = !local || S.data.runner_selection === 1;
+  S.form.runner ??= 'dok';
+  const runner = local ? S.form.runner : 'dok';
+  const target = S.data.run_targets?.find(t => t.id === runner);
+  const agents = target?.agents ?? (!local ? S.data.agents.filter(allowedForRun) : []);
+  const chosen = agents.find(a => a.name === S.form.agent) ?? agents[0];
+  const available = supported && (target ? target.available : canRun()) && chosen && !chosen.reason;
+  const reason = !supported ? 'Update the local operations before selecting a runner.' : target?.reason ?? chosen?.reason;
+  const submit = e => {
     e.preventDefault();
-    const f = new FormData(e.currentTarget);
-    const args = { agent: f.get('agent'), task: String(f.get('task') ?? '').trim() };
-    if (!args.task) return showError('Write a task first.');
-    if (f.get('cwd')) args.cwd = String(f.get('cwd')).trim();
-    if (f.get('continue')) args.continue = true;
+    if (S.busy.has('start')) return;
+    if (!available) return showError(reason ?? 'Select an available agent.');
+    const task = (S.form.task ?? '').trim();
+    if (!task) return showError('Write a task first.');
+    const args = { agent: chosen.name, task };
+    const submittedForm = S.form;
+    if (local) {
+      args.runner = runner; args.request_id = S.form.request_id ??= crypto.randomUUID();
+      if (runner === 'mac' && chosen.workspace === 'here') args.cwd = (S.form.cwd ?? '').trim();
+      if (runner === 'mac' && S.form.continue) args.continue = true;
+    }
     act('start', async () => {
-      const { run_id } = await call('start_run', args);
-      S.form = null; S.tab = 'runs'; S.detail = { run_id, status: 'running' };
-      await refresh(); await loadDetail(run_id);
+      const result = await call(local ? 'start_selected_run' : 'start_run', args);
+      await refresh();
+      if (!result.run_id) {
+        // The durable client journal owns this identity even after this form closes.
+        submittedForm.request_id = result.request_id ?? submittedForm.request_id;
+        throw new Error(result.message ?? 'Start unresolved. Check the original request below.');
+      }
+      S.form = null; S.tab = 'runs'; S.detail = { run_id: result.run_id, status: result.status };
+      await loadDetail(result.run_id);
     });
   };
+  const change = patch => { Object.assign(S.form, patch); S.form.request_id = undefined; render(); };
+  const requests = local ? (S.data.start_requests ?? []) : [];
   return h('div', {}, h('button', { class: 'back', onclick: () => { S.form = null; render(); } }, '← Back'),
     h('form', { class: 'row', onsubmit: submit },
-      h('label', {}, 'Agent', h('select', { name: 'agent', onchange: (e) => { S.form = { agent: e.target.value }; render(); } },
-        agents.map((a) => h('option', { value: a.name, selected: a.name === chosen?.name }, `${a.name} — ${a.description}`)))),
-      h('label', {}, 'Task', h('textarea', { name: 'task', required: true, placeholder: 'What should the agent do?' })),
-      chosen?.workspace === 'here' ? h('label', {}, 'Project folder (absolute path)', h('input', { name: 'cwd', required: true, placeholder: '/Users/…/Development/project' })) : null,
-      h('label', { style: 'display:flex;gap:6px;align-items:center' }, h('input', { type: 'checkbox', name: 'continue', style: 'width:auto' }), 'Continue its previous conversation'),
-      h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit', disabled: S.busy.has('start') }, S.busy.has('start') ? 'Starting…' : 'Start run'),
-        h('span', { class: 'small muted' }, S.data?.relay ? 'Runs on your Mac. Keep the relay Terminal open for live access.' : 'Runs on your Mac; you can close this dashboard.'))));
+      local ? h('label', {}, 'Runner', h('select', { name: 'runner', disabled: S.busy.has('start'), onchange: e => change({ runner: e.target.value, cwd: '', continue: false }) },
+        ['dok', 'mac'].map(id => h('option', { value: id, selected: runner === id }, id === 'mac' ? 'This Mac' : 'dok')))) : h('h2', {}, 'Runs on dok'),
+      reason ? h('p', { role: 'status' }, reason) : null,
+      h('label', {}, 'Agent', h('select', { name: 'agent', disabled: S.busy.has('start'), onchange: e => change({ agent: e.target.value, cwd: '', continue: false }) },
+        agents.map(a => h('option', { value: a.name, selected: a.name === chosen?.name }, `${a.name} — ${a.description ?? ''}`)))),
+      h('label', {}, 'Task', h('textarea', { name: 'task', required: true, maxlength: 16000, disabled: S.busy.has('start'),
+        placeholder: 'What should the agent do?', oninput: e => { S.form.task = e.target.value; S.form.request_id = undefined; } }, S.form.task ?? '')),
+      runner === 'mac' && chosen?.workspace === 'here' ? h('label', {}, 'Project folder (absolute path)', h('input', { name: 'cwd', required: true, value: S.form.cwd ?? '',
+        oninput: e => { S.form.cwd = e.target.value; S.form.request_id = undefined; }, placeholder: '/Users/…/Development/project' })) : null,
+      runner === 'mac' ? h('label', {}, h('input', { type: 'checkbox', name: 'continue', checked: S.form.continue, style: 'width:auto',
+        onchange: e => { S.form.continue = e.target.checked; S.form.request_id = undefined; } }), 'Continue its previous conversation') : null,
+      h('p', { class: 'small muted' }, runner === 'mac' ? `Runs on this Mac. Directory: ${chosen?.workspace === 'here' ? S.form.cwd || 'choose a folder' : chosen?.workspace ?? 'unknown'}`
+        : `Remote checkout: ${chosen?.repo ?? 'agent default'}. Tasks that change files return review branches; this Mac’s working tree is untouched.`),
+      chosen?.model ? h('p', { class: 'small muted' }, `Model: ${chosen.model}`) : null,
+      h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit', disabled: S.busy.has('start') || !available }, S.busy.has('start') ? 'Starting…' : 'Start run'))),
+    ...requests.map(r => h('div', { class: 'row' }, h('p', {}, `${r.runner} · ${r.state} · ${firstLine(r.task)}`), h('p', { class: 'small muted' }, r.request_id),
+      r.run_id ? h('button', { onclick: () => { S.form = null; loadDetail(r.run_id); } }, 'Open run')
+        : r.state === 'unknown' ? h('button', { disabled: S.busy.has(r.request_id), onclick: () => act(r.request_id, async () => {
+          const result = await call('get_selected_start', { request_id: r.request_id });
+          await refresh();
+          if (result.run_id) { S.form = null; await loadDetail(result.run_id); }
+          else throw new Error(result.message ?? 'Still unresolved. No new task was submitted.');
+        }) }, 'Check original request') : h('p', {}, r.message ?? 'No task started.'))));
 }
 
 // Background updates (polling) wait while the user is typing in the view, so focus and text are not lost.

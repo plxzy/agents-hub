@@ -1,6 +1,12 @@
 import { expect, test } from 'claude-code/testing'
 
 const DASHBOARD = {
+  runner_selection: 1,
+  run_targets: [
+    { id: 'dok', label: 'dok', available: true, agents: [{ name: 'helper', description: 'Remote helper', repo: 'dev-workflow' }] },
+    { id: 'mac', label: 'This Mac', available: true, agents: [{ name: 'helper', description: 'Local helper', workspace: '/tmp' }, { name: 'workflow', description: 'Local workflow', workspace: 'here' }] },
+  ],
+  start_requests: [],
   generated_at: '2026-10-09T05:00:00.000Z',
   status: { agents: 2, running: 1, pending: { memory: 1, proposals: 0 } },
   runs: [
@@ -49,7 +55,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
         : op === 'list_agents' ? DASHBOARD.agents
         : op === 'get_run' ? { run_id: 'r-1', agent: 'helper', status: 'completed', task: 'List the tools', output: 'tools/space-backup/' }
         : op === 'review_decide' ? 'accepted m-1'
-        : op === 'start_run' ? { run_id: 'r-3', status: 'running' }
+        : op === 'start_selected_run' ? { run_id: 'r-3', status: 'running' }
         : null
       return { value: { exitCode: 0, stdout: JSON.stringify(out), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
     })
@@ -90,29 +96,75 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     // start a run of a "here" agent in the session's folder
     await ui.press({ key: 'tab-start' })
+    expect(await ui.find({ text: 'Runs on dok' })).toBeDefined()
+    await ui.select({ key: 'runner', value: 'mac' })
     expect(await ui.find({ text: 'Runs on this Mac' })).toBeDefined()
     await ui.select({ key: 'agent', value: 'workflow' })
     await ui.input({ key: 'task', text: 'Check the tests' })
-    expect(calls).toContainEqual(['start_run', JSON.stringify({ agent: 'workflow', task: 'Check the tests', cwd: '/tmp' })])
+    const start = calls.find(([op]) => op === 'start_selected_run')
+    expect(start).toBeDefined()
+    const args = JSON.parse(start![1])
+    expect(args.runner).toBe('mac'); expect(args.agent).toBe('workflow'); expect(args.cwd).toBe('/tmp')
+    expect(args.task).toBe('Check the tests'); expect(typeof args.request_id).toBe('string')
+    expect(calls.some(([op]) => op === 'start_run')).toBe(false)
   })
 }
 
-test('Start reads local agents even when the Hub lists different agents', async ($, on) => {
+test('dok is the default; offline stays selected and the Mac choice remains available', async ($, on) => {
   const calls: string[] = []
   on('process.run', async (_$, e) => {
     const op = e.argv[3]; calls.push(op ?? '')
-    const data = op === 'list_agents' ? [{ name: 'local-only', description: 'Local agent', workspace: '/tmp' }]
-      : { ...DASHBOARD, source: 'hub', agents: [{ name: 'dok-only', description: 'Remote agent' }] }
+    const data = { ...DASHBOARD, source: 'hub', run_targets: [
+      { ...DASHBOARD.run_targets[0], available: false, reason: 'dok is offline.' }, DASHBOARD.run_targets[1]],
+      start_requests: [{ request_id: 'request-lost', runner: 'dok', agent: 'helper', task: 'Old task', state: 'unknown' }] }
     return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   on('clock.after', async () => ({ deny: 'no timers in this test' }) as never)
   on('ui.status', async () => ({ value: undefined }) as never)
   const ui = await $.ui.mount({ plugin: 'agents-panel', surface: 'terminal', component: 'Pane', requestId: 'agents', props: PROPS as never })
-  await ui.press({ key: 'refresh' })
-  await ui.press({ key: 'tab-start' })
-  expect(calls).toContain('list_agents')
+  await ui.press({ key: 'refresh' }); await ui.press({ key: 'tab-start' })
+  expect(await ui.find({ text: 'Runs on dok' })).toBeDefined()
+  expect(await ui.find({ text: 'dok is offline.' })).toBeDefined()
+  await ui.input({ key: 'task', text: 'Must not start' })
+  expect(calls.includes('start_selected_run')).toBe(false)
+  expect(await ui.find({ text: 'request-lost' })).toBeDefined()
+  expect(await ui.find({ key: 'check-request-lost' })).toBeDefined()
+  await ui.select({ key: 'runner', value: 'mac' })
   expect(await ui.find({ text: 'Runs on this Mac' })).toBeDefined()
-  expect(await ui.find({ text: 'Shares running status and the final receipt with the Hub.' })).toBeDefined()
-  expect(await ui.find({ text: 'Local agent' })).toBeDefined()
-  expect(await ui.find({ text: 'Remote agent' })).toBeUndefined()
+  expect(await ui.find({ text: 'Local helper' })).toBeDefined()
+})
+
+test('a new panel blocks starts when local selection support is missing', async ($, on) => {
+  const calls: string[] = []
+  on('process.run', async (_$, e) => {
+    calls.push(e.argv[3] ?? '')
+    return { value: { exitCode: 0, stdout: JSON.stringify({ ...DASHBOARD, runner_selection: undefined }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  on('clock.after', async () => ({ deny: 'no timers in this test' }) as never)
+  on('ui.status', async () => ({ value: undefined }) as never)
+  const ui = await $.ui.mount({ plugin: 'agents-panel', surface: 'terminal', component: 'Pane', requestId: 'agents', props: PROPS as never })
+  await ui.press({ key: 'refresh' }); await ui.press({ key: 'tab-start' })
+  await ui.input({ key: 'task', text: 'Blocked request' })
+  expect(calls.includes('start_selected_run')).toBe(false)
+  expect(calls.includes('start_run')).toBe(false)
+  expect(await ui.find({ text: 'Update the local operations before selecting a runner.' })).toBeDefined()
+})
+
+test('default dok submits only explicit remote arguments', async ($, on) => {
+  let submitted: Record<string, unknown> | undefined
+  on('process.run', async (_$, e) => {
+    const op = e.argv[3]
+    if (op === 'start_selected_run') submitted = JSON.parse(e.argv[4] ?? '{}')
+    const data = op === 'open_dashboard' ? DASHBOARD : op === 'start_selected_run'
+      ? { run_id: 'r-dok', status: 'running' } : { run_id: 'r-dok', status: 'running', agent: 'helper', runner: 'dok', task: 'Read only' }
+    return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  on('clock.after', async () => ({ deny: 'no timers in this test' }) as never)
+  on('ui.status', async () => ({ value: undefined }) as never)
+  const ui = await $.ui.mount({ plugin: 'agents-panel', surface: 'desktop', component: 'Pane', requestId: 'agents', props: PROPS as never })
+  await ui.press({ key: 'refresh' }); await ui.press({ key: 'tab-start' })
+  await ui.input({ key: 'task', text: 'Read only' })
+  expect(submitted?.runner).toBe('dok'); expect(submitted?.agent).toBe('helper')
+  expect(submitted?.cwd).toBeUndefined(); expect(submitted?.continue).toBeUndefined()
+  expect(submitted?.model).toBeUndefined(); expect(submitted?.repo).toBeUndefined()
 })
