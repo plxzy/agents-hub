@@ -70,3 +70,16 @@ test('hello timeout closes the socket and retries only with resume', async () =>
   assert.ok(Date.now() - start >= WIRE.handshake);
   assert.equal(f.instances[0].readyState, 3); assert.equal(f.instances[1].hello.mode, 'resume');
 });
+
+test('relay health reports authenticated pong freshness and disconnects as unhealthy', async () => {
+  const f = fake((ws) => ws.greet()), controller = new AbortController(), states = [];
+  const running = serveSocket({ Socket: f.Socket, signal: controller.signal, readConfig: () => config,
+    execute: async () => {}, publish: async () => {}, log: () => {}, onState: state => states.push(state) });
+  await until(() => states.some(state => state.last_pong_at));
+  assert.equal(states[0].hub_ready, false);
+  assert.ok(states.some(state => state.hub_ready === true && state.last_pong_at === null));
+  assert.ok(states.some(state => state.hub_ready === true && typeof state.last_pong_at === 'string'));
+  controller.abort(); await running;
+  assert.equal(states.at(-1).hub_ready, false);
+  assert.equal(states.at(-1).last_pong_at, null);
+});

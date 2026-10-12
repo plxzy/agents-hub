@@ -7,9 +7,12 @@ RUN apt-get update \
 # Pi is pinned by its lockfile (registry integrity); lifecycle scripts never run.
 COPY pi/package.json pi/package-lock.json /opt/pi/
 COPY strip-codex-provider.mjs /opt/strip-codex-provider.mjs
+COPY agent-healthcheck.mjs /usr/local/bin/agent-healthcheck
 RUN cd /opt/pi && npm ci --ignore-scripts --no-audit --no-fund && npm cache clean --force \
     && node /opt/strip-codex-provider.mjs \
-    && ln -s /opt/pi/node_modules/.bin/pi /usr/local/bin/pi && test "$(pi --version)" = 1.1.0
+    && ln -s /opt/pi/node_modules/.bin/pi /usr/local/bin/pi \
+    && chmod 755 /usr/local/bin/agent-healthcheck \
+    && test "$(pi --version)" = 1.1.0
 # OpenAI account slots (openai-2, openai-3, ...): loaded by interactive Pi for /login and by the run worker.
 COPY pi-openai-accounts /opt/pi-openai-accounts
 RUN ln -s /opt/pi/node_modules /opt/pi-openai-accounts/node_modules \

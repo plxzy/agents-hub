@@ -15,6 +15,7 @@ provider and OAuth/API modules; the ordinary OpenAI provider remains for `pi-ope
 |---|---|
 | Pi login (your own `/login`, never copied) | `~/.pi/agent/auth.json` |
 | Supervisor config (endpoint, machine token, paths; mode 600) | `~/.config/agent-workflow/dok.json` |
+| Supervisor health heartbeat (private, Docker-read) | `~/.local/state/dok-agent/supervisor-health.json` |
 | Released code (`install-workflow.sh`) | `~/.local/share/agent-workflow/releases/<rev>`, launchers in `~/.local/bin` |
 | Reviewed knowledge / dated context | `~/.local/share/agent-workflow/{knowledge,context}/` |
 | Bare repo (`main` + append-only review refs) | `~/repos/dev-workflow.git` |
@@ -27,6 +28,7 @@ Files here are copied to `dok:~/agents-runner/`. Pi is pinned by `pi/package-loc
 cd ~/agents-runner && docker compose build
 docker compose up -d                     # start / restart the supervisor
 docker logs -f agents                    # "dok-dev linked to Agents Hub."
+docker inspect --format '{{.State.Health.Status}}' agents
 # from the Mac
 ssh -t dok docker exec -it agents pi     # interactive Pi (e.g. /login); paste the redirect URL when asked
 ssh -t dok docker exec -it agents agent chat workflow
@@ -40,3 +42,9 @@ Mac remote: `git remote set-url dok dok:/home/agent/repos/dev-workflow.git` with
 Upgrade: `install.sh <revision>` (archives that commit from the bare repo, installs it, restarts the container).
 Rollback: `install.sh <previous revision>`. Never run a second supervisor against the same Hub owner: starting one
 replaces the other's connection.
+
+Docker health is supervisor-based: the supervisor writes a private heartbeat only after the Hub WebSocket handshake
+and each authenticated pong. The check also verifies the recorded supervisor PID and Linux process start time, the
+release process identity, and a 30-second heartbeat age. A live Node process with a stale or disconnected Hub link is
+therefore unhealthy; a stale file from an earlier supervisor cannot pass the identity checks. Docker reports the state
+but the restart policy does not restart solely because a healthcheck fails.

@@ -4,10 +4,15 @@ import timers from 'node:timers/promises';
 import { WIRE, PING, PONG, encode, decode, validId, validateStatus } from './relay-wire.mjs';
 
 // Foreground-only. A process acquires once; every ordinary reconnect must resume its durable ownership.
-export async function serveSocket({ readConfig, execute, publish, signal, log = console.log, Socket = WebSocket, session = randomUUID(), host = 'mac' }) {
+export async function serveSocket({ readConfig, execute, publish, signal, log = console.log, Socket = WebSocket,
+  session = randomUUID(), host = 'mac', onState = () => {} }) {
   if (!['mac', 'dok-dev'].includes(host)) throw new Error('Unknown relay host');
   let acquired = false, failures = 0, commands = Promise.resolve(), queued = 0;
   let publishing = false;
+  const state = (value) => {
+    try { onState({ session, ...value, observed_at: new Date().toISOString() }); }
+    catch { log('Relay health state publication failed; relay remains available.'); }
+  };
   const snapshot = async () => {
     if (publishing || signal?.aborted) return;
     publishing = true;
@@ -24,6 +29,7 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
       url.protocol = 'wss:'; url.pathname = url.pathname.replace(/\/$/, '') + (host === 'dok-dev' ? '/relay/dok-dev/connect' : '/relay/connect');
       const hello = { v: 1, session, mode: acquired ? 'resume' : 'acquire', status: validateStatus({ enabled: config.enabled === true, agents: config.agents }) };
       acquired = true; // even a lost HTTP/hello response must not reacquire ownership
+      state({ hub_ready: false, last_pong_at: null });
       const result = await new Promise((resolve) => {
         let done = false, socketId, ready = false, lastPong = Date.now(), statusText = JSON.stringify(hello.status), fatal;
         const pending = new Map();
@@ -37,6 +43,7 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
           signal?.removeEventListener('abort', abort);
           pending.clear();
           if (ws.readyState !== 3) ws.terminate();
+          state({ hub_ready: false, last_pong_at: null, fatal: Boolean(reason) });
           resolve({ fatal: reason ?? fatal, ready });
         };
         const fresh = () => {
@@ -73,10 +80,10 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
           try {
             if (binary) throw new Error('Binary message');
             const text = data.toString('utf8');
-            if (text === PONG) { lastPong = Date.now(); return; }
+            if (text === PONG) { lastPong = Date.now(); state({ hub_ready: true, last_pong_at: new Date(lastPong).toISOString(), fatal: false }); return; }
             const m = decode(text);
             if (m.type === 'hello' && !ready && m.session === session && validId(m.socket)) {
-              socketId = m.socket; ready = true; clearTimeout(handshake); ws.send(PING); lastPing = Date.now();
+              socketId = m.socket; ready = true; clearTimeout(handshake); state({ hub_ready: true, last_pong_at: null, fatal: false }); ws.send(PING); lastPing = Date.now();
               log(host === 'dok-dev' ? 'dok-dev linked to Agents Hub.' : 'Agents Hub linked over WebSocket (foreground; Ctrl-C disconnects).'); return;
             }
             if (!ready || m.session !== session || m.socket !== socketId) throw new Error('Invalid socket identity');

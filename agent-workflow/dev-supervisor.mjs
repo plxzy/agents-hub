@@ -59,7 +59,13 @@ const processSession = randomUUID();
 const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts });
 // The knowledge release is frozen, so the runnable list is computed once per supervisor boot.
 const agents = [...new Set(['workflow', ...sessions.runnable().map(a => a.name)])];
-save(pidFile, { pid: process.pid, started: identity(process.pid), process_session: processSession });
+const started = identity(process.pid);
+save(pidFile, { pid: process.pid, started, process_session: processSession });
+const healthFile = path.join(config.state, 'supervisor-health.json');
+const health = { schema_version: 1, pid: process.pid, started, process_session: processSession,
+  hub_ready: false, last_pong_at: null, fatal: false, updated_at: new Date().toISOString() };
+const writeHealth = patch => save(healthFile, Object.assign(health, patch, { updated_at: new Date().toISOString() }));
+writeHealth({});
 const controller = new AbortController();
 const stop = () => { sessions.stop(); controller.abort(); };
 process.once('SIGTERM', stop); process.once('SIGINT', stop);
@@ -104,10 +110,13 @@ async function acknowledgeStopped() {
 try {
   await serveSocket({ host: 'dok-dev', session: processSession, signal: controller.signal,
     readConfig: () => ({ endpoint: config.endpoint, token: config.token, enabled: true, agents }),
-    execute, publish });
+    execute, publish,
+    onState: ({ hub_ready, last_pong_at, fatal }) => writeHealth({ hub_ready: hub_ready === true,
+      last_pong_at: last_pong_at ?? null, fatal: fatal === true }) });
 } finally {
   sessions.stop();
   for (let n = 0; n < 60 && sessions.active; n++) await new Promise(r => setTimeout(r, 100));
   sessions.active?.child?.kill('SIGKILL');
+  writeHealth({ hub_ready: false, last_pong_at: null, fatal: false });
   if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
 }
