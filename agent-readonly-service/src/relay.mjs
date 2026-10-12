@@ -1,5 +1,6 @@
 import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { storeRun, readRun } from './runs.mjs';
+import { bundleFor } from './memory.mjs';
 import { readAccounts, recordAccount } from './accounts.mjs';
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
 const relay = (env) => env.RELAY.getByName('owner-mac');
@@ -32,6 +33,10 @@ export async function relayFetch(request, env) {
       const r = await storeRun(env, JSON.parse(text), 'dok');
       return json({ ok: true, run_id: r.run_id, status: r.status });
     } catch { return json({ ok: false, error: 'Receipt refused' }, 400); }
+  }
+  if (dok && pathname === '/relay/dok-dev/bundle' && request.method === 'GET') {
+    try { return json(await bundleFor(env, (new URL(request.url).searchParams.get('scopes') ?? '').split(',').filter(Boolean).slice(0, 10))); }
+    catch { return json({ error: 'Bundle unavailable' }, 503); }
   }
   if (dok && pathname === '/relay/dok-dev/accounts') {
     if (request.method === 'GET') return json({ accounts: await readAccounts(env) });

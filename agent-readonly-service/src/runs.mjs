@@ -2,6 +2,7 @@
 import { containsSecret } from './snapshot.mjs';
 import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
 import { ratingsFor } from './decisions.mjs';
+import { proposeMemory } from './memory.mjs';
 
 export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 const STATUS = ['running', 'completed', 'failed', 'interrupted'];
@@ -37,6 +38,9 @@ export function sanitizeReceipt(r, runner) {
     review_ref: new RegExp(`^refs/heads/review/runs/${r.run_id}$`).test(r.review_ref ?? '') ? r.review_ref : undefined,
     continued_from: RUN_ID.test(r.continued_from ?? '') ? r.continued_from : undefined,
     changed_files: Array.isArray(r.changed_files) ? r.changed_files.filter((f) => typeof f === 'string' && f.length <= 300 && !/[\r\n]/.test(f)).slice(0, 200) : undefined,
+    memory_proposed: Number.isInteger(r.memory_proposed) && r.memory_proposed >= 0 && r.memory_proposed <= 20 ? r.memory_proposed : undefined,
+    memory_source: ['hub', 'frozen-release'].includes(r.memory_source) ? r.memory_source : undefined,
+    memory_hash: /^[a-f0-9]{16}$/.test(r.memory_hash ?? '') ? r.memory_hash : undefined,
     usage, runtime, error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
   };
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined));
@@ -51,6 +55,10 @@ export async function storeRun(env, receipt, runner) {
     WHERE runs.runner = excluded.runner AND (runs.status = 'running' OR excluded.status <> 'running')`)
     .bind(r.run_id, r.agent, runner, r.status, r.started, r.ended ?? null, new Date().toISOString(), JSON.stringify(r)).run();
   await env.DB.prepare('DELETE FROM runs WHERE run_id NOT IN (SELECT run_id FROM runs ORDER BY started DESC LIMIT ?)').bind(KEEP).run();
+  // Notes the agent asked to remember become candidates for the user's review (idempotent per run and content).
+  if (r.status !== 'running' && Array.isArray(receipt.memory_proposals)) {
+    try { await proposeMemory(env, { agent: r.agent, run_id: r.run_id, items: receipt.memory_proposals }); } catch { /* the receipt is stored; the runner retries unreported receipts */ }
+  }
   return r;
 }
 

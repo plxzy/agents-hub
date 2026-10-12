@@ -55,8 +55,10 @@ const hub = async (route, init = {}) => {
 };
 const accounts = { get: async () => (await hub('/relay/dok-dev/accounts')).accounts,
   post: value => hub('/relay/dok-dev/accounts', { method: 'POST', body: JSON.stringify(value) }) };
+// Accepted memory for an agent's scopes, from the Hub; the runner holds no memory of its own.
+const bundle = async scopes => hub('/relay/dok-dev/bundle?scopes=' + encodeURIComponent(scopes.join(',')));
 const processSession = randomUUID();
-const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts });
+const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts, bundle });
 // The knowledge release is frozen, so the runnable list is computed once per supervisor boot.
 const agents = [...new Set(['workflow', ...sessions.runnable().map(a => a.name)])];
 const started = identity(process.pid);

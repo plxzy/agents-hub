@@ -27,7 +27,7 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
     bindings: { DOK_RELAY_TOKEN: DOK, DEVELOPMENT_ENABLED: 'true' } }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB');
-  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql', '0005_decisions.sql']) {
+  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql', '0005_decisions.sql', '0006_memory.sql']) {
     for (const sql of fs.readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8').replace(/--.*$/gm, '').split(';').map((x) => x.trim()).filter(Boolean)) await db.prepare(sql).run();
   }
   const tool = async (name, args = {}) => (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST',
@@ -35,7 +35,7 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   const post = (body, token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/runs', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify(body) });
 
   const listed = (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST', body: JSON.stringify({ id: 1, method: 'tools/list' }) })).json()).result.tools.map((x) => x.name);
-  assert.ok(listed.includes('start_run') && listed.includes('get_remote_run')); assert.ok(listed.includes('panel_data') && listed.includes('rate_run') && !listed.includes('review_decide'));
+  assert.ok(listed.includes('start_run') && listed.includes('get_remote_run')); assert.ok(listed.includes('panel_data') && listed.includes('rate_run') && listed.includes('review_decide'));
   assert.match((await tool('start_run', { agent: 'helper', task: 'x', request_id: 'request-0000' })).content[0].text, /No runner is online/);
 
   const res = await mf.dispatchFetch('https://test/relay/dok-dev/connect', { headers: { upgrade: 'websocket', authorization: 'Bearer ' + DOK,
@@ -86,6 +86,28 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.equal(JSON.parse((await tool('panel_data')).content[0].text).runs.find((r) => r.run_id === RUN).feedback, 'good');
   assert.equal((await tool('rate_run', { run_id: 'r-20261012T120000Z-ffffff', rating: 'good', request_id: 'rate-request-2', confirm: 'y'.repeat(24) })).isError, true); // unknown run: no Mac, no rating
   const counts = JSON.parse((await tool('get_status')).content[0].text);
+
+  // Memory: a note proposed in a receipt waits in the panel; only a click (one-time code) decides it.
+  const NOTE_RUN = 'r-20261012T123000Z-0c0c0c';
+  const noted = { ...running, run_id: NOTE_RUN, status: 'completed', ended: '2026-10-12T12:31:00.000Z', memory_proposed: 2,
+    memory_proposals: [{ scope: 'shared', body: 'Use git fetch dok to read review branches.' }, { scope: 'shared', body: 'token sk-abcdefghijklmnopqrstuvwxyz0123' }, { scope: 'bad scope', body: 'x' }] };
+  assert.equal((await post(noted)).status, 200); assert.equal((await post(noted)).status, 200); // re-posting adds nothing
+  const p2 = await tool('panel_data'), pv = JSON.parse(p2.content[0].text), review = p2._meta['agents-hub/confirm'].review;
+  assert.equal(pv.pending.length, 1); assert.equal(pv.pending[0].kind, 'memory'); assert.match(pv.pending[0].body, /git fetch dok/);
+  assert.equal(pv.status.pending.memory, 1);
+  const noteId = pv.pending[0].id; assert.ok(review[noteId]); assert.doesNotMatch(p2.content[0].text, new RegExp(review[noteId]));
+  const decide = (args) => tool('review_decide', { id: noteId, decision: 'accept', request_id: 'review-request-1', ...args });
+  assert.match((await decide({ confirm: 'z'.repeat(24) })).content[0].text, /needs a click/);
+  assert.match((await decide({ confirm: review[noteId] })).content[0].text, /accepted/);
+  assert.match((await decide({ confirm: review[noteId] })).content[0].text, /needs a click/);
+  assert.equal(JSON.parse((await tool('panel_data')).content[0].text).pending.length, 0);
+  assert.equal(JSON.parse((await tool('get_status')).content[0].text).pending.memory, 0);
+  // The runner's bundle: accepted notes for its scopes plus a content hash; the runner token only.
+  const getBundle = (scopes, token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/bundle?scopes=' + scopes, { headers: { authorization: 'Bearer ' + token } });
+  const b = await (await getBundle('shared,agent:helper')).json();
+  assert.deepEqual(b.memory.map((m) => m.body), ['Use git fetch dok to read review branches.']); assert.match(b.hash, /^[a-f0-9]{16}$/);
+  assert.equal((await (await getBundle('agent:helper')).json()).memory.length, 0);
+  assert.equal((await getBundle('shared', 'wrong')).status, 401);
   assert.ok(counts.runs >= 1 && counts.last_run.run_id); // counts come from the Hub even with no snapshot
 
   const override = tool('start_run', { agent: 'helper', task: 'Deeper look', request_id: 'request-0004', model: 'openai/gpt-6.1-sol', thinking: 'high' });

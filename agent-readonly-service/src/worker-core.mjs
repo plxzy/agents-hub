@@ -5,6 +5,7 @@ import { relayFetch, relayStatus, requestRelay, startRun, getRun, dokEnabled, do
 import { readRun, recentRuns, mergeRuns } from './runs.mjs';
 import { readAccounts } from './accounts.mjs';
 import { issueCodes, redeemCode, rateRun } from './decisions.mjs';
+import { pendingMemory, pendingCounts, isMemory, decideMemory } from './memory.mjs';
 import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
 import { developmentCall } from './development.mjs';
@@ -86,9 +87,11 @@ async function nativePanel(env) {
     ...dok.agents.filter((n) => !known.has(n)).map((name) => ({ name, description: 'Runs on dok.', remote_allowed: true, last_run: null }))];
   const runs = mergeRuns(base.runs, hubRuns).slice(-50);
   const rate = await issueCodes(env, 'rate', hubRuns.filter((r) => r.status !== 'running').map((r) => r.run_id));
-  return { ...base, agents, runs, status: { ...base.status, ...hubCounts(snap?.payload.runs, hubRuns) },
+  const notes = await pendingMemory(env), review = await issueCodes(env, 'review', notes.map((n) => n.id));
+  const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
+  return { ...base, agents, runs, pending, status: { ...base.status, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
     capabilities: { ...base.capabilities, run: dok.online && dok.agents.length > 0, mutate: true },
-    confirm: { review: {}, rate }, relay: { online: dok.online, enabled: dok.enabled !== false, agents: dok.agents, runner: 'dok' } };
+    confirm: { review, rate }, relay: { online: dok.online, enabled: dok.enabled !== false, agents: dok.agents, runner: 'dok' } };
 }
 
 const toolList = TOOLS.map(({ name, title, description, input, annotations, ui }) => ({
@@ -117,7 +120,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'tools/list') return reply({ tools: [...(env.RELAY_TOKEN || dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The unified panel uses the linked Mac when online and a published snapshot otherwise.' } : t),
       // Without the Mac relay the runner tools and the panel's run tools remain; review decisions move to the Hub in a later step.
-      ...relayToolList().filter((t) => env.RELAY_TOKEN || ['start_run', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run'].includes(t.name)),
+      ...relayToolList().filter((t) => env.RELAY_TOKEN || ['start_run', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
     ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
@@ -135,7 +138,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
       // Hub-held runs (dok) are read and rated here; without the Mac online the panel is served from D1.
-      if (dokEnabled(env) && ['panel_data', 'panel_run', 'rate_run'].includes(params?.name)) {
+      if (dokEnabled(env) && ['panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(params?.name)) {
         try {
           const args = params.arguments ?? {};
           const macOnline = env.RELAY_TOKEN ? (await relayStatus(env)).online : false;
@@ -146,6 +149,11 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           if (params.name === 'panel_run') {
             const run = await readRun(env, args.run_id);
             if (run) return reply({ content: [{ type: 'text', text: JSON.stringify(run) }] });
+          }
+          if (params.name === 'review_decide' && await isMemory(env, args.id)) {
+            validateRelay('review_decide', args);
+            await redeemCode(env, args.confirm, 'review', args.id);
+            return reply({ content: [{ type: 'text', text: JSON.stringify(await decideMemory(env, args)) }] });
           }
           if (params.name === 'rate_run' && await readRun(env, args.run_id)) {
             validateRelay('rate_run', args);
@@ -189,8 +197,11 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           const hubAll = params.name === 'open_dashboard' ? hubRuns : await recentRuns(env, { limit: 200 });
           // No snapshot and nothing in the Hub stays unknown, never zero.
           if (snap || hubAll.length) {
-            const counts = hubCounts(snap?.payload.runs, hubAll);
-            if (params.name === 'get_status') Object.assign(value, counts); else value.status = { ...value.status, ...counts };
+            const counts = hubCounts(snap?.payload.runs, hubAll), notes = await pendingCounts(env);
+            const target = params.name === 'get_status' ? value : value.status;
+            Object.assign(target, counts);
+            // Notes waiting in the Hub; instruction proposals still come from the (possibly stale) snapshot.
+            if (notes !== null) target.pending = { memory: notes, proposals: target.pending?.proposals ?? 0 };
           }
         }
         if (params.name === 'list_runs' && snap) value.runs = mergeRuns(snap.payload.runs.filter((r) => !args.agent || r.agent === args.agent), hubRuns).slice(-(args.limit ?? 10));

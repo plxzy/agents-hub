@@ -5,7 +5,7 @@ import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { getAgent, loadAgents, loadMemory, buildSystemPrompt, newId } from './agent.mjs';
+import { getAgent, loadAgents, loadMemory, buildSystemPrompt, newId, extractRemember } from './agent.mjs';
 import { linuxPolicy, sandboxExecute } from './linux-sandbox.mjs';
 import { DEVELOPMENT, digest } from './dev-grants.mjs';
 import { DEVELOPMENT_RUNTIME, runtimeMatches, agentRuntime } from './dev-runtime.mjs';
@@ -32,14 +32,14 @@ const ALL_TOOLS = [...READ_ONLY, 'write', 'edit', 'bash'];
 export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 
 export class DevelopmentSessions {
-  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, accounts_module = null, limits = {} }) {
+  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, bundle, accounts_module = null, limits = {} }) {
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
     this.repos = { [path.basename(this.repository).replace(/\.git$/, '')]: this.repository,
       ...Object.fromEntries(Object.entries(repositories).map(([name, dir]) => [name, fs.realpathSync(dir)])) };
     this.context = context ? fs.realpathSync(context) : null;
     this.revision = revision; this.processSession = processSession; this.lease = lease; this.reporter = report;
-    this.accounts = accounts; this.accountsModule = accounts_module;
+    this.accounts = accounts; this.accountsModule = accounts_module; this.bundle = bundle;
     const knowledgeManifest = read(path.join(this.knowledge, 'RELEASE.json'));
     for (const [name, expected] of Object.entries(knowledgeManifest.files)) {
       const file = fs.realpathSync(path.join(this.knowledge, name));
@@ -298,7 +298,11 @@ export class DevelopmentSessions {
       if (code === 0 && !failure && !(runtimeMatches(result.runtime, pinnedRuntime) && (runtime.provider !== 'openai' ? result.runtime.provider === runtime.provider : this.limits.slots.includes(result.runtime.provider)))) failure = 'Missing verified Pi runtime';
       const done = !failure && !result.error && code === 0;
       if (write && done && harvested?.review_ref) fs.writeFileSync(path.join(base, 'head'), receipt.run_id, { mode: 0o600 });
+      // ```remember blocks become memory candidates (sent with the receipt); they are not part of the shown answer.
+      const remembered = done ? extractRemember(result.output, agent).slice(0, 5) : [];
+      if (typeof result.output === 'string') result.output = result.output.replace(/```remember\n[\s\S]*?```/g, '').trim();
       save(file, { ...receipt, status: failure || result.error ? 'failed' : code === 0 ? 'completed' : 'interrupted',
+        ...(remembered.length ? { memory_proposed: remembered.length, memory_proposals: remembered } : {}),
         ended: new Date().toISOString(), ...(commit ? { commit } : {}), ...(baseCommit ? { base_commit: baseCommit } : {}),
         ...(done && harvested ? harvested : {}), ...(observed ? { runtime: observed } : {}),
         ...(failure || result.error ? { error: failure ?? result.error } : {}),
@@ -327,7 +331,17 @@ export class DevelopmentSessions {
       const boundary = write
         ? `You run on dok, the always-on Linux runner, in a writable clone of ${repo} (${branch} at ${commit.slice(0, 12)}). Your shell has no network and cannot see credentials or other runs. Do not commit: when you stop, your changes are committed and exported as a review branch for the user, never merged automatically. Mac paths in notes describe the Mac; tools that exist only on macOS are unavailable here.`
         : `You run on dok, the always-on Linux runner, over a read-only clone of ${repo} (${branch} at ${commit.slice(0, 12)}). Mac paths in notes describe the Mac; files outside this clone are not available.`;
-      const prompt = buildSystemPrompt({ ...agent, workspace }, loadMemory(agent.memory, this.knowledge))
+      // Memory comes from the Hub's accepted notes; the frozen release is only the fallback when the Hub is unreachable.
+      let memory, memoryHash;
+      try {
+        const fetched = this.bundle ? await this.bundle(agent.memory) : null;
+        if (fetched && Array.isArray(fetched.memory)) {
+          memory = fetched.memory.map(m => ({ meta: { id: m.id, scope: m.scope, status: 'accepted' }, body: m.body })); memoryHash = fetched.hash;
+        }
+      } catch { /* fall back below */ }
+      memory ??= loadMemory(agent.memory, this.knowledge);
+      receipt.memory_source = memoryHash ? 'hub' : 'frozen-release'; if (memoryHash) receipt.memory_hash = memoryHash;
+      const prompt = buildSystemPrompt({ ...agent, workspace }, memory)
         + (skills.length ? '\n\n' + skills.map(dir => fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).join('\n\n') : '')
         + `\n\n## Current host boundary (dok)\n${boundary}`;
       const manifest = { host: DEVELOPMENT.host, project: repo, agent: agent.name, run_id: receipt.run_id, commit,
