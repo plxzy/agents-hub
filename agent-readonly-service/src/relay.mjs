@@ -64,12 +64,14 @@ export async function startRun(env, args) {
   const dok = await dokStatus(env);
   if (dok.online && dok.agents.includes(args.agent) && args.agent !== 'workflow') {
     if (args.continue) throw new Error('continue is not supported on dok yet; start a new run and include the needed context in the task. No action was queued.');
-    const result = await env.RELAY.getByName('owner-dok-dev').dispatch('run_start', { request_id: args.request_id, agent: args.agent, task: args.task });
+    const result = await env.RELAY.getByName('owner-dok-dev').dispatch('run_start', { request_id: args.request_id, agent: args.agent, task: args.task,
+      ...(args.model ? { model: args.model } : {}), ...(args.thinking ? { thinking: args.thinking } : {}) });
     if (!result.ok) throw new Error(result.error);
     try { await storeRun(env, result.value, 'dok'); } catch { /* dok also posts its receipt */ }
-    return { run_id: result.value.run_id, agent: args.agent, status: result.value.status, runner: 'dok', next_step: NEXT };
+    return { run_id: result.value.run_id, agent: args.agent, status: result.value.status, runner: 'dok', model: result.value.model, thinking: result.value.thinking, next_step: NEXT };
   }
   const mac = await relayStatus(env);
+  if (mac.online && (args.model || args.thinking)) throw new Error('Model and thinking overrides are supported on dok only. No action was queued.');
   if (mac.online) return { ...(await requestRelay(env, 'start_run', args)), runner: 'mac', next_step: NEXT };
   const offered = dok.online ? dok.agents.filter((a) => a !== 'workflow') : [];
   throw new Error(dok.online ? `dok does not run ${args.agent}; it offers: ${offered.join(', ') || 'none'}. The Mac relay is offline. No action was queued.`

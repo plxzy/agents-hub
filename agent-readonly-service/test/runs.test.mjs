@@ -66,6 +66,15 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.equal(done.status, 'completed'); assert.match(done.output, /access\.mjs:9/);
   assert.equal(JSON.parse((await tool('list_runs')).content[0].text).runs.at(-1).runner, 'dok');
 
+  const override = tool('start_run', { agent: 'helper', task: 'Deeper look', request_id: 'request-0004', model: 'openai/gpt-6.1-sol', thinking: 'high' });
+  let o = await next(); while (o.type !== 'request') o = await next();
+  assert.deepEqual(o.args, { request_id: 'request-0004', agent: 'helper', task: 'Deeper look', model: 'openai/gpt-6.1-sol', thinking: 'high' });
+  ws.send(encode({ v: 1, session: 'dok-session-1', socket: hello.socket, type: 'result', attempt: o.attempt, id: o.id,
+    result: { ok: true, value: { ...running, run_id: 'r-20261012T120500Z-abcdef', model: 'openai/gpt-6.1-sol', thinking: 'high' } } }));
+  const ov = JSON.parse((await override).content[0].text);
+  assert.equal(ov.model, 'openai/gpt-6.1-sol'); assert.equal(ov.thinking, 'high');
+  assert.equal((await tool('start_run', { agent: 'helper', task: 'x', request_id: 'request-0005', thinking: 'extreme' })).isError, true);
+  assert.equal((await tool('start_run', { agent: 'helper', task: 'x', request_id: 'request-0006', model: 'no-slash' })).isError, true);
   assert.match((await tool('start_run', { agent: 'network', task: 'x', request_id: 'request-0002' })).content[0].text, /dok does not run network; it offers: helper/);
   assert.match((await tool('start_run', { agent: 'workflow', task: 'x', request_id: 'request-0003' })).content[0].text, /request_development/);
   assert.equal((await post({ run_id: 'bad' })).status, 400);

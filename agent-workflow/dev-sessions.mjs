@@ -223,9 +223,9 @@ export class DevelopmentSessions {
     const { reported_at, ...receipt } = read(file);
     return receipt;
   }
-  async runStart({ request_id, agent: name, task }) {
+  async runStart({ request_id, agent: name, task, model, thinking }) {
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(request_id ?? '') || typeof task !== 'string' || !task.trim() || task.length > 16000) throw new Error('Invalid task');
-    const fingerprint = hash({ agent: name, task });
+    const fingerprint = hash({ agent: name, task, model: model ?? null, thinking: thinking ?? null });
     const requestFile = path.join(this.state, 'agent-requests', request_id + '.json');
     if (fs.existsSync(requestFile)) {
       const old = read(requestFile);
@@ -236,7 +236,9 @@ export class DevelopmentSessions {
     if (!agent) throw new Error('Agent is not runnable on dok');
     if (this.runs.size >= this.limits.runs) throw new Error('dok runner is busy; retry when idle');
     this.room();
-    const runtime = agentRuntime(agent), run_id = newId('r');
+    // Per-run overrides from the caller; only providers this runner holds credentials for.
+    const runtime = agentRuntime({ model: model ?? agent.model, thinking: thinking ?? agent.thinking }), run_id = newId('r');
+    if (!(this.limits.providers ?? ['openai']).includes(runtime.provider)) throw new Error('Provider not available on dok');
     const receipt = { run_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
       started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version };
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
