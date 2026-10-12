@@ -46,6 +46,10 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   const next = () => inbox.length ? Promise.resolve(inbox.shift()) : new Promise((r) => waiting.push(r));
   const hello = await next();
 
+  const status = JSON.parse((await tool('get_status')).content[0].text);
+  assert.equal(Object.keys(status)[0], 'start_run'); assert.equal(status.start_run.available, true);
+  assert.deepEqual(status.start_run.runners, { dok: ['helper'] }); assert.equal(status.capabilities.run, true);
+  assert.equal(status.health.execution.available, true); assert.match(status.health.execution.reason, /dok runner online/);
   const started = tool('start_run', { agent: 'helper', task: 'Where is the JWT checked?', request_id: 'request-0001' });
   const m = await next();
   assert.equal(m.operation, 'run_start'); assert.deepEqual(m.args, { request_id: 'request-0001', agent: 'helper', task: 'Where is the JWT checked?' });

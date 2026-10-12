@@ -150,8 +150,20 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           value.runners = { dok: await dokStatus(env) };
           value.relay = await relayStatus(env);
           value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env) });
+          // Callers decide from this summary whether start_run works; the Mac relay is only one possible runner.
+          const dok = value.runners.dok, dokAgents = dok.online ? dok.agents.filter((a) => a !== 'workflow') : [];
+          const macAgents = value.relay.online && value.relay.enabled ? value.relay.agents : [];
+          value.start_run = dokAgents.length || macAgents.length
+            ? { available: true, runners: { ...(dokAgents.length ? { dok: dokAgents } : {}), ...(macAgents.length ? { mac: macAgents } : {}) },
+              note: `start_run works now${dokAgents.length ? ': it runs on dok, the always-on Linux runner; the Mac relay is not needed' : ' through the Mac relay'}. Poll get_run for the result.` }
+            : { available: false, note: 'No runner is online (dok and the Mac relay are offline).' };
+          if (dokAgents.length) {
+            value.health.execution = { ...value.health.execution, available: true, runner: 'dok', reason: `dok runner online; start_run runs: ${dokAgents.join(', ')}` };
+            if (params.name === 'get_status') value.capabilities = { ...value.capabilities, run: true };
+          }
         }
-        return reply({ content: [{ type: 'text', text: tool.ui ? tool.summary(value) : JSON.stringify(value, null, 2) }], ...(tool.ui ? { structuredContent: value } : {}) });
+        const shown = params.name === 'get_status' && value.start_run ? { start_run: value.start_run, ...value } : value;
+        return reply({ content: [{ type: 'text', text: tool.ui ? tool.summary(value) : JSON.stringify(shown, null, 2) }], ...(tool.ui ? { structuredContent: value } : {}) });
       } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
     }
     return json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } });
