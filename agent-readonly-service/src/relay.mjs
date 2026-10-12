@@ -5,7 +5,7 @@ import { decisionsSince } from './decisions.mjs';
 import { publishKnowledge, knowledgeRevision, agentBundle, readFiles } from './knowledge.mjs';
 import { readAccounts, recordAccount } from './accounts.mjs';
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
-export async function relayFetch(request, env) {
+export async function relayFetch(request, env, readPanel) {
   const pathname = new URL(request.url).pathname;
   const dok = pathname.startsWith('/relay/dok-dev/'), mac = pathname.startsWith('/relay/mac/');
   if (!dok && !mac) return json({ error: 'not_found' }, 404); // the Mac no longer connects (retired 2026-10-12)
@@ -52,7 +52,7 @@ export async function relayFetch(request, env) {
     }
   }
   // The Mac's own principal: posts its receipts, reads bundles and decisions. It cannot rate, decide, start or read /mcp.
-  if (mac) return macRoute(request, env, pathname);
+  if (mac) return macRoute(request, env, pathname, readPanel);
   if (pathname !== '/relay/dok-dev/connect') return json({ error: 'not_found' }, 404);
   if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
   return target.fetch(request);
@@ -91,10 +91,16 @@ export async function getRun(env, runId) {
   return null;
 }
 
-async function macRoute(request, env, pathname) {
+async function macRoute(request, env, pathname, readPanel) {
   const get = request.method === 'GET', url = new URL(request.url);
   const scopes = (url.searchParams.get('scopes') ?? '').split(',').filter(Boolean).slice(0, 10);
   try {
+    if (pathname === '/relay/mac/panel' && get) return readPanel
+      ? json(await readPanel()) : json({ error: 'Panel unavailable' }, 503);
+    if (pathname.startsWith('/relay/mac/runs/') && get) {
+      const run = await readRun(env, pathname.slice('/relay/mac/runs/'.length));
+      return run ? json(run) : json({ error: 'Unknown run' }, 404);
+    }
     if (pathname === '/relay/mac/runs' && request.method === 'POST') {
       const text = await request.text();
       if (text.length > 262144) throw new Error('Receipt too large');

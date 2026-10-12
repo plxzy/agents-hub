@@ -79,7 +79,7 @@ function hubCounts(snapRuns, hubRuns) {
 
 // Panel data without the Mac: runs from D1 (plus any snapshot runs), the dok runner's agents and one-time codes for
 // rating finished Hub runs. The dashboard treats `relay` as "a hosted runner is online", so dok presents itself there.
-async function nativePanel(env) {
+async function nativePanel(env, { withConfirm = false } = {}) {
   const snap = await latest(env), m = snap ? meta(snap, env) : null, hubRuns = await recentRuns(env, { limit: 50 }), dok = await dokStatus(env);
   const base = snap ? snapshotData(snap, m) : { generated_at: null, capabilities: CAPABILITIES, status: { agents: null, runs: null, running: null, pending: null, last_run: null },
     agents: [], runs: [], pending: null, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
@@ -89,12 +89,17 @@ async function nativePanel(env) {
   const agents = [...base.agents.map((a) => ({ ...a, remote_allowed: dok.agents.includes(a.name) })),
     ...dok.agents.filter((n) => !known.has(n)).map((name) => ({ name, description: 'Runs on dok.', remote_allowed: true, last_run: null }))];
   const runs = mergeRuns(base.runs, hubRuns).slice(-50);
-  const rate = await issueCodes(env, 'rate', hubRuns.filter((r) => r.status !== 'running').map((r) => r.run_id));
-  const notes = await pendingMemory(env), review = await issueCodes(env, 'review', notes.map((n) => n.id));
+  const notes = await pendingMemory(env);
+  // Only the authenticated Hub widget requests codes. Mac reads do not even issue them.
+  const confirm = withConfirm ? {
+    rate: await issueCodes(env, 'rate', hubRuns.filter((r) => r.status !== 'running').map((r) => r.run_id)),
+    review: await issueCodes(env, 'review', notes.map((n) => n.id)),
+  } : null;
   const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
-  return { ...base, agents, runs, pending, status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
-    capabilities: { ...base.capabilities, run: dok.online && dok.agents.length > 0, mutate: true },
-    confirm: { review, rate }, relay: { online: dok.online, enabled: dok.enabled !== false, agents: dok.agents, runner: 'dok' } };
+  return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending,
+    status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
+    capabilities: { ...base.capabilities, run: withConfirm && dok.online && dok.agents.length > 0, mutate: withConfirm },
+    ...(confirm ? { confirm } : {}), relay: { ...dok, runner: 'dok' } };
 }
 
 const toolList = TOOLS.map(({ name, title, description, input, annotations, ui }) => ({
@@ -144,7 +149,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         try {
           const args = params.arguments ?? {};
           if (params.name === 'panel_data') {
-            const { confirm, ...value } = await nativePanel(env);
+            const { confirm, ...value } = await nativePanel(env, { withConfirm: true });
             return reply({ content: [{ type: 'text', text: JSON.stringify(value) }], _meta: { 'agents-hub/confirm': confirm } });
           }
           if (params.name === 'panel_run') {
@@ -292,7 +297,7 @@ export async function defaultFetch(request, env) {
  */
 export async function hubFetch(request, env, dashboardHtml = '', keys) {
   const { pathname } = new URL(request.url);
-  if (pathname.startsWith('/relay/')) return relayFetch(request, env);
+  if (pathname.startsWith('/relay/')) return relayFetch(request, env, () => nativePanel(env));
   if (pathname === '/mcp' || pathname.startsWith('/mcp/')) {
     const owner = await accessSubject(request, env, keys);
     if (!owner) return unauthorized();

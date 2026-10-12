@@ -34,6 +34,17 @@ export async function hubCall(route, { method = 'GET', body, config = hubConfig(
   return response.json();
 }
 
+/** The same Hub view the hosted widget reads, through the Mac's read-only principal. */
+export async function hubPanel(options = {}) {
+  const panel = await hubCall('panel', options);
+  if (!panel?.status || !Array.isArray(panel.agents) || !Array.isArray(panel.runs) || !Array.isArray(panel.pending)) {
+    throw new Error('Hub returned an invalid panel');
+  }
+  return panel;
+}
+
+export const hubRun = (id, options = {}) => hubCall(`runs/${encodeURIComponent(id)}`, options);
+
 // Only these fields leave the Mac. Commands, workspace paths, raw events, transcripts and session files stay local.
 const SEND = ['run_id', 'agent', 'kind', 'agent_version', 'status', 'task', 'started', 'ended', 'model', 'thinking', 'output', 'error',
   'tool_calls', 'blocked', 'model_calls', 'usage'];

@@ -3,11 +3,23 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hubConfig, hubReceipt, sendReceipt, flushOutbox, hubMemory, refreshHubCache, cachedPending } from './hub.mjs';
+import { hubConfig, hubReceipt, sendReceipt, flushOutbox, hubMemory, refreshHubCache, cachedPending, hubPanel, hubRun } from './hub.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hub-'));
 const config = { endpoint: 'https://hub.example', token: 't'.repeat(32) };
 const reply = (status, body) => ({ ok: status < 300, status, json: async () => body });
+
+test('panel and run reads use the Mac routes, bounded requests, and no write body', async () => {
+  const panel = { status: { agents: 1 }, agents: [{ name: 'helper' }], runs: [], pending: [] };
+  const calls = [];
+  const fetchImpl = async (url, init) => { calls.push(url); assert.equal(init.method, 'GET'); assert.equal(init.body, undefined);
+    assert.equal(init.redirect, 'error'); assert.ok(init.signal); return reply(200, url.endsWith('/panel') ? panel : { run_id: 'r-1' }); };
+  assert.deepEqual(await hubPanel({ config, fetchImpl }), panel);
+  assert.deepEqual(await hubRun('r-1', { config, fetchImpl }), { run_id: 'r-1' });
+  assert.deepEqual(calls, ['https://hub.example/relay/mac/panel', 'https://hub.example/relay/mac/runs/r-1']);
+  await assert.rejects(hubPanel({ config, fetchImpl: async () => reply(200, {}) }), /invalid panel/);
+  await assert.rejects(hubPanel({ config, fetchImpl: async () => reply(503, {}) }), /503/);
+});
 
 test('config needs https and a real token; AGENT_HUB=0 turns the link off', () => {
   const dir = tmp(), file = path.join(dir, 'mac.json');

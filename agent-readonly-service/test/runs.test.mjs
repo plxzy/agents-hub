@@ -121,6 +121,24 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.equal(pv.pending.length, 1); assert.equal(pv.pending[0].kind, 'memory'); assert.match(pv.pending[0].body, /git fetch dok/);
   assert.equal(pv.status.pending.memory, 1);
   const noteId = pv.pending[0].id; assert.ok(review[noteId]); assert.doesNotMatch(p2.content[0].text, new RegExp(review[noteId]));
+  await t.test('Mac panel matches Hub data without issuing or returning decision codes', async () => {
+    const before = (await db.prepare('SELECT COUNT(*) AS n FROM confirmations').first()).n;
+    const response = await mac('panel');
+    assert.equal(response.status, 200);
+    const text = await response.text(), macPanel = JSON.parse(text);
+    for (const field of ['agents', 'runs', 'pending', 'status']) assert.deepEqual(macPanel[field], pv[field]);
+    assert.equal(macPanel.source, 'hub');
+    assert.equal(macPanel.capabilities.run, false); assert.equal(macPanel.capabilities.mutate, false);
+    assert.equal('confirm' in macPanel, false); assert.equal('_meta' in macPanel, false);
+    for (const code of [...Object.values(review), ...Object.values(p2._meta['agents-hub/confirm'].rate)]) assert.ok(!text.includes(code));
+    assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM confirmations').first()).n, before);
+    assert.equal((await mac('panel', {}, 'wrong')).status, 401);
+    assert.equal((await mac('panel', {}, DOK)).status, 401);
+    assert.equal((await mac('panel', { method: 'POST', body: '{}' })).status, 404);
+    assert.equal((await (await mac(`runs/${RUN}`)).json()).run_id, RUN);
+    assert.equal((await mac(`runs/${RUN}`, {}, DOK)).status, 401);
+    assert.equal((await mac('runs/missing')).status, 404);
+  });
   const decide = (args) => tool('review_decide', { id: noteId, decision: 'accept', request_id: 'review-request-1', ...args });
   assert.match((await decide({ confirm: 'z'.repeat(24) })).content[0].text, /needs a click/);
   assert.match((await decide({ confirm: review[noteId] })).content[0].text, /accepted/);
