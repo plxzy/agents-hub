@@ -15,8 +15,9 @@ import tarfile
 root = pathlib.Path(sys.argv[1]).expanduser()
 revision = subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip()
 entries = subprocess.check_output(['git', '-C', str(root), 'ls-tree', '-r', revision], text=True).splitlines()
-allowed = ('agents/helper.md', 'agents/workflow.md', 'agent-skills/workflow-context/',
-           'evals/helper/', 'evals/workflow/', 'memory/shared/', 'memory/projects/dev-workflow/', 'memory/agents/workflow/')
+allowed = ('agents/helper.md', 'agents/workflow.md', 'agents/vm.md', 'agents/tikkytracker.md', 'agent-skills/workflow-context/',
+           'evals/helper/', 'evals/workflow/', 'memory/shared/', 'memory/projects/dev-workflow/', 'memory/agents/workflow/',
+           'memory/projects/vm/', 'memory/projects/tikkytracker/', 'memory/agents/vm/', 'memory/agents/tikkytracker/')
 files = {}
 for entry in entries:
     metadata, name = entry.split('\t', 1)
@@ -25,7 +26,7 @@ for entry in entries:
     if '__pycache__' in name or not name.endswith(('.md', '.py', '.json')):
         continue
     files[name] = subprocess.check_output(['git', '-C', str(root), 'show', f'{revision}:{name}'])
-manifest = {'source_revision': revision, 'agents': ['helper', 'workflow'],
+manifest = {'source_revision': revision, 'agents': ['helper', 'workflow', 'vm', 'tikkytracker'],
             'files': {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
 files['RELEASE.json'] = (json.dumps(manifest, indent=2) + '\n').encode()
 with tarfile.open(fileobj=sys.stdout.buffer, mode='w|') as archive:
