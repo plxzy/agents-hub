@@ -8,7 +8,6 @@ import vm from 'node:vm';
 import { generateKeyPair, SignJWT } from 'jose';
 import { hubFetch } from '../src/worker-core.mjs';
 import { dashboardHtml } from '../../agent-workflow/ui/dashboard.mjs';
-import { doctorHealth } from '../../agent-workflow/doctor.mjs';
 
 const plain = value => JSON.parse(JSON.stringify(value));
 async function host(t, { relay = true, snapshot = false } = {}) {
@@ -34,19 +33,11 @@ async function host(t, { relay = true, snapshot = false } = {}) {
   const env = { ACCESS_ISSUER: 'https://fixture.invalid', ACCESS_AUD: 'fixture-hub',
     DB: { prepare(sql) { assert.match(sql, /^SELECT /); reads.push(sql); return { first: async () => snapshot ? row : null }; } } };
   if (relay) {
-    env.RELAY_TOKEN = 'fixture-only';
+    // The runner (dok) is the only Durable Object the Hub talks to now.
+    env.DOK_RELAY_TOKEN = 'fixture-only'; env.DEVELOPMENT_ENABLED = 'true';
     env.RELAY = { getByName() { return {
       status() { const at = new Date().toISOString(); return { online: f.online, enabled: f.enabled, agents: ['helper'], observed_at: at, last_seen_at: at, protocol_version: 1 }; },
-      dispatch(name, args) {
-        assert.equal(name, 'panel_data', 'connection/refresh must not start a model or make a decision');
-        assert.deepEqual(args, {}); dispatches.push(name);
-        if (f.failPanel) throw new Error('fixture panel unavailable');
-        return { ok: true, value: { health: f.changeHealth(doctorHealth({ state, journal, sandboxed: false })),
-          status: { agents: 1, running: 0, pending: null }, pending: [],
-          agents: [{ name: 'helper', remote_allowed: true }, { name: 'network' }],
-          runs: [{ run_id: 'r-ordinary', agent: 'helper', status: 'completed', title: 'ordinary recent run', tool_calls: 0 }],
-          capabilities: { run: f.enabled, mutate: false }, relay: { online: true, enabled: f.enabled, agents: ['helper'] } } };
-      },
+      dispatch(name) { assert.fail('connection/refresh must not start a model or make a decision: ' + name); },
     }; } };
   }
   Object.defineProperty(env, 'PUBLISH_TOKEN', { get() { assert.fail('connection/refresh must not access publisher'); } });
@@ -157,46 +148,4 @@ test('session request tool result opens Development without launching a task', a
   assert.equal(ui.state.tab,'development');
   assert.match(text(ui.get('view')),/New development session/);
   assert.ok(!f.calls.includes('start_development_task'));
-});
-
-for (const [initial, snapshot] of [[false, false], [true, false], [true, true]]) test(`actual dashboard boot/refresh merge journal history (host result=${initial}, snapshot=${snapshot})`, async t => {
-  const f = await host(t, { snapshot }); const ended = f.completed('r-proven', 3600000); f.completed('r-ordinary', 1000, false);
-  const ui = await mount(t, f, { initial });
-  let h = ui.state.data.health;
-  assert.equal(h.last_successful_relay_run.run_id, 'r-proven'); assert.equal(h.last_successful_relay_run.ended, ended);
-  assert.equal(h.last_successful_relay_run.historical, true); assert.equal(h.versions.node, process.version);
-  assert.equal(h.snapshot.state, snapshot ? 'fresh' : 'unavailable');
-  if (snapshot) { assert.equal(h.snapshot.capabilities.run, false); assert.ok(h.snapshot.generated_at); }
-  else assert.equal(h.snapshot.capabilities, null);
-  assert.equal(h.relay.source, 'Durable Object status'); assert.equal(h.relay.freshness, 'fresh');
-  assert.equal(h.execution.enabled, true); assert.deepEqual(plain(h.allowlist.observed), ['helper']);
-  assert.match(text(ui.get('chips')), /r-proven.*historical; relay-journal/); assert.equal(ui.get('new').hidden, false);
-  assert.deepEqual(f.calls.slice(-2), ['open_dashboard', 'panel_data']);
-  f.completed('r-new', 500); f.controls.enabled = false;
-  await ui.refresh(); h = ui.state.data.health;
-  assert.equal(h.last_successful_relay_run.run_id, 'r-new'); assert.equal(h.execution.enabled, false);
-  assert.equal(h.snapshot.state, snapshot ? 'fresh' : 'unavailable'); assert.equal(ui.get('new').hidden, true);
-  assert.match(text(ui.get('chips')), /deliberately off/);
-  assert.deepEqual(f.calls.slice(-2), ['open_dashboard', 'panel_data']);
-  // A failed live read falls back to hosted unknown history/read-only capabilities, never stale Run controls.
-  f.controls.failPanel = true; await ui.refresh();
-  assert.equal(ui.state.data.capabilities.run, false); assert.equal(ui.state.data.health.last_successful_relay_run, null);
-  assert.equal(ui.get('new').hidden, true); assert.match(ui.get('error').textContent, /fixture panel unavailable/);
-});
-
-test('dashboard refresh keeps unknown/legacy/unproven/future/malformed history honest', async t => {
-  const f = await host(t); f.completed('r-ordinary', 1000, false);
-  const ui = await mount(t, f);
-  assert.equal(ui.state.data.health.last_successful_relay_run, null);
-  assert.match(text(ui.get('chips')), /unknown.*no journal-backed successful completion/);
-  const base = plain(ui.state.data.health);
-  for (const candidate of [undefined, { run_id: 'r-ordinary', ended: new Date().toISOString(), source: 'snapshot', historical: true },
-    { run_id: 'r-future', ended: new Date(Date.now() + 60000).toISOString(), source: 'relay-journal', historical: true },
-    { run_id: 'r-malformed', ended: 'malformed', source: 'relay-journal', historical: true }]) {
-    f.controls.changeHealth = h => candidate === undefined ? undefined : { ...h, last_successful_relay_run: candidate };
-    await ui.refresh();
-    const h = ui.state.data.health; assert.equal(h.last_successful_relay_run, null);
-    assert.deepEqual(plain(h.snapshot), base.snapshot); assert.equal(h.relay.source, 'Durable Object status');
-    assert.equal(h.execution.enabled, true); assert.match(text(ui.get('chips')), /Last successful relay run: unknown/);
-  }
 });

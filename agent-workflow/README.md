@@ -148,7 +148,7 @@ the snapshot publisher. Evidence: `../evidence/2026-10-12-hub-state/`.
 
 **The Mac as a Hub client (2026-10-12, Step 4d).** With `~/.config/agent-readonly/mac.json` present (endpoint + its own token; hidden
 from agent sandboxes) `agent run`/`chat` post their receipts to the Hub (`/relay/mac/runs`; an outbox in the state folder holds
-them while the Hub is unreachable and `agent link serve` / `agent sync pull` flush it), load accepted memory from the Hub bundle
+them while the Hub is unreachable and the next run, `agent sync pull` or opening the dashboard flush it), load accepted memory from the Hub bundle
 (local files are the offline fallback; receipts say `memory_source`) and send ```remember proposals with the receipt instead of
 writing local candidates. Ratings and memory decisions are the Hub panel's: `agent feedback`, `agent memory accept|reject|add`,
 `review_decide` and `rate_run` refuse on a linked Mac, and the review queue in `agent ui`/the Claude Code pane is a cached,
@@ -157,10 +157,9 @@ git and local receipts; `agent sync push` publishes the committed agent definiti
 Hub, refused if the Hub holds a revision this checkout did not publish. dok runs load the definition, skills and accepted memory for
 the agent from the Hub per run (receipt: `memory_source: hub`, `memory_hash` = bundle hash; frozen release only as a fallback;
 development sessions still use the frozen release because their grants pin it). Adding or changing an agent = commit in `~/.agents`,
-`agent sync push`, restart the dok runner only if a new agent must appear in its runnable list. `agent link serve` still exists
-for Mac-run remote starts (retired in Step 5); snapshots are no longer published. Tools: `tools/hub-import/{memory,runs}.mjs`.
+`agent sync push`, restart the dok runner only if a new agent must appear in its runnable list. The Mac relay (`agent link`) and snapshots are retired (`RUNNERS.md`). Tools: `tools/hub-import/{memory,runs}.mjs`.
 
-The Mac relay remains a fallback for agents dok does not offer. Code: `dev-sessions.mjs` (runs lane),
+Code: `dev-sessions.mjs` (runs lane),
 `dev-session-worker.mjs` (`executeRun`), Hub `src/runs.mjs`, `src/accounts.mjs`. Evidence:
 `../evidence/2026-10-12-dok-runner-step0-1b/`.
 
@@ -216,17 +215,8 @@ the dashboard, the Pi package in `../plugins/agents/`, and later the hosted hub.
   `agent ui` serves the same page on 127.0.0.1 with a per-launch token while the command runs.
 - Pi processes started for an agent get `AGENT_RUN=1`, so the Pi package leaves them alone.
 
-Hosted ChatGPT and Dots read sanitized snapshots from the Agents Hub Worker (`../agent-readonly-service/`);
-its optional foreground Mac relay separately enables helper-only remote starts and user-click review controls.
-Published snapshot `capabilities.run:false` / `mutate:false` stay read-only even when live relay state is online
-and enabled. `agent` publishes snapshots after runs/chats when the existing publisher configuration exists.
-
-`agent link doctor --json` is a read-only one-shot report, not a relay launcher or heartbeat. It separates observed
-live state from local configuration and historical run completion, preserving unknowns where sources are unavailable.
-`--input observations.json` can inspect one existing raw hosted status/dashboard observation; it does not refresh it.
-The dashboard and existing `get_status` reuse the additive health report. See `LINK.md` for sources, sandbox limits,
-helper-only wording and exit codes (0 fresh connected/enabled or deliberately off, 1 disconnected/mismatch, 2 unknown).
-No new background service, polling fallback or unattended monitoring is introduced. This Plan 1A patch is local only.
+Hosted ChatGPT, Dots and Claude use the Agents Hub Worker (`../agent-readonly-service/`): runs start on dok and runs, ratings, memory and
+agent definitions live in the Hub's D1. See `RUNNERS.md` for who runs what; the Mac relay and snapshots are retired.
 
 Registered (2026-10-09) in Claude Code (`claude mcp add -s user agents -- node .../mcp.mjs`), Codex
 (`codex mcp add agents -- node .../mcp.mjs`) and Claude Desktop; `../plugins/agents/` packages it for all three

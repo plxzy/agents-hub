@@ -14,7 +14,6 @@ import {
 } from './agent.mjs';
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
 import { DASHBOARD_URI, READ_OPS, lastRunOf, runBrief } from './contract.mjs';
-import { doctorHealth } from './doctor.mjs';
 import { linkedHub, refreshHubCache, flushOutbox } from './hub.mjs';
 
 export { DASHBOARD_URI };
@@ -175,7 +174,6 @@ function status({ root, state }) {
     agents: loadAgents(root).length, runs: runs.length, running: runs.filter((r) => r.status === 'running').length,
     pending: { memory: items.filter((p) => p.kind === 'memory').length, proposals: items.filter((p) => p.kind !== 'memory').length },
     last_run: last ? { run_id: last.run_id, agent: last.agent, status: last.status, ended: last.ended } : null,
-    health: doctorHealth({ state }),
   };
 }
 
@@ -187,7 +185,6 @@ export function dashboardData(ctx) {
     generated_at: new Date().toISOString(),
     capabilities: { discovery: true, status: true, context: true, run: true, mutate: true },
     status: currentStatus,
-    health: currentStatus.health,
     agents: loadAgents(ctx.root).map((a) => agentSummary(a, runs)),
     runs: runs.slice(-50).map(brief),
     pending: pending(ctx.root).map(({ id, kind, agent, why, body }) => ({ id, kind, agent, why, body })),

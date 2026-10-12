@@ -61,11 +61,3 @@ test('host commands are absent from MCP discovery and cannot be validated as use
   assert.match(tools.find(t=>t.name==='request_development')._meta.ui.resourceUri,/dashboard-v\d+\.html$/);
 });
 
-test('legacy workflow start explains the approval route without dispatching to either host', async () => {
-  const env={RELAY_TOKEN:'synthetic-only',RELAY:{getByName(){throw new Error('must not dispatch');}}};
-  const response=await apiFetch(new Request('https://test/mcp',{method:'POST',body:JSON.stringify({id:1,method:'tools/call',params:{name:'start_run',arguments:{agent:'workflow',task:'Plan 1B',request_id:'legacy-request'}}})}),env,'','owner');
-  const result=(await response.json()).result;
-  assert.equal(result.isError,true);
-  assert.match(result.content[0].text,/request_development/);
-  assert.match(result.content[0].text,/No task was started/);
-});

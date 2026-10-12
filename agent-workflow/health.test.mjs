@@ -7,7 +7,6 @@ import vm from 'node:vm';
 import childProcess from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { healthOf, healthTime, healthLabels } from './health.mjs';
-import { doctorHealth, doctorInput } from './doctor.mjs';
 import { dashboardHtml } from './ui/dashboard.mjs';
 
 const now = Date.parse('2026-10-09T15:00:00.000Z');
@@ -97,83 +96,6 @@ function fixture(t) {
   const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value));
   return { root, state, journal, write };
 }
-
-test('local doctor proves origin with existing journal and completion receipts, never recent ordinary runs', (t) => {
-  const f = fixture(t);
-  f.write(path.join(f.journal, 'runs/r-old.json'), { request_id: 'request-old' });
-  f.write(path.join(f.journal, 'request-old.json'), { state: 'done', value: { run_id: 'r-old' } });
-  f.write(path.join(f.state, 'runs/r-old.json'), { run_id: 'r-old', status: 'completed', ended: at(3600000) });
-  f.write(path.join(f.state, 'runs/r-ordinary.json'), { run_id: 'r-ordinary', status: 'completed', ended: at(1) });
-  f.write(path.join(f.journal, 'runs/r-future.json'), { request_id: 'request-future' });
-  f.write(path.join(f.journal, 'request-future.json'), { state: 'done', value: { run_id: 'r-future' } });
-  f.write(path.join(f.state, 'runs/r-future.json'), { run_id: 'r-future', status: 'completed', ended: at(-1) });
-  const config = { enabled: false, agents: ['helper'], token: 'synthetic-not-for-output' };
-  const before = fs.readFileSync(path.join(f.journal, 'request-old.json'), 'utf8');
-  const h = doctorHealth({ ...f, readConfig: () => config, sandboxed: false, now });
-  assert.equal(h.last_successful_relay_run.run_id, 'r-old'); assert.equal(h.last_successful_relay_run.historical, true);
-  assert.equal(h.last_successful_relay_run.ended, at(3600000)); assert.equal(h.execution.configured_enabled, false);
-  assert.equal(h.execution.enabled, null); assert.equal(h.relay.state, 'unknown'); assert.equal(h.exit_code, 2);
-  assert.doesNotMatch(JSON.stringify(h), /synthetic-not-for-output/);
-  assert.equal(fs.readFileSync(path.join(f.journal, 'request-old.json'), 'utf8'), before);
-});
-
-test('default sandbox doctor does not access private config/history or call mutations', () => {
-  let calls = 0;
-  const h = doctorHealth({ sandboxed: true, readConfig: () => { calls++; assert.fail('private access'); }, state: '/unavailable', journal: '/unavailable', now });
-  assert.equal(calls, 0); assert.equal(h.exit_code, 2); assert.match(h.history_limitation, /sandbox/);
-  assert.equal(h.allowlist.configured, null); assert.equal(h.last_successful_relay_run, null);
-});
-
-test('an isolated run state never implicitly reads the production relay journal', () => {
-  const original = fs.readdirSync; let calls = 0;
-  fs.readdirSync = () => { calls++; throw new Error('must not inspect a global journal for isolated state'); };
-  try {
-    const h = doctorHealth({ state: '/isolated-fixture-state', sandboxed: false, now });
-    assert.equal(calls, 0); assert.equal(h.last_successful_relay_run, null);
-    assert.match(h.history_limitation, /unavailable/);
-  } finally { fs.readdirSync = original; }
-});
-
-test('doctor input rechecks observation times and cannot attest journal origin', (t) => {
-  const f = fixture(t), file = path.join(f.root, 'observations.json');
-  const d = data(); d.last_successful_relay_run = { origin: 'relay-journal', run_id: 'r-invented', ended: at() };
-  f.write(file, d); const h = doctorInput(file, { now });
-  assert.equal(h.last_successful_relay_run, null); assert.equal(h.exit_code, 0);
-  assert.match(h.relay.source, /not refreshed/);
-  assert.equal(doctorInput(file, { now: now + 60000 }).exit_code, 1);
-  f.write(file, []); assert.throws(() => doctorInput(file, { now }), /raw get_status/);
-});
-
-test('normal local health path never calls process, mutation, network or timer APIs', (t) => {
-  const f = fixture(t), calls = [], originals = [];
-  const trap = (object, key) => { originals.push([object, key, object[key]]); object[key] = () => { calls.push(key); throw new Error('forbidden health side effect'); }; };
-  for (const key of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) trap(childProcess, key);
-  for (const key of ['writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'mkdir', 'mkdirSync', 'rename', 'renameSync', 'unlink', 'unlinkSync', 'rm', 'rmSync']) trap(fs, key);
-  for (const key of ['writeFile', 'appendFile', 'mkdir', 'rename', 'unlink', 'rm']) trap(fs.promises, key);
-  for (const key of ['fetch', 'setTimeout', 'setInterval']) trap(globalThis, key);
-  syncBuiltinESMExports();
-  try {
-    const h = doctorHealth({ ...f, sandboxed: false, readConfig: () => ({ enabled: true, agents: ['helper'] }), now });
-    assert.equal(h.exit_code, 2); assert.deepEqual(calls, []);
-    assert.equal(report(data()).exit_code, 0); assert.deepEqual(calls, []);
-  } finally { for (const [object, key, value] of originals.reverse()) object[key] = value; syncBuiltinESMExports(); }
-});
-
-test('CLI doctor is one-shot JSON with documented 0/1/2 exits, not another model invocation', (t) => {
-  const f = fixture(t), file = path.join(f.root, 'observations.json');
-  const cli = new URL('./agent.mjs', import.meta.url).pathname;
-  const run = (...args) => childProcess.spawnSync(process.execPath, [cli, 'link', 'doctor', '--json', ...args], { encoding: 'utf8', timeout: 5000,
-    env: { ...process.env, AGENT_SANDBOXED: '1' } });
-  const d = data(), stamp = new Date().toISOString();
-  d.relay.observed_at = d.relay.last_seen_at = d.snapshot.generated_at = d.snapshot.published_at = stamp;
-  d.relay.enabled = false; f.write(file, d);
-  let result = run('--input', file); assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).execution.enabled, false);
-  d.relay.online = false; f.write(file, d); result = run('--input', file); assert.equal(result.status, 1, result.stderr);
-  result = run(); assert.equal(result.status, 2, result.stderr); assert.equal(JSON.parse(result.stdout).execution.enabled, null);
-  assert.match(JSON.parse(result.stdout).history_limitation, /sandbox/);
-  result = run('--unexpected'); assert.equal(result.status, 1); assert.match(result.stderr, /Usage/);
-});
 
 test('dashboard embeds and executes the same pure health code without network dependencies', () => {
   const html = dashboardHtml({ bridge: 'globalThis.ExtApps={};' });

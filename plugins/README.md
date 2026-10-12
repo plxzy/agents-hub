@@ -45,7 +45,7 @@ Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin
 
 ChatGPT, Dots and claude.ai connect to `https://YOUR-HUB.workers.dev/mcp` as an account App /
 custom connector with OAuth (Cloudflare Access Managed OAuth). It provides published snapshots and, while
-`agent link` is online, live panel data and explicitly allowed Mac runs. See `../agent-workflow/LINK.md`.
+dok runs agents, and the Hub holds runs, ratings and memory. See `../agent-workflow/RUNNERS.md`.
 The former `agents-hub` plugin package (read-only remote plugin) was removed on 2026-10-09; the user uninstalled it.
 
 ## ChatGPT/Codex panel (MCP Extensions)

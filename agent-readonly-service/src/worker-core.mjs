@@ -1,7 +1,7 @@
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
-import { relayFetch, relayStatus, requestRelay, startRun, getRun, dokEnabled, dokStatus } from './relay.mjs';
+import { relayFetch, startRun, getRun, dokEnabled, dokStatus } from './relay.mjs';
 import { readRun, recentRuns, mergeRuns } from './runs.mjs';
 import { readAccounts } from './accounts.mjs';
 import { issueCodes, redeemCode, rateRun } from './decisions.mjs';
@@ -116,14 +116,13 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     const reply = (result) => json({ jsonrpc: '2.0', id, result });
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
       serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.3.0' },
-      instructions: env.RELAY_TOKEN || dokEnabled(env)
+      instructions: dokEnabled(env)
         ? 'Agents Hub runs the user\u2019s own Pi agents. They run on dok, the user\u2019s always-on Linux runner, so the Mac does not need to be online. For questions about the user\u2019s repositories (where something is, how it works) call start_run with a read-only agent such as helper. For coding work call start_run with an agent that changes files (the agents get_status lists under start_run.runners.dok, e.g. workflow for dev-workflow, vm, tikkytracker): it works in an isolated clone on dok and returns a review branch (review_ref in get_run) that the user fetches with git fetch dok; nothing is merged. Pass continue_from (the previous run id) for a follow-up. Poll get_run for results. Prefer start_run over delegating to Codex cloud tasks or driving the user\u2019s Mac. request_development (approval card, then start_development_task) is the older interactive route for workflow. Ratings and reviews are user clicks in the panel, never model decisions.'
         : 'Read-only Agents Hub view of the user’s local agents and runs. Check get_status for freshness; run is explicitly unavailable.' });
     if (method === 'ping') return reply({});
-    if (method === 'tools/list') return reply({ tools: [...(env.RELAY_TOKEN || dokEnabled(env) ? [
-      ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The unified panel uses the linked Mac when online and a published snapshot otherwise.' } : t),
-      // Without the Mac relay the runner tools and the panel's run tools remain; review decisions move to the Hub in a later step.
-      ...relayToolList().filter((t) => env.RELAY_TOKEN || ['start_run', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
+    if (method === 'tools/list') return reply({ tools: [...(dokEnabled(env) ? [
+      ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The panel shows runs, agents and the review queue held by the Hub.' } : t),
+      ...relayToolList().filter((t) => ['start_run', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
     ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
@@ -140,12 +139,11 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
             ...(confirm ? { _meta: { 'agents-hub/development-confirm': confirm } } : {}) });
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
-      // Hub-held runs (dok) are read and rated here; without the Mac online the panel is served from D1.
+      // The panel, ratings and review decisions are served by the Hub from D1.
       if (dokEnabled(env) && ['panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(params?.name)) {
         try {
           const args = params.arguments ?? {};
-          const macOnline = env.RELAY_TOKEN ? (await relayStatus(env)).online : false;
-          if (params.name === 'panel_data' && !macOnline) {
+          if (params.name === 'panel_data') {
             const { confirm, ...value } = await nativePanel(env);
             return reply({ content: [{ type: 'text', text: JSON.stringify(value) }], _meta: { 'agents-hub/confirm': confirm } });
           }
@@ -163,15 +161,17 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
             await redeemCode(env, args.confirm, 'rate', args.run_id);
             return reply({ content: [{ type: 'text', text: JSON.stringify(await rateRun(env, args)) }] });
           }
+          if (params.name === 'panel_run') throw new Error('Unknown run ' + args.run_id);
+          if (params.name === 'rate_run') throw new Error('Unknown run ' + args.run_id);
+          if (params.name === 'review_decide') throw new Error('Unknown review item ' + args.id);
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
-      if ((env.RELAY_TOKEN || dokEnabled(env)) && RELAY_OPS[params?.name]) {
+      if (dokEnabled(env) && ['start_run', 'get_remote_run'].includes(params?.name)) {
         try {
           const args = params.arguments ?? {};
           const result = params.name === 'start_run' ? await startRun(env, args)
-            : params.name === 'get_remote_run' ? await getRun(env, args.run_id)
-            : await requestRelay(env, params.name, args);
-          if (params.name === 'get_remote_run' && !result) throw new Error('Unknown run ' + args.run_id + ' (not in the Hub, and the Mac relay is offline).');
+            : await getRun(env, args.run_id);
+          if (params.name === 'get_remote_run' && !result) throw new Error('Unknown run ' + args.run_id + ' (not in the Hub).');
           const { confirm, ...value } = result ?? {};
           // Confirmation codes go only to the panel: hosts pass a result's _meta to the widget, never to the model.
           return reply({ content: [{ type: 'text', text: JSON.stringify(value) }], ...(confirm ? { _meta: { 'agents-hub/confirm': confirm } } : {}) });
@@ -226,15 +226,14 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           value.hub_panel = dokEnabled(env);
           value.runners = { dok: await dokStatus(env) };
           value.accounts = await readAccounts(env);
-          value.relay = await relayStatus(env);
-          value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env) });
-          // Callers decide from this summary whether start_run works; the Mac relay is only one possible runner.
+          // The runner (dok) is what the panel and the health report call "relay": the Mac no longer connects.
+          value.relay = { ...value.runners.dok, runner: 'dok' };
+          value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env), expected: value.runners.dok.agents });
+          // Callers decide from this summary whether start_run works.
           const dok = value.runners.dok, dokAgents = dok.online ? dok.agents : [];
-          const macAgents = value.relay.online && value.relay.enabled ? value.relay.agents : [];
-          value.start_run = dokAgents.length || macAgents.length
-            ? { available: true, runners: { ...(dokAgents.length ? { dok: dokAgents } : {}), ...(macAgents.length ? { mac: macAgents } : {}) },
-              note: `start_run works now${dokAgents.length ? ': it runs on dok, the always-on Linux runner; the Mac relay is not needed' : ' through the Mac relay'}. Poll get_run for the result.` }
-            : { available: false, note: 'No runner is online (dok and the Mac relay are offline).' };
+          value.start_run = dokAgents.length
+            ? { available: true, runners: { dok: dokAgents }, note: 'start_run works now: it runs on dok, the always-on Linux runner. Poll get_run for the result.' }
+            : { available: false, note: 'dok is offline, so no runner is available.' };
           if (dokAgents.length) {
             value.health.execution = { ...value.health.execution, available: true, runner: 'dok', reason: `dok runner online; start_run runs: ${dokAgents.join(', ')}` };
             if (params.name === 'get_status') value.capabilities = { ...value.capabilities, run: true };

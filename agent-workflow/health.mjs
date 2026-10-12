@@ -13,7 +13,7 @@ const boolean = (value) => typeof value === 'boolean' ? value : null;
 const agents = (value) => Array.isArray(value) && value.every((x) => typeof x === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(x)) ? [...new Set(value)].sort() : null;
 
 /** Raw get_status/open_dashboard observations, not a previous health report. Offline data never authorizes runs. */
-export function healthOf(data = {}, { now = Date.now(), snapshotMaxAge = 900000, relayMaxAge = 30000 } = {}) {
+export function healthOf(data = {}, { now = Date.now(), snapshotMaxAge = 900000, relayMaxAge = 30000, expected = ['helper'] } = {}) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) data = {};
   const relay = data.relay ?? {};
   const seen = healthTime(relay.last_seen_at, now), observed = healthTime(relay.observed_at, now);
@@ -28,8 +28,8 @@ export function healthOf(data = {}, { now = Date.now(), snapshotMaxAge = 900000,
   const knownAt = healthTime(historical.observed_at, now);
   const observedAgents = live ? agents(relay.agents) : knownAt.at ? agents(historical.agents) : null;
   const configuredAgents = agents(configured.agents);
-  const expected = ['helper']; // Diagnostic expectation only; the Mac's private configuration remains authoritative.
-  const matches = observedAgents === null ? null : JSON.stringify(observedAgents) === JSON.stringify(expected);
+  // `expected` is a diagnostic expectation only (the runner's own configuration stays authoritative).
+  const matches = observedAgents === null ? null : JSON.stringify(observedAgents) === JSON.stringify([...expected].sort());
   const enabled = live ? boolean(relay.enabled) : null;
   const available = state === 'disconnected' ? false : !live || enabled === null || matches === null ? null : enabled && matches;
   const snap = data.snapshot;

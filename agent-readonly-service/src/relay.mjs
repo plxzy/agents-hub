@@ -5,22 +5,16 @@ import { decisionsSince } from './decisions.mjs';
 import { publishKnowledge, knowledgeRevision, agentBundle, readFiles } from './knowledge.mjs';
 import { readAccounts, recordAccount } from './accounts.mjs';
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
-const relay = (env) => env.RELAY.getByName('owner-mac');
-export async function relayStatus(env) {
-  const unavailable = () => ({ online: false, enabled: false, agents: [], available: false });
-  if (!env.RELAY_TOKEN || !env.RELAY) return unavailable();
-  try { return await relay(env).status(); }
-  catch { return unavailable(); }
-}
 export async function relayFetch(request, env) {
   const pathname = new URL(request.url).pathname;
   const dok = pathname.startsWith('/relay/dok-dev/'), mac = pathname.startsWith('/relay/mac/');
-  const token = dok ? env.DOK_RELAY_TOKEN : mac ? env.MAC_TOKEN : env.RELAY_TOKEN;
+  if (!dok && !mac) return json({ error: 'not_found' }, 404); // the Mac no longer connects (retired 2026-10-12)
+  const token = dok ? env.DOK_RELAY_TOKEN : env.MAC_TOKEN;
   if (!token || dok && env.DEVELOPMENT_ENABLED !== 'true') return json({ error: 'unauthorized' }, 401);
   const digest = (s) => crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
   const [a, b] = await Promise.all([digest(request.headers.get('authorization') ?? ''), digest('Bearer ' + token)]);
   if (!crypto.subtle.timingSafeEqual(a, b)) return json({ error: 'unauthorized' }, 401);
-  const target = dok ? env.RELAY.getByName('owner-dok-dev') : relay(env);
+  const target = dok ? env.RELAY.getByName('owner-dok-dev') : null;
   if (dok && pathname === '/relay/dok-dev/lease' && request.method === 'POST') {
     try {
       const text = await request.text();
@@ -59,24 +53,10 @@ export async function relayFetch(request, env) {
   }
   // The Mac's own principal: posts its receipts, reads bundles and decisions. It cannot rate, decide, start or read /mcp.
   if (mac) return macRoute(request, env, pathname);
-  if (pathname !== (dok ? '/relay/dok-dev/connect' : '/relay/connect')) return json({ error: 'not_found' }, 404);
+  if (pathname !== '/relay/dok-dev/connect') return json({ error: 'not_found' }, 404);
   if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
   return target.fetch(request);
 }
-export async function requestRelay(env, operation, args) {
-  validateRelay(operation, args);
-  if (!env.RELAY_TOKEN || !env.RELAY) throw new Error('Mac is offline. No action was queued.');
-  let result;
-  try { result = await relay(env).dispatch(operation, args); }
-  catch (e) {
-    // RPC/runtime loss is potentially after dispatch. Never silently retry a mutation here.
-    if (/reset|disconnect|network|internal|broken|overload/i.test(e.message)) throw new Error(`Relay transport interrupted; action may have completed. Retry with the SAME request_id: ${args.request_id ?? '(read-only call)'}`);
-    throw e;
-  }
-  if (!result.ok) throw new Error(result.error);
-  return result.value;
-}
-
 export const dokEnabled = (env) => Boolean(env.DOK_RELAY_TOKEN && env.RELAY && env.DEVELOPMENT_ENABLED === 'true');
 export async function dokStatus(env) {
   if (!dokEnabled(env)) return { online: false, enabled: false, agents: [], available: false };
@@ -85,7 +65,7 @@ export async function dokStatus(env) {
 }
 const NEXT = 'Poll get_run with this run_id until status is no longer running (usually one to a few minutes). Do not start a duplicate run.';
 
-/** dok first (always-on runner); the optional Mac relay only for agents dok does not offer. */
+/** Starts a run on dok, the always-on runner. */
 export async function startRun(env, args) {
   validateRelay('start_run', args);
   const dok = await dokStatus(env);
@@ -98,20 +78,16 @@ export async function startRun(env, args) {
     try { await storeRun(env, result.value, 'dok'); } catch { /* dok also posts its receipt */ }
     return { run_id: result.value.run_id, agent: args.agent, status: result.value.status, runner: 'dok', ...(result.value.repo ? { repo: result.value.repo } : {}), model: result.value.model, thinking: result.value.thinking, next_step: NEXT };
   }
-  const mac = await relayStatus(env);
-  if (mac.online && (args.model || args.thinking || args.repo || args.continue_from)) throw new Error('Model, thinking, repo and continue_from are supported on dok only. No action was queued.');
-  if (mac.online) return { ...(await requestRelay(env, 'start_run', args)), runner: 'mac', next_step: NEXT };
   if (args.agent === 'workflow' && !dok.online) throw new Error('workflow runs on dok, which is offline. For interactive development call request_development to show the approval card when dok is online. No task was started.');
   const offered = dok.online ? dok.agents : [];
-  throw new Error(dok.online ? `dok does not run ${args.agent}; it offers: ${offered.join(', ') || 'none'}. The Mac relay is offline. No action was queued.`
-    : 'No runner is online (dok and the Mac relay are both offline). No action was queued.');
+  throw new Error(dok.online ? `dok does not run ${args.agent}; it offers: ${offered.join(', ') || 'none'}. No action was queued.`
+    : 'No runner is online (dok is offline). No action was queued.');
 }
 
-/** Hub receipts first; Mac relay runs are read live from the Mac when it is online. */
+/** Receipts held by the Hub. */
 export async function getRun(env, runId) {
   const hub = await readRun(env, runId);
   if (hub) return hub;
-  if ((await relayStatus(env)).online) return requestRelay(env, 'get_remote_run', { run_id: runId });
   return null;
 }
 

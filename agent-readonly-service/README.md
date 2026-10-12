@@ -1,9 +1,9 @@
 # Agents Hub hosted service
 
-A Cloudflare Worker (deployed with the `cf` CLI and `@cloudflare/vite-plugin`) that serves the authenticated,
-Agents Hub view of local agents and recent runs to ChatGPT and Dots. Local Pi stays the only place agents run.
-The optional foreground outbound Mac relay adds allowlisted starts and app-only review controls to the same hosted entry;
-offline access remains a sanitized read-only snapshot. See `../agent-workflow/LINK.md` for its protocol and limits.
+A Cloudflare Worker (deployed with the `cf` CLI and `@cloudflare/vite-plugin`): the Agents Hub for ChatGPT, Dots and Claude. It
+starts the user's agents on dok (outbound WebSocket to a Durable Object), stores runs, ratings, memory notes and published agent
+definitions in D1, serves the review panel, and gives the Mac a limited principal (`/relay/mac/*`). Decisions are only the user's
+panel clicks. See `../agent-workflow/RUNNERS.md`.
 
 Live: `https://YOUR-HUB.workers.dev`
 
@@ -29,7 +29,7 @@ relay connected/disconnected/unknown and freshness, snapshot age/freshness, expe
 allowlist, enabled state, sources and timestamps. Snapshot `capabilities.run` stays false when the live relay exists;
 only live panel data exposes controls. Unavailable/malformed/future timestamps never imply healthy age zero. Missing
 run-origin evidence is explicit; sanitized snapshot runs are not automatically relay-origin. CLI and dashboard reuse
-`agent-workflow/health.mjs`; see `../agent-workflow/LINK.md` for doctor input limits and exit codes. This local patch
+`agent-workflow/health.mjs`; (the Mac relay and `agent link doctor` are retired; `relay` in health now describes the dok runner). This local patch
 has not been deployed. Authenticated MCP initialization, notifications, ping, discovery and dashboard resources work
 before any snapshot is published; snapshot-backed reads still return no_snapshot/503. Health reads return unknown
 snapshot counts and can observe the existing relay independently. On dashboard refresh, hosted snapshot/DO health

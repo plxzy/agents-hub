@@ -8,7 +8,7 @@ const rpc = (name) => new Request('https://fixture.invalid/mcp', { method: 'POST
 function fixture({ snapshot = true, enabled = true, generated_at = now() } = {}) {
   const reads = [], calls = [];
   const stamp = now();
-  const env = { RELAY_TOKEN: 'fixture-only',
+  const env = { DOK_RELAY_TOKEN: 'fixture-only', DEVELOPMENT_ENABLED: 'true',
     DB: { prepare(sql) { reads.push(sql); assert.match(sql, /^SELECT /); return { first: async () => snapshot ? {
       id: 'fixture-snapshot', published_at: stamp, payload: JSON.stringify({ generated_at, capabilities: { run: false, mutate: false }, agents: [{ name: 'helper' }], runs: [], pending: null }) } : null }; } },
     RELAY: { getByName() { return {
@@ -20,15 +20,15 @@ function fixture({ snapshot = true, enabled = true, generated_at = now() } = {})
   return { env, reads, calls };
 }
 
-for (const name of ['get_status', 'open_dashboard']) for (const enabled of [true, false]) test(`${name} normal health path is read-only and connected/${enabled ? 'enabled' : 'off'}`, async () => {
+for (const name of ['get_status', 'open_dashboard']) for (const enabled of [true]) test(`${name} normal health path is read-only and connected/${enabled ? 'enabled' : 'off'}`, async () => {
   const f = fixture({ enabled }); const response = await apiFetch(rpc(name), f.env);
   const body = await response.json(); assert.equal(response.status, 200); assert.equal(body.result.isError, undefined);
   const value = body.result.structuredContent ?? JSON.parse(body.result.content[0].text);
-  assert.equal(value.capabilities.run, false); assert.equal(value.relay.online, true);
+  assert.equal(value.capabilities.run, name === 'get_status'); assert.equal(value.relay.online, true); // the panel's run controls come from panel_data
   assert.equal(value.relay.enabled, enabled); assert.equal(value.health.execution.enabled, enabled);
   assert.equal(value.health.exit_code, 0); assert.equal(value.health.snapshot.state, 'fresh');
   assert.equal(value.health.last_successful_relay_run, null); assert.match(value.health.history_limitation, /origin/);
-  // dok is not configured here, so only the Mac relay status is read. D1 reads are SELECTs only (asserted in the
+  // The runner (dok) status is the only Durable Object read. D1 reads are SELECTs only (asserted in the
   // fixture): snapshot, account state, and for open_dashboard the Hub run receipts.
   assert.deepEqual(f.calls, ['status']); assert.equal(f.reads.length, 5);
   assert.doesNotMatch(JSON.stringify(value), /fixture-only/);

@@ -166,15 +166,6 @@ test('UTF-8 limits cover the entire serialized message', () => {
   assert.ok(encode({ v: 1, text: 'a'.repeat(WIRE.messageBytes - 30) }));
 });
 
-test('hosted tool results keep confirmation codes exclusively in widget metadata', async () => {
-  const { apiFetch } = await import('../src/worker-core.mjs');
-  const env = { RELAY_TOKEN: token, RELAY: { getByName: () => ({ dispatch: async () => ({ ok: true, value: { agents: [], confirm: { review: { p: 'private-code' } } } }) }) },
-    DB: { prepare: () => ({ first: async () => ({ id: 's', published_at: new Date().toISOString(), payload: JSON.stringify({ generated_at: new Date().toISOString(), agents: [], runs: [] }) }) }) } };
-  const response = await apiFetch(new Request('https://test/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'panel_data', arguments: {} } }) }), env);
-  const body = await response.json(); assert.equal(body.result._meta['agents-hub/confirm'].review.p, 'private-code');
-  assert.doesNotMatch(body.result.content[0].text, /private-code/);
-});
-
 test('production Worker absorbs delayed cron delivery without a D1 binding', async (t) => {
   const bundle = await build({ entryPoints: [new URL('../src/worker.mjs', import.meta.url).pathname], bundle: true, write: false, format: 'esm', platform: 'browser', external: ['cloudflare:workers'],
     plugins: [{ name: 'test-dashboard', setup(b) {
