@@ -28,8 +28,9 @@ for (const name of ['get_status', 'open_dashboard']) for (const enabled of [true
   assert.equal(value.relay.enabled, enabled); assert.equal(value.health.execution.enabled, enabled);
   assert.equal(value.health.exit_code, 0); assert.equal(value.health.snapshot.state, 'fresh');
   assert.equal(value.health.last_successful_relay_run, null); assert.match(value.health.history_limitation, /origin/);
-  // dok is not configured here, so only the Mac relay status is read; open_dashboard also reads Hub run receipts.
-  assert.deepEqual(f.calls, ['status']); assert.equal(f.reads.length, name === 'open_dashboard' ? 2 : 1);
+  // dok is not configured here, so only the Mac relay status is read. D1 reads are SELECTs only (asserted in the
+  // fixture): snapshot, account state, and for open_dashboard the Hub run receipts.
+  assert.deepEqual(f.calls, ['status']); assert.equal(f.reads.length, name === 'open_dashboard' ? 3 : 2);
   assert.doesNotMatch(JSON.stringify(value), /fixture-only/);
 });
 

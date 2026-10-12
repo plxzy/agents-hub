@@ -22,8 +22,8 @@ export function trustedLoader(sdk, prompt) {
 
 export function errorClass(message = '') {
   const m = String(message);
-  if (/not[_ ]eligible|subscription_sharing/i.test(m)) return 'account not eligible';
-  if (/usage limit|rate limit|429|too many requests|quota/i.test(m)) return 'usage limit reached';
+  if (/not[_ ]eligible/i.test(m)) return 'account not eligible';
+  if (/usage[_ ]limit|rate limit|429|too many requests|quota/i.test(m)) return 'usage limit reached';
   if (/unauthori[sz]ed|401|login|auth/i.test(m)) return 'model authentication failed';
   if (/Pinned model unavailable/.test(m)) return 'model unavailable on this runner';
   if (/abort/i.test(m)) return 'aborted';
@@ -106,6 +106,91 @@ export async function executeSession(config, task) {
   finally { unsubscribe(); process.removeListener('SIGTERM', abort); session.dispose(); }
 }
 
+// ---------- one-shot runs with an account pool ----------
+// Slots are ChatGPT OAuth accounts (openai, openai-2, ...). The supervisor orders them using shared Hub state.
+export function limitKind(errorText = '') {
+  const kind = errorClass(errorText);
+  return ['usage limit reached', 'account not eligible'].includes(kind) ? kind : null;
+}
+async function registerSlots(modelRuntime, config) {
+  const wanted = (config.slots ?? ['openai']).filter(s => /^openai(-[1-9]\d*)?$/.test(s));
+  if (wanted.some(s => s !== 'openai') && config.accounts_module) {
+    const { accountProvider } = await import(config.accounts_module);
+    for (const slot of wanted) if (slot !== 'openai' && !modelRuntime.getProvider(slot)) {
+      try { modelRuntime.registerNativeProvider(accountProvider(slot, slot)); } catch { /* unavailable slot is skipped */ }
+    }
+  }
+  return wanted.filter(s => modelRuntime.getProvider(s) && modelRuntime.hasConfiguredAuth(s));
+}
+
+export async function executeRun(config, task) {
+  const sdk = await import(config.policy.sdk);
+  const piVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(config.policy.sdk), '../package.json'), 'utf8')).version;
+  const names = sessionTools(config);
+  const modelRuntime = await sdk.ModelRuntime.create({ authPath: path.join(os.homedir(), '.pi/agent/auth.json'),
+    modelsPath: null, allowModelNetwork: false });
+  // Overrides name a provider; the pool applies to the openai provider only.
+  const slots = config.runtime.provider === 'openai' ? await registerSlots(modelRuntime, config) : [config.runtime.provider];
+  if (!slots.length) throw new Error('No logged-in account for this model');
+  let output = '', calls = [], usage = { input: 0, output: 0, totalTokens: 0, cost: 0 }, models = 0, runtime;
+  const used = [];
+  for (const slot of slots) {
+    const expected = { ...config.runtime, provider: slot };
+    const model = modelRuntime.getModel(slot, config.runtime.model);
+    if (!model) continue;
+    used.push(slot);
+    const customTools = names.map(name => {
+      const definition = sdk[FACTORIES[name]](config.policy.workspace);
+      return { name, label: name, description: definition.description, parameters: definition.parameters,
+        execute: (_id, args, signal) => sandboxExecute(config.policy, name, args, { signal }) };
+    });
+    customTools.push({ name: 'session_runtime', label: 'Session runtime',
+      description: 'Read trusted Pi session identity, actual provider/model/thinking and executor. This does not launch another agent.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async () => ({ content: [{ type: 'text', text: JSON.stringify(runtime) }], details: runtime }) });
+    // Every attempt is a fresh read-only session: no conversation state crosses accounts.
+    const sessions = path.join(config.sessions, slot);
+    fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
+    const sessionManager = sdk.SessionManager.create(config.policy.workspace, sessions, { id: config.conversation_id + '-' + slot });
+    const { session } = await sdk.createAgentSession({ cwd: config.policy.workspace, agentDir: config.agentDir,
+      modelRuntime, model, thinkingLevel: expected.thinking, noTools: 'builtin', tools: [...names, 'session_runtime'], customTools,
+      resourceLoader: trustedLoader(sdk, config.prompt), sessionManager,
+      settingsManager: sdk.SettingsManager.inMemory({ packages: [], extensions: [], skills: [], enableSkillCommands: false }) });
+    let failed = null;
+    const unsubscribe = session.subscribe(event => {
+      if (event.type === 'tool_execution_start') calls.push(event.toolName);
+      if (event.type === 'message_end' && event.message.role === 'assistant') {
+        models++;
+        const u = event.message.usage ?? {};
+        usage = { input: sum(usage.input, u.input), output: sum(usage.output, u.output),
+          totalTokens: sum(usage.totalTokens, u.totalTokens), cost: sum(usage.cost, u.cost?.total) };
+        if (['error', 'aborted'].includes(event.message.stopReason)) failed = event.message.errorMessage || 'error';
+        output = (event.message.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('\n').slice(0, 64000);
+      }
+    });
+    const abort = () => { void session.abort(); };
+    process.once('SIGTERM', abort);
+    try {
+      await session.setModel(model);
+      session.setThinkingLevel(expected.thinking);
+      runtime = { ...observedRuntime(session, piVersion, expected), host: config.manifest.host,
+        implementation_revision: config.manifest.implementation_revision, policy_digest: config.manifest.policy_digest };
+      process.send?.({ type: 'runtime', runtime });
+      await session.prompt(`Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are the ${config.manifest.agent} agent, started remotely through Agents Hub on dok. Your tools run in an isolated read-only Linux sandbox over a fresh clone of ${config.manifest.project} at commit ${config.manifest.commit}; there is no shell and you cannot change files.\n\n${task}`);
+      if (!failed) {
+        observedRuntime(session, piVersion, expected);
+        return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id, runtime, usage, model_calls: models, slots_used: used };
+      }
+      const kind = limitKind(failed);
+      if (!kind) throw Object.assign(new Error('Model turn failed'), { detail: failed });
+      // Read-only runs are safe to restart; tell the supervisor so every runner skips this account.
+      process.send?.({ type: 'account', slot, kind });
+      output = '';
+    } finally { unsubscribe(); process.removeListener('SIGTERM', abort); session.dispose(); }
+  }
+  throw Object.assign(new Error('usage limit reached'), { detail: 'usage limit reached', partial: { output: '', tool_calls: calls, usage, model_calls: models, slots_used: used } });
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
   const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
   let task = '';
@@ -113,7 +198,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url
     task += chunk;
     if (task.length > 16000) throw new Error('Task too large');
   }
-  try { process.stdout.write(JSON.stringify(await executeSession(config, task))); }
+  try { process.stdout.write(JSON.stringify(await (config.mode === 'run' ? executeRun : executeSession)(config, task))); }
   catch (error) {
     // Runs report a bounded error class (e.g. usage limit) and partial usage; never stacks or host paths.
     if (config.mode === 'run') process.stdout.write(JSON.stringify({ error: errorClass(error.detail ?? error.message), ...(error.partial ?? {}) }));

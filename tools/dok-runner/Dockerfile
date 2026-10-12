@@ -8,6 +8,10 @@ RUN apt-get update \
 COPY pi/package.json pi/package-lock.json /opt/pi/
 RUN cd /opt/pi && npm ci --ignore-scripts --no-audit --no-fund && npm cache clean --force \
     && ln -s /opt/pi/node_modules/.bin/pi /usr/local/bin/pi && test "$(pi --version)" = 1.1.0
+# OpenAI account slots (openai-2, openai-3, ...): loaded by interactive Pi for /login and by the run worker.
+COPY pi-openai-accounts /opt/pi-openai-accounts
+RUN ln -s /opt/pi/node_modules /opt/pi-openai-accounts/node_modules \
+    && node -e "import('/opt/pi-openai-accounts/index.ts').then(m => { if (typeof m.accountProvider !== 'function') process.exit(1); })"
 USER agent
 WORKDIR /home/agent
 ENV PATH=/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin

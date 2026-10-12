@@ -31,17 +31,19 @@ const READ_ONLY = ['read', 'grep', 'find', 'ls'];
 export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 
 export class DevelopmentSessions {
-  constructor({ state, repository, knowledge, context, revision, processSession = randomUUID(), lease, report, limits = {} }) {
+  constructor({ state, repository, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, accounts_module = null, limits = {} }) {
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
     this.context = context ? fs.realpathSync(context) : null;
     this.revision = revision; this.processSession = processSession; this.lease = lease; this.reporter = report;
+    this.accounts = accounts; this.accountsModule = accounts_module;
     const knowledgeManifest = read(path.join(this.knowledge, 'RELEASE.json'));
     for (const [name, expected] of Object.entries(knowledgeManifest.files)) {
       const file = fs.realpathSync(path.join(this.knowledge, name));
       if (!file.startsWith(this.knowledge + path.sep) || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected) throw new Error('Reviewed knowledge integrity check failed');
     }
-    this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 1, runMs: 15 * 60000, ...limits };
+    this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 1, runMs: 15 * 60000,
+      slots: ['openai', 'openai-2', 'openai-3'], cooldownMs: 60 * 60000, disableMs: 24 * 60 * 60000, ...limits };
     this.active = null;
     this.runs = new Map();
     fs.mkdirSync(this.state, { recursive: true, mode: 0o700 });
@@ -256,12 +258,14 @@ export class DevelopmentSessions {
     let failure, output = '', bytes = 0, observed, commit, killTimer, timeout;
     const finish = async (code, result = {}) => {
       clearTimeout(timeout); clearTimeout(killTimer);
-      if (code === 0 && !failure && !runtimeMatches(result.runtime, runtime)) failure = 'Missing verified Pi runtime';
+      const { provider: _p, ...pinnedRuntime } = runtime;
+      if (code === 0 && !failure && !(runtimeMatches(result.runtime, pinnedRuntime) && (runtime.provider !== 'openai' ? result.runtime.provider === runtime.provider : this.limits.slots.includes(result.runtime.provider)))) failure = 'Missing verified Pi runtime';
       save(file, { ...receipt, status: failure || result.error ? 'failed' : code === 0 ? 'completed' : 'interrupted',
         ended: new Date().toISOString(), ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}),
         ...(failure || result.error ? { error: failure ?? result.error } : {}),
         output: safeOutput(result.output ?? ''), tool_calls: Array.isArray(result.tool_calls) ? result.tool_calls.slice(0, 500) : [],
-        ...(result.usage ? { usage: result.usage } : {}), ...(Number.isInteger(result.model_calls) ? { model_calls: result.model_calls } : {}) });
+        ...(result.usage ? { usage: result.usage } : {}), ...(Number.isInteger(result.model_calls) ? { model_calls: result.model_calls } : {}),
+        ...(Array.isArray(result.slots_used) ? { accounts_used: result.slots_used.filter(s => /^openai(-[1-9]\d*)?$/.test(s)) } : {}) });
       this.runs.delete(receipt.run_id);
       fs.rmSync(workspace, { recursive: true, force: true });
       await this.report(receipt.run_id);
@@ -285,7 +289,9 @@ export class DevelopmentSessions {
       const sessions = path.join(base, 'pi-sessions'), agentDir = path.join(base, 'pi-config');
       fs.mkdirSync(sessions, { recursive: true, mode: 0o700 }); fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
       const configFile = path.join(base, 'config.json');
-      save(configFile, { mode: 'run', conversation_id: randomUUID(), policy, prompt, sessions, agentDir, runtime, tools: agent.tools, manifest });
+      const slots = runtime.provider === 'openai' ? await this.poolSlots() : [runtime.provider];
+      save(configFile, { mode: 'run', conversation_id: randomUUID(), policy, prompt, sessions, agentDir, runtime, tools: agent.tools, manifest,
+        slots, accounts_module: this.accountsModule });
       if (entry?.stopped) throw new Error(entry.stopped);
       const child = spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), configFile],
         { cwd: source, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
@@ -296,8 +302,13 @@ export class DevelopmentSessions {
       };
       if (entry) entry.stop = stop;
       timeout = setTimeout(() => stop('Run time limit exceeded'), this.limits.runMs);
+      const { provider: _provider, ...pinned } = runtime;
       child.on('message', message => {
-        if (message?.type !== 'runtime' || !runtimeMatches(message.runtime, runtime)) { stop('Pi runtime identity mismatch'); return; }
+        if (message?.type === 'account' && slots.includes(message.slot) && ['usage limit reached', 'account not eligible'].includes(message.kind)) {
+          void this.accountLimited(message.slot, message.kind); return;
+        }
+        // The provider may be any slot of the pool; model and thinking must match exactly.
+        if (message?.type !== 'runtime' || !runtimeMatches(message.runtime, pinned) || !slots.includes(message.runtime.provider)) { stop('Pi runtime identity mismatch'); return; }
         observed = message.runtime;
         save(file, { ...receipt, commit, runtime: observed });
       });
@@ -316,6 +327,21 @@ export class DevelopmentSessions {
       failure ??= /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(error.message) ? error.message : 'Run preparation failed';
       await finish(1);
     }
+  }
+  // Account pool: skip slots another runner (or an earlier run) found at their limit; Hub state is shared.
+  async poolSlots(now = Date.now()) {
+    let states = [];
+    try { states = (await this.accounts?.get()) ?? []; } catch { /* Hub unreachable: try every slot */ }
+    const blocked = new Map(states.filter(a => a.state !== 'ok' && a.until && Date.parse(a.until) > now).map(a => [a.slot, a.until]));
+    const open = this.limits.slots.filter(slot => !blocked.has(slot));
+    if (!open.length) throw new Error(`All accounts are at their limit until ${[...blocked.values()].sort()[0]}`);
+    return open;
+  }
+  async accountLimited(slot, kind) {
+    if (!this.limits.slots.includes(slot)) return;
+    const disabled = kind === 'account not eligible';
+    const until = new Date(Date.now() + (disabled ? this.limits.disableMs : this.limits.cooldownMs)).toISOString();
+    try { await this.accounts?.post({ slot, state: disabled ? 'disabled' : 'cooldown', until, last_error_kind: kind }); } catch { /* best effort */ }
   }
   // Receipts go to the Hub when they change; unreported final receipts are retried by flushReports.
   async report(runId) {

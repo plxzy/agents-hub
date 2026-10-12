@@ -47,8 +47,16 @@ const report = async receipt => {
     body: JSON.stringify(receipt), redirect: 'error', signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error('Receipt not accepted');
 };
+const hub = async (route, init = {}) => {
+  const response = await fetch(new URL(route, endpoint), { ...init, headers: { authorization: 'Bearer ' + config.token, 'content-type': 'application/json' },
+    redirect: 'error', signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error('Hub refused');
+  return response.json();
+};
+const accounts = { get: async () => (await hub('/relay/dok-dev/accounts')).accounts,
+  post: value => hub('/relay/dok-dev/accounts', { method: 'POST', body: JSON.stringify(value) }) };
 const processSession = randomUUID();
-const sessions = new DevelopmentSessions({ ...config, processSession, lease, report });
+const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts });
 // The knowledge release is frozen, so the runnable list is computed once per supervisor boot.
 const agents = [...new Set(['workflow', ...sessions.runnable().map(a => a.name)])];
 save(pidFile, { pid: process.pid, started: identity(process.pid), process_session: processSession });

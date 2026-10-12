@@ -3,6 +3,7 @@ import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList } from '../../agent-workflow/relay-contract.mjs';
 import { relayFetch, relayStatus, requestRelay, startRun, getRun, dokEnabled, dokStatus } from './relay.mjs';
 import { readRun, recentRuns, mergeRuns } from './runs.mjs';
+import { readAccounts } from './accounts.mjs';
 import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
 import { developmentCall } from './development.mjs';
@@ -148,6 +149,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         if (healthRead) {
           value.development_available = Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true');
           value.runners = { dok: await dokStatus(env) };
+          value.accounts = await readAccounts(env);
           value.relay = await relayStatus(env);
           value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env) });
           // Callers decide from this summary whether start_run works; the Mac relay is only one possible runner.

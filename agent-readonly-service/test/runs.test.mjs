@@ -27,7 +27,7 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
     bindings: { DOK_RELAY_TOKEN: DOK, DEVELOPMENT_ENABLED: 'true' } }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB');
-  for (const file of ['0001_snapshots.sql', '0003_runs.sql']) {
+  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql']) {
     for (const sql of fs.readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8').replace(/--.*$/gm, '').split(';').map((x) => x.trim()).filter(Boolean)) await db.prepare(sql).run();
   }
   const tool = async (name, args = {}) => (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST',
@@ -78,5 +78,13 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.match((await tool('start_run', { agent: 'network', task: 'x', request_id: 'request-0002' })).content[0].text, /dok does not run network; it offers: helper/);
   assert.match((await tool('start_run', { agent: 'workflow', task: 'x', request_id: 'request-0003' })).content[0].text, /request_development/);
   assert.equal((await post({ run_id: 'bad' })).status, 400);
+  const accounts = (body, method = 'POST', token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/accounts', { method, headers: { authorization: 'Bearer ' + token }, ...(body ? { body: JSON.stringify(body) } : {}) });
+  assert.equal((await accounts({ slot: 'openai', state: 'cooldown', until: '2999-01-01T00:00:00.000Z', last_error_kind: 'usage limit reached' }, 'POST', 'wrong')).status, 401);
+  assert.equal((await accounts({ slot: 'openai', state: 'cooldown', until: '2999-01-01T00:00:00.000Z', last_error_kind: 'usage limit reached' })).status, 200);
+  assert.equal((await accounts({ slot: 'openai-2', state: 'disabled', until: '2000-01-01T00:00:00.000Z', last_error_kind: 'account not eligible' })).status, 200);
+  assert.equal((await accounts({ slot: 'evil', state: 'ok' })).status, 400);
+  const pool = (await (await accounts(null, 'GET')).json()).accounts;
+  assert.deepEqual(pool.map((a) => [a.slot, a.state]), [['openai', 'cooldown'], ['openai-2', 'ok']]); // elapsed disable reads as ok
+  assert.equal(JSON.parse((await tool('get_status')).content[0].text).accounts.length, 2);
   ws.close();
 });

@@ -1,5 +1,6 @@
 import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { storeRun, readRun } from './runs.mjs';
+import { readAccounts, recordAccount } from './accounts.mjs';
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
 const relay = (env) => env.RELAY.getByName('owner-mac');
 export async function relayStatus(env) {
@@ -31,6 +32,17 @@ export async function relayFetch(request, env) {
       const r = await storeRun(env, JSON.parse(text), 'dok');
       return json({ ok: true, run_id: r.run_id, status: r.status });
     } catch { return json({ ok: false, error: 'Receipt refused' }, 400); }
+  }
+  if (dok && pathname === '/relay/dok-dev/accounts') {
+    if (request.method === 'GET') return json({ accounts: await readAccounts(env) });
+    if (request.method === 'POST') {
+      try {
+        const text = await request.text();
+        if (text.length > 2048) throw new Error('Too large');
+        await recordAccount(env, JSON.parse(text), 'dok');
+        return json({ ok: true });
+      } catch { return json({ ok: false, error: 'Account state refused' }, 400); }
+    }
   }
   if (pathname !== (dok ? '/relay/dok-dev/connect' : '/relay/connect')) return json({ error: 'not_found' }, 404);
   if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);

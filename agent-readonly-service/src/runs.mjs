@@ -30,6 +30,7 @@ export function sanitizeReceipt(r, runner) {
     agent_version: short(r.agent_version, 40), commit: /^[a-f0-9]{40,64}$/.test(r.commit ?? '') ? r.commit : undefined,
     tool_calls: Array.isArray(r.tool_calls) ? r.tool_calls.filter((t) => /^[a-z_]{1,40}$/.test(t)).slice(0, 500) : undefined,
     model_calls: Number.isInteger(r.model_calls) && r.model_calls >= 0 ? r.model_calls : undefined,
+    accounts_used: Array.isArray(r.accounts_used) ? r.accounts_used.filter((x) => /^openai(-[1-9]\d*)?$/.test(x)).slice(0, 10) : undefined,
     usage, runtime, error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
   };
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined));
