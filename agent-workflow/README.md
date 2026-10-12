@@ -119,8 +119,8 @@ tools. `model` (`provider/model`, e.g. `openai/gpt-6.1-sol`) and `thinking` may 
 verifies the live SDK session against them. Receipts go to the Hub's D1 `runs` table (`get_run`/`list_runs` read
 them with the Mac off). ChatGPT accounts `openai`, `openai-2`, `openai-3` form a pool: a usage-limit error records a
 cooldown in the Hub's `accounts` table (shared by every runner) and the read-only run restarts on the next account.
-Verified so far: slot ordering from Hub state and single-account runs; failover to a second account is **unverified**
-until the extra accounts are logged in on dok.
+Verified: a run skips an account the Hub marks as cooling down and runs on `openai-2` (2026-10-12). An in-run
+usage-limit restart has only unit-test coverage so far.
 The Mac relay remains a fallback for agents dok does not offer. Code: `dev-sessions.mjs` (runs lane),
 `dev-session-worker.mjs` (`executeRun`), Hub `src/runs.mjs`, `src/accounts.mjs`. Evidence:
 `../evidence/2026-10-12-dok-runner-step0-1b/`.
