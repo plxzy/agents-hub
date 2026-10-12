@@ -46,6 +46,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       const [, , , op, json] = e.argv
       calls.push([op ?? '', json ?? ''])
       const out = op === 'open_dashboard' ? DASHBOARD
+        : op === 'list_agents' ? DASHBOARD.agents
         : op === 'get_run' ? { run_id: 'r-1', agent: 'helper', status: 'completed', task: 'List the tools', output: 'tools/space-backup/' }
         : op === 'review_decide' ? 'accepted m-1'
         : op === 'start_run' ? { run_id: 'r-3', status: 'running' }
@@ -81,8 +82,28 @@ for (const surface of ['terminal', 'desktop'] as const) {
 
     // start a run of a "here" agent in the session's folder
     await ui.press({ key: 'tab-start' })
+    expect(await ui.find({ text: 'Runs on this Mac' })).toBeDefined()
     await ui.select({ key: 'agent', value: 'workflow' })
     await ui.input({ key: 'task', text: 'Check the tests' })
     expect(calls).toContainEqual(['start_run', JSON.stringify({ agent: 'workflow', task: 'Check the tests', cwd: '/tmp' })])
   })
 }
+
+test('Start reads local agents even when the Hub lists different agents', async ($, on) => {
+  const calls: string[] = []
+  on('process.run', async (_$, e) => {
+    const op = e.argv[3]; calls.push(op ?? '')
+    const data = op === 'list_agents' ? [{ name: 'local-only', description: 'Local agent', workspace: '/tmp' }]
+      : { ...DASHBOARD, source: 'hub', agents: [{ name: 'dok-only', description: 'Remote agent' }] }
+    return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  on('clock.after', async () => ({ deny: 'no timers in this test' }) as never)
+  on('ui.status', async () => ({ value: undefined }) as never)
+  const ui = await $.ui.mount({ plugin: 'agents-panel', surface: 'terminal', component: 'Pane', requestId: 'agents', props: PROPS as never })
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'tab-start' })
+  expect(calls).toContain('list_agents')
+  expect(await ui.find({ text: 'Runs on this Mac' })).toBeDefined()
+  expect(await ui.find({ text: 'Local agent' })).toBeDefined()
+  expect(await ui.find({ text: 'Remote agent' })).toBeUndefined()
+})

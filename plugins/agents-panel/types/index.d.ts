@@ -24,6 +24,7 @@ declare module 'claude-code' {
       tab: Tab
       rejecting: string | null
       form: Form | null
+      localAgents: AgentInfo[]
     }
   }
 }

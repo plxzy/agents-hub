@@ -22,6 +22,7 @@ const error = atom({ plugin: 'agents-panel', key: 'error' } as const, null)
 const tab = atom({ plugin: 'agents-panel', key: 'tab' } as const, 'runs')
 const rejecting = atom({ plugin: 'agents-panel', key: 'rejecting' } as const, null)
 const form = atom({ plugin: 'agents-panel', key: 'form' } as const, null)
+const localAgents = atom({ plugin: 'agents-panel', key: 'localAgents' } as const, [])
 
 // The module's own: the session's folder (for agents that work "here") and the one refresh timer.
 let sessionCwd = ''
@@ -135,6 +136,17 @@ async function start($: Engine, f: Form, task: string) {
   }
 }
 
+async function openStart($: Engine) {
+  try {
+    const agents = await call($, 'list_agents')
+    await update($, localAgents, () => agents.map((a: { name: string; description?: string; workspace?: string }) => ({
+      name: a.name, description: firstLine(a.description, 120), here: a.workspace === 'here',
+    })))
+    await update($, form, () => null)
+    await update($, tab, () => 'start' as Tab)
+  } catch (err) { await fail($)(err) }
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -163,6 +175,7 @@ export const register: Register = on => {
     const current = await read($, tab)
     const rejectId = await read($, rejecting)
     const f = await read($, form)
+    const locals = await read($, localAgents)
     const now = snap ? Date.parse(snap.at) : 0
     const width = Math.max(30, (e.props.bodyColumns ?? 50) - 6)
 
@@ -186,7 +199,7 @@ export const register: Register = on => {
         {([['runs', 'Runs', '1'], ['review', `Review${snap?.pending.length ? ` (${snap.pending.length})` : ''}`, '2'], ['start', 'Start a run', '3']] as const)
           .filter(([id]) => id !== 'start' || (Input && Select)).map(([id, label, key]) => (
           <Button key={`tab-${id}`} hotkey={key} variant={current === id ? 'primary' : undefined} dimColor={current !== id}
-            onPress={() => void update($, tab, () => id as Tab)}>{label}</Button>
+            onPress={() => void (id === 'start' ? openStart($) : update($, tab, () => id as Tab))}>{label}</Button>
         ))}
       </Box>
     )
@@ -273,17 +286,18 @@ export const register: Register = on => {
       </Box>
     )
 
-    const chosen: AgentInfo | undefined = snap?.agents.find(a => a.name === f?.agent) ?? snap?.agents[0]
+    const chosen: AgentInfo | undefined = locals.find(a => a.name === f?.agent) ?? locals[0]
     const startView = snap && chosen && Input && Select && (
       <Box flexDirection="column" gap={1} borderStyle="round" borderDimColor paddingX={1}>
+        <Text bold>Runs on this Mac</Text>
         <Select key="agent" label="Agent" value={chosen.name}
-          options={snap.agents.map(a => ({ key: `opt-${a.name}`, value: a.name, label: a.name }))}
-          onSelect={(value: string) => void update($, form, () => ({ agent: value, cwd: snap.agents.find(a => a.name === value)?.here ? sessionCwd : '' }))} />
+          options={locals.map(a => ({ key: `opt-${a.name}`, value: a.name, label: a.name }))}
+          onSelect={(value: string) => void update($, form, () => ({ agent: value, cwd: locals.find(a => a.name === value)?.here ? sessionCwd : '' }))} />
         <Text dimColor wrap="wrap">{chosen.description}</Text>
         {chosen.here && <Text dimColor wrap="wrap">{`Works in this session's folder: ${sessionCwd}`}</Text>}
         <Input key="task" label="Task" placeholder="What should it do?" submitLabel="Start"
           onSubmit={(value: string) => void start($, { agent: chosen.name, cwd: chosen.here ? sessionCwd : '' }, value)} />
-        <Text dimColor>Runs in the background; it shows under Runs.</Text>
+        <Text dimColor>Runs in the background. Its receipt reaches the Hub when it finishes.</Text>
       </Box>
     )
 
@@ -297,6 +311,7 @@ export const register: Register = on => {
         {current === 'runs' && runsView}
         {current === 'review' && reviewView}
         {current === 'start' && startView}
+        {current === 'start' && !chosen && <Text dimColor>No agents configured on this Mac.</Text>}
       </Box>
     )
   })
