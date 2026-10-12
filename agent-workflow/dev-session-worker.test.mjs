@@ -59,3 +59,18 @@ test('account pool skips slots at their limit, reports the earliest reset, and c
   assert.equal(limitKind("You've hit your usage limit. Try again later."), 'usage limit reached');
   assert.equal(limitKind('500 server error'), null);
 });
+
+test('account slots are registered with the base catalog and kept only when logged in', async () => {
+  const { registerSlots } = await import('./dev-session-worker.mjs');
+  const providers = new Map([['openai', { id: 'openai' }]]), auth = new Set(['openai', 'openai-2']);
+  const runtime = {
+    getModels: (p) => p === 'openai' ? [{ id: 'gpt-6-luna', api: 'openai-responses' }] : [],
+    getProvider: (id) => providers.get(id),
+    hasConfiguredAuth: (id) => auth.has(id),
+    registerNativeProvider: (provider) => { assert.equal(provider.getModels()[0].id, 'gpt-6-luna'); providers.set(provider.id, provider); },
+  };
+  const accountProvider = (id, label, getModels) => ({ id, label, getModels: () => getModels() });
+  const slots = await registerSlots(runtime, { slots: ['openai', 'openai-2', 'openai-3'], accounts_module: 'fake' }, async () => ({ accountProvider }));
+  assert.deepEqual(slots, ['openai', 'openai-2']);
+  assert.deepEqual(await registerSlots(runtime, { slots: ['openai', 'openai-2'] }), ['openai', 'openai-2']); // already registered
+});

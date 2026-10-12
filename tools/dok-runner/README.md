@@ -2,8 +2,8 @@
 
 The always-on runner for Agents Hub: one small container (`agents`, user `agent`) whose main process is the
 agent-workflow supervisor (`dev-supervisor.mjs`). Docker restarts it; there is no systemd unit and no `docker exec`
-wrapper. It replaced the supervisor that ran inside the vm project's `dok-dev` devcontainer (user `vscode`) on
-2026-10-12; `dok-dev` itself is untouched.
+wrapper. It replaces the supervisor that runs inside the vm project's `dok-dev` devcontainer (user `vscode`); the
+cutover waits for the first `/login` in this container (2026-10-12). `dok-dev` itself is left untouched.
 
 | What | Where (inside the `agents-home` volume) |
 |---|---|

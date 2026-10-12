@@ -112,12 +112,14 @@ export function limitKind(errorText = '') {
   const kind = errorClass(errorText);
   return ['usage limit reached', 'account not eligible'].includes(kind) ? kind : null;
 }
-async function registerSlots(modelRuntime, config) {
+export async function registerSlots(modelRuntime, config, load = specifier => import(specifier)) {
   const wanted = (config.slots ?? ['openai']).filter(s => /^openai(-[1-9]\d*)?$/.test(s));
   if (wanted.some(s => s !== 'openai') && config.accounts_module) {
-    const { accountProvider } = await import(config.accounts_module);
+    const { accountProvider } = await load(config.accounts_module);
+    // Each slot lists the same models as the base openai provider; its own OAuth credential is used per request.
+    const catalog = () => modelRuntime.getModels('openai');
     for (const slot of wanted) if (slot !== 'openai' && !modelRuntime.getProvider(slot)) {
-      try { modelRuntime.registerNativeProvider(accountProvider(slot, slot)); } catch { /* unavailable slot is skipped */ }
+      try { modelRuntime.registerNativeProvider(accountProvider(slot, slot, catalog)); } catch { /* unavailable slot is skipped */ }
     }
   }
   return wanted.filter(s => modelRuntime.getProvider(s) && modelRuntime.hasConfiguredAuth(s));
