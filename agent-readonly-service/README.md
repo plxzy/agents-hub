@@ -12,7 +12,10 @@ Live: `https://YOUR-HUB.workers.dev`
 | `GET /health` | none | Service liveness and static snapshot-surface capabilities (`run: false, mutate: false`), NOT live relay health |
 | `POST /mcp` | OAuth 2.1 bearer token | MCP + Agents Hub dashboard resource: `open_dashboard`, `list_agents`, `list_runs`, `get_run`, `get_status`, `resolve_context` |
 | `GET /mcp/v1/agents[/:name]`, `/mcp/v1/runs[/:id]`, `/mcp/v1/context` | OAuth 2.1 bearer token | The same data as REST, beneath the `/mcp` resource |
-| `GET /relay/connect` (WebSocket upgrade) | Separate machine token | Foreground Mac relay transport |
+| `GET /relay/dok-dev/connect` (WebSocket upgrade) | dok machine token | Existing dok supervisor transport |
+| `GET /relay/mac/panel`, `/relay/mac/runs/:id` | Mac token | Shared Hub data without confirmation codes |
+| `POST /relay/mac/start` | Mac token | Existing allowed dok starts; only agent, task, request_id |
+| `GET /relay/mac/starts/:id` | Mac token | Read-only request reconciliation via receipts and dok journal |
 | `POST /v1/snapshots` | Bearer publish token | Retired with the publisher; closed by deleting `PUBLISH_TOKEN` |
 
 **What is published** (`src/snapshot.mjs`): agent name, description, model, tools, skill names, guard, workspace (with
@@ -22,26 +25,18 @@ review (counts only, never their text). Any value that looks like a secret is re
 15 minutes without a publish. Sanitizing is idempotent: the publisher and the Worker both run it.
 
 **Contract:** tool names, schemas and result shapes come from `agent-workflow/contract.mjs`, shared with the local
-server, so the one dashboard (`agent-workflow/ui/dashboard.html`, bridge inlined at build by `vite.config.ts`) reads
-both. Hosted results add `snapshot: { published_at, generated_at, stale }`; review counts that were not published are
-`null` and shown as unknown, not zero. `get_status` and `open_dashboard` add a versioned `health` observation report:
-relay connected/disconnected/unknown and freshness, snapshot age/freshness, expected helper-only versus observed/last-known
-allowlist, enabled state, sources and timestamps. Snapshot `capabilities.run` stays false when the live relay exists;
-only live panel data exposes controls. Unavailable/malformed/future timestamps never imply healthy age zero. Missing
-run-origin evidence is explicit; sanitized snapshot runs are not automatically relay-origin. CLI and dashboard reuse
-`agent-workflow/health.mjs`; (the Mac relay and `agent link doctor` are retired; `relay` in health now describes the dok runner). This local patch
-has not been deployed. Authenticated MCP initialization, notifications, ping, discovery and dashboard resources work
-before any snapshot is published; snapshot-backed reads still return no_snapshot/503. Health reads return unknown
-snapshot counts and can observe the existing relay independently. On dashboard refresh, hosted snapshot/DO health
-is retained while successful live panel data contributes validated journal-backed history and local runtime metadata;
-a live unknown or incomplete history is never inferred from ordinary recent runs.
+server. The dashboard (`agent-workflow/ui/dashboard.html`, bridge inlined at build by `vite.config.ts`) uses
+Hub D1 runs, definitions and reviews through `nativePanel`; the Mac read route omits confirmation codes.
+`get_status` and `open_dashboard` include one-shot runner observations. Unknown telemetry stays unknown;
+historical success is not a heartbeat. The UI shows one runner line and collapsible details.
+Legacy snapshot fallback readers still exist, but their timestamps are no longer dashboard health bubbles.
 
 **Snapshots are retired (2026-10-12).** `agent` no longer publishes snapshots and `publisher.mjs` is gone; the Hub reads runs,
 ratings, memory notes, agent definitions and counts from D1. `POST /v1/snapshots` and the snapshot readers remain only as a
 fallback for the old data; delete the `PUBLISH_TOKEN` secret to close the endpoint (done after this change), then the
 snapshot code and the `snapshots` table can be removed. The Mac posts receipts and reads memory through its own principal
 (`/relay/mac/*`, secret `MAC_TOKEN`, file `~/.config/agent-readonly/mac.json`), which can post receipts, read bundles, pending
-notes and decisions, and publish committed definitions (`agent sync push`), but cannot rate, decide or start anything.
+notes and decisions, and publish committed definitions (`agent sync push`), and request existing allowed dok starts, but cannot rate, decide or start anything on the Mac.
 
 **Sign-in:** Cloudflare Access is the OAuth server (Managed OAuth on the "Agents Hub MCP" Access application, path
 `/mcp`, owner-only policy): clients get a 401 with Access's metadata, register themselves (redirects limited to
@@ -53,9 +48,11 @@ The former OAuth KV namespace was deleted on 2026-10-09.
 
 Tests: `npm test`. Deploy: `cf deploy` (check with `cf deploy --dry-run` first).
 
-With `RELAY_TOKEN` configured, MCP also advertises `start_run`, `get_remote_run` and app-only `panel_data`,
-`panel_run`, `rate_run`, `review_decide`. `/relay/connect` uses the separate machine credential,
-outside Access, and the Worker still requires a verified Access assertion for every user MCP call. The active
-WebSocket relay uses its existing DO alarm for transient request expiry, with no active cron schedule; the Worker
-retains a no-op scheduled handler for delayed old deliveries. The older relay tables/migration remain for rollback,
-not as a live heartbeat or polling transport. The effective remote-start allowlist remains helper only.
+With the dok runner configured, MCP advertises hosted `start_run`, `get_remote_run` and app-only
+`panel_data`, `panel_run`, `rate_run`, `review_decide`. The Worker requires a verified Access assertion
+for user MCP calls. dok uses its separate machine credential outside Access. The DO alarm expires
+transient requests; durable recovery uses existing dok journals and D1 receipts, with no second run database.
+The new Mac start route reserves a `mac-` request namespace, rejects model/repository/configuration overrides,
+and uses the same dispatcher and supervisor admission checks. Status includes pending start attempts;
+older retained operations without an operation label are counted conservatively. Existing decision checks
+and confirmation-code boundaries remain unchanged. See `../agent-workflow/README.md` for recovery semantics.

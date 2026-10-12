@@ -176,8 +176,7 @@ The shared view has the agents list, matching agent count, running/to-review cou
 data with `source: "local (Hub unreachable)"`; without a Hub link, `source` is `local`. Cached Hub review items
 retain their origin, so the Claude Review tab keeps them read-only and shows `DECIDE_IN_HUB`.
 
-The Claude Start tab is labelled **Runs on this Mac**, loads local definitions through `list_agents`, and
-uses the existing local `start_run`. Runner selection is a separate architecture task. Its Agents tab shows
+The Claude Start tab now uses the runner selection contract described below (superseding its original local-only start). Its Agents tab shows
 Hub names, descriptions and last runs. HTML runner health is one summary line with diagnostic details in
 native `<details>`; the retired publisher's freshness is no longer displayed.
 
@@ -190,7 +189,7 @@ Evidence and verification results: `../evidence/2026-10-12-dashboard-unification
 
 Linked `agent run` and `agent chat` publish a running receipt through the existing `POST /relay/mac/runs`
 route before launching Pi, then heartbeat every 15 seconds after the previous request settles (3-second
-request timeout). Both dashboards read that same Hub row. Starts still run locally on this Mac.
+request timeout). Both dashboards read that same Hub row. Explicit Mac starts run locally.
 On exit, publication stops and drains before the final receipt replaces the running row with the same ID.
 Startup failures also publish a failed receipt; an empty interactive chat closes as interrupted.
 
@@ -243,7 +242,7 @@ First runs: "what am I working on?" in 13 s / $0.001; a small feature (agent lis
 **run** (`run_agent`, `start_run`, `run_eval`) and **decide** (`rate_run`, `review_decide`: the user's own decisions).
 Every surface is built from it: the stdio MCP server `mcp.mjs` (`agent mcp`), `agent call <op> '{json}'`,
 the local dashboard and the Pi package in `../plugins/agents/`; the hosted Hub shares the read contract.
-Local operations use `runner: local` (Pi on this Mac); hosted starts use dok.
+Legacy `run_agent` and `start_run` use Pi on this Mac; hosted starts use dok. Updated local panels use `start_selected_run` with an explicit target.
 
 - `start_run` returns a run id at once and runs `agent run` in the background. Every run writes
   `runs/<id>.running` while it works; `listRuns(state, { running: true })` shows those (as `interrupted` if the
@@ -278,3 +277,37 @@ credentials remain in memory. Restart an existing chat after launcher updates
 (`agent chat workflow --continue` resumes it); `/reload` alone cannot create a
 broker in an already running launcher. Ordinary unsandboxed Pi uses its direct
 gateway as before. This requires the provider package's `broker.mjs` support.
+
+## Runner selection (2026-10-13, 0.4.0)
+
+The Claude Start tab and local HTML dashboard default to **dok**, even if unavailable. Choose
+**This Mac** explicitly for local execution. The hosted ChatGPT dashboard stays dok-only. Switching
+runner preserves the task and clears incompatible directory/continuation fields. Both forms show the
+effective model and repository/directory where known. dok uses its repository checkout; tasks that
+produce changes use the existing review-branch workflow and do not modify this Mac's working tree.
+
+`open_dashboard` adds `runner_selection: 1`, runner-specific `run_targets`, and saved `start_requests`.
+New panels call `start_selected_run({runner,agent,task,request_id,cwd?,continue?})`; explicit invalid or
+missing runners and hidden overrides are rejected. Older operation catalogs reject the new name,
+so an old handler cannot ignore dok selection and run locally. Legacy `run_agent`/`start_run` keep
+their existing local behavior. dok never falls back on 404, offline, authentication or timeout errors.
+Local discovery and explicit Mac execution do not require a successful Hub request.
+
+The Mac's existing credential gains only permission to request existing allowed dok runs through
+`POST /relay/mac/start` (agent, task, request_id only). Admission rechecks dok eligibility, and the
+supervisor retains its existing agent allowlist, repository permissions, isolation and approval rules.
+No review/rating permission or confirmation codes are added. The loopback browser bridge retains
+its Host check, per-launch token header and absence of CORS permission.
+
+Before submission, the operation durably saves its request identity in `STATE/selected-starts/`.
+Reusing that identity with changed arguments fails; simultaneous identical submissions dispatch once.
+An unresolved identical task with a new identity reconciles the original. `get_selected_start` reads
+`GET /relay/mac/starts/:id`: the Hub checks receipts/relay state, then dok's existing durable request
+journal through `run_lookup`. It never dispatches another start. Mac request IDs use the reserved
+`mac-` namespace at the Hub. The local journal survives panel closure; dok's journal survives relay
+cache expiry. Missing lookup results stay **unknown**, never become permission for a fresh retry.
+A returned run ID means a start was accepted; inspect its receipt for running/completed/failed status.
+
+Timeouts: relay attempt 20 seconds, Mac Hub request 30 seconds, Claude operation 40 seconds.
+These bounds do not prove delivery: recovery uses durable identities, including after disconnection.
+No new executor, relay, synchronization service, model/repository picker or remote continuation is added.

@@ -30,17 +30,16 @@ its `[mcp_servers.agents]` entry: it has the same name, so Codex lists one serve
 A Claude Code mod (hooks module, `hooks/register.tsx`): a docked **Agents** pane beside the conversation in
 the terminal and the desktop Code tab. Header chips (agents, running, to review) and four tabs:
 **Runs** (the Hub's latest 50 runs, including dok; press one for its output as Markdown with model, duration, tool calls),
-**Review** (Hub items are read-only and say “Decide this in the Agents Hub panel”), **Start a run** (labelled
-“Runs on this Mac”; pick a local agent and type a task; agents that work "here" use the session's folder), and
+**Review** (Hub items are read-only and say “Decide this in the Agents Hub panel”), **Start a run** (dok selected by default, or explicitly choose **This Mac**; agent choices follow the runner; local agents that work "here" use the session's folder), and
 **Agents** (name, description and a link to the last run). Local reviews on an unlinked Mac still have Accept/Reject.
 Footer status shows running/to review. Refreshes every 4 s while a Hub run is going (the open run's output follows it),
 otherwise every 30 s; `/agents-panel` reopens it; hotkeys r, 1–4, b while it has focus.
 On mobile (no text fields) local Reject skips the reason and Start is hidden.
-It draws only: data comes from `agent call open_dashboard | get_run | list_agents | start_run | review_decide`
+It draws only: data comes from `agent call open_dashboard | get_run | start_selected_run | get_selected_start | review_decide`
 (the operations catalog). On a linked Mac, `open_dashboard` reads `GET /relay/mac/panel` with the Mac's token;
 the hosted HTML panel uses the same Hub data. The Mac route never issues or returns one-time confirmation codes.
 If the Hub cannot be reached, the panel loads local data labelled `local (Hub unreachable)`. Cached Hub reviews
-remain read-only. Mac starts stay local, publish running status and a 15-second heartbeat, then replace that row with the final
+remain read-only. An unavailable dok never falls back to Mac. Effective repository/directory and model are shown; unresolved submissions remain in the Start tab with a read-only **Check original request** action, including after reopening. Old operations block new panel starts. Explicit Mac starts publish running status and a 15-second heartbeat, then replace that row with the final
 receipt. After 90 seconds without contact the Hub shows unknown and stops counting the run as active. See `../agent-workflow/README.md` for the receipt evidence and read routes.
 Claude Code only: Codex and ChatGPT panels need their own extension format, using the same operations.
 

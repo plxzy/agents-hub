@@ -2,7 +2,7 @@
 
 (Replaces `LINK.md`, the Mac relay design, archived in `../archive/2026-10-12-mac-relay/`.)
 
-## Today (2026-10-12)
+## Today (2026-10-13)
 
 - **dok runs hosted starts.** The `agents` container on dok (`../tools/dok-runner/`) connects one outbound WebSocket to the Hub's
   `AgentRelay` Durable Object (`owner-dok-dev`, `/relay/dok-dev/connect`, secret `DOK_RELAY_TOKEN`). The Hub's `start_run`
@@ -11,7 +11,7 @@
   back as a review branch (`git fetch dok`). See `README.md` "Remote runs on dok".
 - **The Mac is a client, not a runner for hosted callers.** It posts receipts and reads memory with its own token
   (`~/.config/agent-readonly/mac.json`, secret `MAC_TOKEN`, routes `/relay/mac/*`); it never connects a socket and nothing in
-  the Hub can start work on it. `agent run|chat|ui|mcp` still run agents on the Mac locally. `agent sync pull|push` mirrors
+  the Hub can start work on it. `agent run|chat` and legacy local MCP start operations still run on the Mac. Updated local panels default to dok via `start_selected_run`; explicit `runner: mac` stays local, with no automatic fallback. The Mac token may request existing allowed dok runs on `/relay/mac/start`, with read-only recovery on `/relay/mac/starts/:id`. `agent sync pull|push` mirrors
   decisions and definitions (see `README.md`).
 - **The Hub holds the state:** runs, ratings, memory notes, published agent definitions (D1). Decisions are the user's clicks
   in the Hub panel; every decision needs a one-time code that only the panel receives.
