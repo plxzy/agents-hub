@@ -1,5 +1,5 @@
 # Agents runner on dok: Pi + the agent-workflow supervisor, nothing else (no sshd, no editors, no other CLIs).
-FROM node:26.10.0-bookworm-slim@sha256:3ffc19ea878019d9e9ae8971732ad4a03cda44f167107173174b60ed7c65bed3
+FROM node:26.11.1-trixie-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap git python3 ca-certificates tini \
     && rm -rf /var/lib/apt/lists/* \
