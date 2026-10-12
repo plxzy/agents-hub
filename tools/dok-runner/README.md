@@ -8,8 +8,8 @@ the old `dok-dev` container and Codex image were removed on 2026-10-12. Its name
 
 The active image is `agents-runner:pi-1.1.0`, based on the digest-pinned Node 26.11.1 Debian 13 Trixie slim
 image. It contains Pi 1.1.0 (from the lockfile), `pi-openai-accounts`, bubblewrap, Git, Python 3, CA certificates
-and tini. It has no standalone `codex` executable, SSH daemon or editor. Pi's bundled provider library still has
-OpenAI/Codex provider support for account authentication; that is library support, not the Codex CLI/app-server.
+and tini. It has no standalone `codex` executable, SSH daemon or editor. The image strips Pi's unused OpenAI Codex
+provider and OAuth/API modules; the ordinary OpenAI provider remains for `pi-openai-accounts`.
 
 | What | Where (inside the `agents-home` volume) |
 |---|---|
