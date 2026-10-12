@@ -5,7 +5,7 @@ One plugin folder, `agents/`, for every app that can load it. It holds no logic:
 
 | App | What it loads | How it gets here |
 |---|---|---|
-| Claude Code | `.claude-plugin/plugin.json`, `.mcp.json`, `skills/`, `commands/` (`/agents`) | `claude plugin marketplace add ~/Development/dev-workflow/plugins` → `claude plugin install agents@dev-workflow` |
+| Claude Code | `.claude-plugin/plugin.json`, `skills/`, `commands/` (`/agents`). No `.mcp.json` since 2026-10-12: Claude Code uses the hosted **Agents Hub** connector (one entry; works with the Mac off) | `claude plugin marketplace add ~/Development/dev-workflow/plugins` → `claude plugin install agents@dev-workflow` |
 | Codex (CLI and app) | `plugin.json` (Agent Plugins 1.0), `mcp.json`, `skills/` | `codex plugin marketplace add ~/Development/dev-workflow/plugins` (reads `.agents/plugins/marketplace.json`) |
 | Pi | `package.json` `"pi"` → `pi/agents.ts`: registers the MCP server, `/agents`, footer status | `pi install ~/Development/dev-workflow/plugins/agents` |
 | Claude Desktop chat, claude.ai, mobile | the hosted Agents Hub as a claude.ai custom connector (`…workers.dev/mcp`, Access OAuth) | the local `agents` entry in `claude_desktop_config.json` was removed 2026-10-09 (backup in `~/.local/state/agent-workflow/backups/`) so the Code tab no longer lists the local server twice |
@@ -13,7 +13,7 @@ One plugin folder, `agents/`, for every app that can load it. It holds no logic:
 The **Agents Hub** dashboard (`open_dashboard`) renders in hosts that support MCP Apps: Claude Desktop, claude.ai,
 ChatGPT and the Codex app. Claude Code and Pi get the same tools as text. Without any app: `agent ui`.
 
-Paths in `.mcp.json`/`mcp.json` are absolute because Claude Code and Codex copy installed plugins into a cache,
+Paths in `mcp.json` (Codex) are absolute because Claude Code and Codex copy installed plugins into a cache,
 from where `${CLAUDE_PLUGIN_ROOT}` cannot reach this repo. Pi loads the package in place, so `pi/agents.ts`
 uses relative paths. In Pi processes that `agent` starts for an agent (`AGENT_RUN=1`) the extension does nothing.
 
