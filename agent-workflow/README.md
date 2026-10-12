@@ -148,11 +148,11 @@ the snapshot publisher. Evidence: `../evidence/2026-10-12-hub-state/`.
 
 **The Mac as a Hub client (2026-10-12, Step 4d).** With `~/.config/agent-readonly/mac.json` present (endpoint + its own token; hidden
 from agent sandboxes) `agent run`/`chat` post their receipts to the Hub (`/relay/mac/runs`; an outbox in the state folder holds
-them while the Hub is unreachable and the next run, `agent sync pull` or opening the dashboard flush it), load accepted memory from the Hub bundle
+them while the Hub is unreachable and the next run or `agent sync pull` flushes it), load accepted memory from the Hub bundle
 (local files are the offline fallback; receipts say `memory_source`) and send ```remember proposals with the receipt instead of
 writing local candidates. Ratings and memory decisions are the Hub panel's: `agent feedback`, `agent memory accept|reject|add`,
-`review_decide` and `rate_run` refuse on a linked Mac, and the review queue in `agent ui`/the Claude Code pane is a cached,
-view-only copy. One writer per kind of data, one direction each: `agent sync pull` mirrors the Hub's decisions into `~/.agents`
+`review_decide` and `rate_run` refuse on a linked Mac, and the review queue in `agent ui`/the Claude Code pane is
+view-only (live Hub data when reachable, cached items in the local fallback). One writer per kind of data, one direction each: `agent sync pull` mirrors the Hub's decisions into `~/.agents`
 git and local receipts; `agent sync push` publishes the committed agent definitions, skills and evals (HEAD of `~/.agents`) to the
 Hub, refused if the Hub holds a revision this checkout did not publish. dok runs load the definition, skills and accepted memory for
 the agent from the Hub per run (receipt: `memory_source: hub`, `memory_hash` = bundle hash; frozen release only as a fallback;
@@ -163,9 +163,34 @@ Code: `dev-sessions.mjs` (runs lane),
 `dev-session-worker.mjs` (`executeRun`), Hub `src/runs.mjs`, `src/accounts.mjs`. Evidence:
 `../evidence/2026-10-12-dok-runner-step0-1b/`.
 
+### Shared dashboard reads (2026-10-13)
+
+There are two renderers: the Claude Code `agents-panel` mod and `ui/dashboard.html`. Both read the Hub's
+`nativePanel` data: the hosted HTML page calls app-only `panel_data`, and a linked Mac's `open_dashboard`
+calls `hubPanel()` → `GET /relay/mac/panel`. The Mac route authenticates with its own token, never issues or
+returns confirmation codes, and exposes no decision capability. `GET /relay/mac/runs/:id` supplies full Hub
+run details, including dok runs. Hosted decision checks and one-time code handling are unchanged.
+
+The shared view has the agents list, matching agent count, running/to-review counts, and latest 50 runs.
+`open_dashboard` performs a single Hub read, without flushing the outbox. On failure it returns current local
+data with `source: "local (Hub unreachable)"`; without a Hub link, `source` is `local`. Cached Hub review items
+retain their origin, so the Claude Review tab keeps them read-only and shows `DECIDE_IN_HUB`.
+
+The Claude Start tab is labelled **Runs on this Mac**, loads local definitions through `list_agents`, and
+uses the existing local `start_run`. Runner selection is a separate architecture task. Its Agents tab shows
+Hub names, descriptions and last runs. HTML runner health is one summary line with diagnostic details in
+native `<details>`; the retired publisher's freshness is no longer displayed.
+
+**VERIFIED EVIDENCE:** the Mac was linked, with no queued outbox receipts; the Hub contained 98 Mac receipts,
+including local run `r-20261012T195223Z-45035e` (completed and posted on 2026-10-12).
+`runAgent` and interactive chat call `sendReceipt` after completion. **LIMITATION:** in-progress Mac markers
+stay local until that final receipt; the Hub view cannot show them yet. No second merge path was added.
+Evidence and verification results: `../evidence/2026-10-12-dashboard-unification/`.
+
 ## Not here yet
 
-Memory retrieval once notes outgrow the prompt, a writer/reviewer pair, and the Hub as home for memory/reviews (today reviews and ratings still need the Mac).
+Memory retrieval once notes outgrow the prompt, a writer/reviewer pair, Mac in-progress receipts in the Hub,
+and choosing a runner from the Claude panel. Memory/reviews and ratings already live in the Hub.
 
 ## Guards (enforced, not instructed)
 
@@ -201,8 +226,8 @@ First runs: "what am I working on?" in 13 s / $0.001; a small feature (agent lis
 **read** (`open_dashboard`, `get_status`, `list_agents`, `list_runs`, `get_run`, `list_pending`),
 **run** (`run_agent`, `start_run`, `run_eval`) and **decide** (`rate_run`, `review_decide`: the user's own decisions).
 Every surface is built from it: the stdio MCP server `mcp.mjs` (`agent mcp`), `agent call <op> '{json}'`,
-the dashboard, the Pi package in `../plugins/agents/`, and later the hosted hub. Runs go through a runner
-(`runner:` in the agent file, `local` = Pi on this Mac; only `local` exists so far).
+the local dashboard and the Pi package in `../plugins/agents/`; the hosted Hub shares the read contract.
+Local operations use `runner: local` (Pi on this Mac); hosted starts use dok.
 
 - `start_run` returns a run id at once and runs `agent run` in the background. Every run writes
   `runs/<id>.running` while it works; `listRuns(state, { running: true })` shows those (as `interrupted` if the

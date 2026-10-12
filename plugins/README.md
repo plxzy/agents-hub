@@ -28,14 +28,20 @@ its `[mcp_servers.agents]` entry: it has the same name, so Codex lists one serve
 ## `agents-panel/`: a side panel in Claude Code (a mod)
 
 A Claude Code mod (hooks module, `hooks/register.tsx`): a docked **Agents** pane beside the conversation in
-the terminal and the desktop Code tab. Header chips (agents, running, to review) and three tabs:
-**Runs** (running and the last 10 runs; press one for its output as Markdown with model, duration, tool calls),
-**Review** (memory and proposals as cards: Accept, or Reject with an optional reason) and **Start a run** (pick an
-agent, type a task; agents that work "here" run in the session's folder). Accept, Reject and Start are your clicks;
-the model never sees them. Footer status shows running/to review. Refreshes every 4 s while a run is going (the open
-run's output follows it), otherwise every 30 s; `/agents-panel` reopens it; hotkeys r, 1–3, b while it has focus.
-On mobile (no text fields) Reject skips the reason and Start is hidden.
-It draws only: data comes from `agent call open_dashboard | get_run | review_decide` (the operations catalog).
+the terminal and the desktop Code tab. Header chips (agents, running, to review) and four tabs:
+**Runs** (the Hub's latest 50 runs, including dok; press one for its output as Markdown with model, duration, tool calls),
+**Review** (Hub items are read-only and say “Decide this in the Agents Hub panel”), **Start a run** (labelled
+“Runs on this Mac”; pick a local agent and type a task; agents that work "here" use the session's folder), and
+**Agents** (name, description and a link to the last run). Local reviews on an unlinked Mac still have Accept/Reject.
+Footer status shows running/to review. Refreshes every 4 s while a Hub run is going (the open run's output follows it),
+otherwise every 30 s; `/agents-panel` reopens it; hotkeys r, 1–4, b while it has focus.
+On mobile (no text fields) local Reject skips the reason and Start is hidden.
+It draws only: data comes from `agent call open_dashboard | get_run | list_agents | start_run | review_decide`
+(the operations catalog). On a linked Mac, `open_dashboard` reads `GET /relay/mac/panel` with the Mac's token;
+the hosted HTML panel uses the same Hub data. The Mac route never issues or returns one-time confirmation codes.
+If the Hub cannot be reached, the panel loads local data labelled `local (Hub unreachable)`. Cached Hub reviews
+remain read-only. Mac starts stay local and send their receipt when finished; an in-progress Mac run is not yet
+in the Hub counts. See `../agent-workflow/README.md` for the receipt evidence and read routes.
 Claude Code only: Codex and ChatGPT panels need their own extension format, using the same operations.
 
 Check: `claude plugin validate plugins/agents-panel` and `claude plugin test plugins/agents-panel`.
@@ -44,8 +50,8 @@ Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin
 ## Hosted Agents Hub (account App)
 
 ChatGPT, Dots and claude.ai connect to `https://YOUR-HUB.workers.dev/mcp` as an account App /
-custom connector with OAuth (Cloudflare Access Managed OAuth). It provides published snapshots and, while
-dok runs agents, and the Hub holds runs, ratings and memory. See `../agent-workflow/RUNNERS.md`.
+custom connector with OAuth (Cloudflare Access Managed OAuth). dok runs agents; the Hub's D1 holds runs,
+ratings, memory and agent definitions. See `../agent-workflow/RUNNERS.md`.
 The former `agents-hub` plugin package (read-only remote plugin) was removed on 2026-10-09; the user uninstalled it.
 
 ## ChatGPT/Codex panel (MCP Extensions)
@@ -59,7 +65,9 @@ beside the current conversation. The normal inline widget still works in other M
 Hosted entrypoint metadata lives in `agent-workflow/contract.mjs`. No extra plugin package
 or App registration is needed. After deployment, use **Manage → Refresh tools** on the existing hosted App;
 local MCP processes must reconnect to discover updated tool metadata. The panel refreshes every 30 seconds
-(4 seconds for a local running task), pauses when hidden, and retries after refresh errors. Hosted data still
-comes from the linked Mac when online, otherwise the last publication with its age and offline status.
+(4 seconds for a running task), pauses when hidden, and retries after refresh errors. Hosted `panel_data` reads
+the Hub independently of the Mac. Counts and lists share their implementation with the Mac's read-only route.
+Runner health is one line (`dok online · runs: helper, tikkytracker, vm, workflow`, or `dok offline`), with
+diagnostics inside a collapsible disclosure. Missing observations are labelled unknown.
 
 Specification: https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#mcp-app-entrypoints

@@ -30,9 +30,14 @@ test('real dashboard preserves unknown reviews, snapshot authority and explicit 
     relay: { online: null, enabled: null } };
   context.fixture.setData(base);
   let chips = text(get('chips'));
-  assert.match(chips, /review: unknown/); assert.match(chips, /Relay: unknown/);
-  assert.match(chips, /Remote execution: unknown/); assert.match(chips, /age unknown/);
-  assert.doesNotMatch(chips, /NaN|0 running|deliberately off/); assert.equal(context.fixture.canRun(), false);
+  assert.match(chips, /review: unknown/); assert.match(chips, /dok status unknown/);
+  assert.match(chips, /Execution: not established/); assert.match(chips, /Last seen: not reported/);
+  const disclosure = get('chips').children.find(el => el.tagName === 'DETAILS');
+  assert.equal(disclosure.children[0].tagName, 'SUMMARY');
+  assert.equal(text(disclosure.children[0]), 'dok status unknown');
+  assert.equal(disclosure.children[1].tagName, 'UL');
+  assert.doesNotMatch(chips, /NaN|0 running|deliberately off|snapshot|expected helper|Configuration allowlist/i);
+  assert.equal(context.fixture.canRun(), false);
   // A snapshot paired with an online relay must not make its run capability true.
   base.relay = { online: true, enabled: true }; context.fixture.setData(base);
   assert.equal(context.fixture.canRun(), false); assert.equal(base.capabilities.run, false);
