@@ -90,6 +90,7 @@ async function execute(message) {
   try {
     validateDevelopment(operation, args, true);
     if (operation === 'dev_read') return { ok: true, value: sessions.get(args.run_id) };
+    if (operation === 'run_lookup') return { ok: true, value: sessions.runLookup(args.target_request_id) };
     if (operation === 'run_read') return { ok: true, value: sessions.runGet(args.run_id) };
     if (operation === 'run_start') return { ok: true, value: await sessions.runStart(args) };
     if (operation === 'dev_start') return { ok: true, value: await sessions.start(args) };
@@ -124,7 +125,7 @@ async function acknowledgeStopped() {
 }
 try {
   await serveSocket({ host: 'dok-dev', session: processSession, signal: controller.signal,
-    readConfig: () => ({ endpoint: config.endpoint, token: config.token, enabled: true, agents }),
+    readConfig: () => ({ endpoint: config.endpoint, token: config.token, enabled: true, agents, run_selection: sessions.runSelection() }),
     execute, publish,
     onState: ({ hub_ready, last_pong_at, fatal }) => writeHealth({ hub_ready: hub_ready === true,
       last_pong_at: last_pong_at ?? null, fatal: fatal === true }) });

@@ -1,7 +1,7 @@
 // The Mac's side of the Agents Hub: it posts receipts, reads accepted memory and mirrors the user's panel decisions.
 // The Hub (D1) is the home of runs, ratings and memory notes; this Mac holds only a cache and a git mirror.
 // Config: ~/.config/agent-readonly/mac.json (mode 600) {endpoint, token}. That folder is hidden from agent sandboxes;
-// only this launcher process reads it. The token can post receipts and read; it cannot rate, decide or start anything.
+// only this launcher process reads it. The token can post receipts and read; it can request allowed dok runs; it cannot rate or decide anything.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,7 +29,7 @@ export async function hubCall(route, { method = 'GET', body, config = hubConfig(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   if (!response.ok) {
     const detail = await response.json().then((j) => (typeof j?.error === 'string' && j.error.length <= 300 ? j.error : null)).catch(() => null);
-    throw new Error(detail ?? `Hub refused (${response.status})`);
+    throw Object.assign(new Error(detail ?? `Hub refused (${response.status})`), { status: response.status });
   }
   return response.json();
 }
@@ -42,6 +42,9 @@ export async function hubPanel(options = {}) {
   }
   return panel;
 }
+
+export const hubStart = (args, options = {}) => hubCall('start', { ...options, method: 'POST', body: args, timeoutMs: 30000 });
+export const hubStartStatus = (id, options = {}) => hubCall(`starts/${encodeURIComponent(id)}`, { ...options, timeoutMs: 30000 });
 
 export const hubRun = (id, options = {}) => hubCall(`runs/${encodeURIComponent(id)}`, options);
 

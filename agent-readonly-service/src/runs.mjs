@@ -28,6 +28,7 @@ export function sanitizeReceipt(r, runner) {
   const usage = r.usage && typeof r.usage === 'object' ? Object.fromEntries(['input', 'output', 'totalTokens', 'cost']
     .map((k) => [k, num(r.usage[k])]).filter(([, v]) => v !== undefined)) : undefined;
   const out = {
+    request_id: runner === 'dok' && /^[A-Za-z0-9_-]{8,80}$/.test(r.request_id ?? '') ? r.request_id : undefined,
     run_id: r.run_id, agent: r.agent, kind: ['task', 'chat', 'eval'].includes(r.kind) ? r.kind : 'task', runner, status: r.status,
     title: redactLines(titleOf(r.task ?? r.title ?? ''), 200), task: redactLines(r.task, 16000),
     started: iso(r.started), ended: iso(r.ended), model: short(r.model, 100), thinking: short(r.thinking, 20),
@@ -100,4 +101,12 @@ export async function recentRuns(env, { agent, limit = 50 } = {}) {
 export function mergeRuns(snapshotRuns = [], hubRuns = []) {
   const ids = new Set(hubRuns.map((r) => r.run_id));
   return [...snapshotRuns.filter((r) => !ids.has(r.run_id)), ...hubRuns].sort((a, b) => String(a.started).localeCompare(String(b.started)));
+}
+
+/** Recover a start independently of the short relay-response cache. */
+export async function runForRequest(env, requestId) {
+  const row = await env.DB.prepare("SELECT receipt, updated_at FROM runs WHERE runner = 'dok' AND json_extract(receipt, '$.request_id') = ? LIMIT 1").bind(requestId).first();
+  if (!row) return null;
+  const r = observedRun(row);
+  return { state: 'started', run_id: r.run_id, runner: 'dok', status: r.status };
 }

@@ -20,6 +20,7 @@ export const HOST_OPS = {
   run_start: schema({ request_id: id, agent: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' }, task: { type: 'string', minLength: 1, maxLength: 16000 },
     model: { type: 'string', pattern: '^[a-z0-9-]{1,40}/[A-Za-z0-9._:-]{1,80}$' }, thinking: { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
     repo: { type: 'string', pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }, continue_from: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' } }, ['request_id', 'agent', 'task']),
+  run_lookup: schema({ target_request_id: id }),
   run_read: schema({ run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' } }),
 };
 export function validateDevelopment(name, args, host = false) {

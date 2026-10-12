@@ -1,3 +1,4 @@
+import { dokTarget } from '../../agent-workflow/run-selection.mjs';
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
@@ -97,6 +98,7 @@ async function nativePanel(env, { withConfirm = false } = {}) {
   } : null;
   const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
   return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending,
+    run_targets: [dokTarget(dok, agents)],
     status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
     capabilities: { ...base.capabilities, run: withConfirm && dok.online && dok.agents.length > 0, mutate: withConfirm },
     ...(confirm ? { confirm } : {}), relay: { ...dok, runner: 'dok' } };

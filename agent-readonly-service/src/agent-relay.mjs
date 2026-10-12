@@ -14,6 +14,7 @@ export class AgentRelay extends DurableObject {
     this.sql = ctx.storage.sql;
     this.sql.exec('CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY CHECK(id=1), session TEXT NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, until INTEGER NOT NULL, result TEXT)');
+    if (!this.sql.exec('PRAGMA table_info(requests)').toArray().some(c => c.name === 'operation')) this.sql.exec('ALTER TABLE requests ADD COLUMN operation TEXT');
     this.sql.exec('CREATE TABLE IF NOT EXISTS attempts (id TEXT PRIMARY KEY, request TEXT NOT NULL, session TEXT NOT NULL, socket TEXT NOT NULL, expires INTEGER NOT NULL)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS development_grants (id TEXT PRIMARY KEY, value TEXT NOT NULL)');
     this.grants = new GrantAuthority({
@@ -54,12 +55,25 @@ export class AgentRelay extends DurableObject {
     const owner = this.owner();
     return this.ctx.getWebSockets().find((ws) => ws.readyState === 1 && ws.deserializeAttachment()?.session === owner);
   }
+  pendingStarts() {
+    // Older retained requests have no operation; conservatively include them.
+    return this.one("SELECT COUNT(DISTINCT r.id) AS n FROM requests r JOIN attempts a ON a.request=r.id WHERE r.result IS NULL AND a.expires > ? AND (r.operation IN ('run_start','start_run') OR r.operation IS NULL)", Date.now())?.n ?? 0;
+  }
+  requestStatus(id) {
+    const row = this.one('SELECT result FROM requests WHERE id=?', id);
+    if (row?.result) {
+      const r = JSON.parse(row.result);
+      if (r.ok && r.value?.run_id) return { state: 'started', run_id: r.value.run_id, status: r.value.status, runner: 'dok' };
+    }
+    const pending = this.one('SELECT COUNT(*) AS n FROM attempts WHERE request=? AND expires > ?', id, Date.now())?.n ?? 0;
+    return { state: pending ? 'pending' : 'unknown' };
+  }
   status() {
     const now = Date.now(), ws = this.socket();
-    if (!ws) return offline(now);
+    if (!ws) return { ...offline(now), pending_starts: this.pendingStarts() };
     const a = ws.deserializeAttachment();
     const seen = this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime() ?? a.connected;
-    const observation = { observed_at: iso(now), last_seen_at: iso(seen), protocol_version: WIRE.version };
+    const observation = { pending_starts: this.pendingStarts(), observed_at: iso(now), last_seen_at: iso(seen), protocol_version: WIRE.version };
     return Number.isFinite(seen) && seen <= now && now - seen < WIRE.freshness
       ? { online: true, ...a.status, ...observation }
       : { ...offline(now), ...observation, last_known: { ...a.status, observed_at: iso(a.status_at ?? a.connected) } };
@@ -119,7 +133,7 @@ export class AgentRelay extends DurableObject {
     const attempt = crypto.randomUUID(), expires = Date.now() + WIRE.attempt;
     const message = encode({ v: 1, type: 'request', session: a.session, socket: a.socket, attempt, id, operation, args, expires });
     this.ctx.storage.transactionSync(() => {
-      if (!row) this.sql.exec('INSERT INTO requests(id,fingerprint,until) VALUES(?,?,?)', id, fp, expires + WIRE.retention);
+      if (!row) this.sql.exec('INSERT INTO requests(id,fingerprint,until,operation) VALUES(?,?,?,?)', id, fp, expires + WIRE.retention, operation);
       this.sql.exec('INSERT INTO attempts(id,request,session,socket,expires) VALUES(?,?,?,?,?)', attempt, id, a.session, a.socket, expires);
     });
     let resolve;

@@ -1,5 +1,6 @@
 import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
-import { storeRun, readRun } from './runs.mjs';
+import { validateSelectedStart, REQUEST_ID, dokTarget } from '../../agent-workflow/run-selection.mjs';
+import { storeRun, readRun, runForRequest } from './runs.mjs';
 import { bundleFor, pendingMemory } from './memory.mjs';
 import { decisionsSince } from './decisions.mjs';
 import { publishKnowledge, knowledgeRevision, agentBundle, readFiles } from './knowledge.mjs';
@@ -51,7 +52,7 @@ export async function relayFetch(request, env, readPanel) {
       } catch { return json({ ok: false, error: 'Account state refused' }, 400); }
     }
   }
-  // The Mac's own principal: posts its receipts, reads bundles and decisions. It cannot rate, decide, start or read /mcp.
+  // The Mac's own principal: posts its receipts, reads bundles and decisions. It can request selected dok starts; it cannot rate, decide or read /mcp.
   if (mac) return macRoute(request, env, pathname, readPanel);
   if (pathname !== '/relay/dok-dev/connect') return json({ error: 'not_found' }, 404);
   if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
@@ -66,7 +67,8 @@ export async function dokStatus(env) {
 const NEXT = 'Poll get_run with this run_id until status is no longer running (usually one to a few minutes). Do not start a duplicate run.';
 
 /** Starts a run on dok, the always-on runner. */
-export async function startRun(env, args) {
+export async function startRun(env, args, { mac = false } = {}) {
+  if (!mac && args?.request_id?.startsWith('mac-')) throw new Error('Reserved request namespace');
   validateRelay('start_run', args);
   const dok = await dokStatus(env);
   if (dok.online && dok.agents.includes(args.agent)) {
@@ -95,6 +97,32 @@ async function macRoute(request, env, pathname, readPanel) {
   const get = request.method === 'GET', url = new URL(request.url);
   const scopes = (url.searchParams.get('scopes') ?? '').split(',').filter(Boolean).slice(0, 10);
   try {
+    if (pathname === '/relay/mac/start' && request.method === 'POST') {
+      const body = await request.text();
+      if (body.length > 65536) return json({ error: 'Start request too large' }, 400);
+      let args;
+      try { args = JSON.parse(body); validateSelectedStart(args, true); }
+      catch (e) { return json({ error: e.message }, 400); }
+      const target = dokTarget(await dokStatus(env));
+      const agent = target.agents.find(a => a.name === args.agent);
+      if (!target.available || !agent || agent.reason) return json({ error: target.reason ?? agent?.reason ?? 'Agent is not runnable on dok' }, 409);
+      try { return json(await startRun(env, { ...args, request_id: 'mac-' + args.request_id }, { mac: true })); }
+      catch { return json({ error: 'Start response unavailable or refused. Check the original request before submitting another task.', request_id: args.request_id }, 503); }
+    }
+    if (pathname.startsWith('/relay/mac/starts/') && get) {
+      const externalId = pathname.slice('/relay/mac/starts/'.length);
+      if (!REQUEST_ID.test(externalId)) return json({ error: 'Invalid request identity' }, 400);
+      const id = 'mac-' + externalId;
+      const saved = await runForRequest(env, id);
+      if (saved) return json(saved);
+      const host = env.RELAY.getByName('owner-dok-dev'), known = await host.requestStatus(id);
+      if (known.state !== 'unknown') return json(known);
+      const dok = await dokStatus(env);
+      if (!dok.online || dok.run_selection?.version !== 1) return json({ state: 'unknown', reason: 'dok cannot reconcile this request right now.' });
+      const found = await host.dispatch('run_lookup', { target_request_id: id });
+      // Lookup runs through the same ordered command queue as start; it never executes work.
+      return json(found.ok ? found.value : { state: 'unknown', reason: 'Request lookup unavailable.' });
+    }
     if (pathname === '/relay/mac/panel' && get) return readPanel
       ? json(await readPanel()) : json({ error: 'Panel unavailable' }, 503);
     if (pathname.startsWith('/relay/mac/runs/') && get) {

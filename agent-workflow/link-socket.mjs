@@ -27,7 +27,7 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
       const url = new URL(config.endpoint);
       if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw new Error('Relay endpoint must be a credential-free HTTPS URL');
       url.protocol = 'wss:'; url.pathname = url.pathname.replace(/\/$/, '') + (host === 'dok-dev' ? '/relay/dok-dev/connect' : '/relay/connect');
-      const hello = { v: 1, session, mode: acquired ? 'resume' : 'acquire', status: validateStatus({ enabled: config.enabled === true, agents: config.agents }) };
+      const hello = { v: 1, session, mode: acquired ? 'resume' : 'acquire', status: validateStatus({ enabled: config.enabled === true, agents: config.agents, run_selection: config.run_selection }) };
       acquired = true; // even a lost HTTP/hello response must not reacquire ownership
       state({ hub_ready: false, last_pong_at: null });
       const result = await new Promise((resolve) => {
@@ -57,7 +57,7 @@ export async function serveSocket({ readConfig, execute, publish, signal, log = 
             if (!fresh()) return;
             if (Date.now() - lastPing >= WIRE.keepalive) { ws.send(PING); lastPing = Date.now(); }
             const c = readConfig();
-            const status = validateStatus({ enabled: c.enabled === true, agents: c.agents });
+            const status = validateStatus({ enabled: c.enabled === true, agents: c.agents, run_selection: c.run_selection });
             if (JSON.stringify(status) !== statusText) { send({ type: 'status', status }); statusText = JSON.stringify(status); }
             for (const [id, p] of pending) {
               if (Date.now() >= p.until) pending.delete(id);

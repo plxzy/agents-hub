@@ -245,6 +245,22 @@ export class DevelopmentSessions {
     const { reported_at, root, ...receipt } = read(file);
     return receipt;
   }
+  runSelection() {
+    return { version: 1, agents: this.runnable().map(agent => {
+      let repo, reason;
+      try { repo = this.repoFor(agent); } catch { reason = 'Choose a repository through the existing hosted tools; this form uses agent defaults only.'; }
+      const write = this.isWrite(agent);
+      if (!reason && [...this.runs.values()].filter(r => r.write === write).length >= (write ? this.limits.writeRuns : this.limits.runs)) reason = 'dok is busy; wait for the current run to finish.';
+      return { name: agent.name, model: agent.model, ...(repo ? { repo } : {}), ...(reason ? { reason } : {}) };
+    }) };
+  }
+  runLookup(requestId) {
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(requestId ?? '')) throw new Error('Invalid request identity');
+    const file = path.join(this.state, 'agent-requests', requestId + '.json');
+    if (!fs.existsSync(file)) return { state: 'not_found' };
+    const { run_id } = read(file), r = this.runGet(run_id);
+    return { state: 'started', run_id, status: r.status, runner: 'dok' };
+  }
   async runStart({ request_id, agent: name, task, model, thinking, repo, continue_from }) {
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(request_id ?? '') || typeof task !== 'string' || !task.trim() || task.length > 16000) throw new Error('Invalid task');
     if (continue_from !== undefined && !RUN_ID.test(continue_from)) throw new Error('Invalid continue_from');
@@ -275,7 +291,7 @@ export class DevelopmentSessions {
     // Per-run overrides from the caller; only providers this runner holds credentials for.
     const runtime = agentRuntime({ model: model ?? agent.model, thinking: thinking ?? agent.thinking }), run_id = newId('r');
     if (!(this.limits.providers ?? ['openai']).includes(runtime.provider)) throw new Error('Provider not available on dok');
-    const receipt = { run_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
+    const receipt = { run_id, request_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
       started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version,
       repo: project, write, ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);

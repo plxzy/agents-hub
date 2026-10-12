@@ -1,3 +1,5 @@
+import { SELECTED_START_INPUT, SELECTION_VERSION, dokTarget } from './run-selection.mjs';
+import { startSelected, selectedStartStatus, selectedStarts } from './selected-starts.mjs';
 // The operations catalog: everything the agent system can do for another app, defined once. The local MCP
 // server, the dashboard, `agent call`, the Pi package and (later) the hosted hub are built from this list, so a
 // new operation or a change in who may call it is made here only.
@@ -37,11 +39,10 @@ export const RUNNERS = {
   local: {
     run: (name, task, { resume, cwd, root, state }) => runAgent(name, task, { resume, cwd, root, state }),
     /** Starts `agent run` in the background and returns its run id at once; the run writes its own receipt. */
-    start: (name, task, { resume, cwd, root, state, remote = false, spawn = nodeSpawn }) => {
+    start: (name, task, { resume, cwd, root, state, remote = false, spawn = nodeSpawn, runId = newId('r') }) => {
       const definition = getAgent(name, root);
       const agent = resolveWorkspace(definition, cwd ?? process.cwd());
       assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
-      const runId = newId('r');
       fs.mkdirSync(path.join(state, 'runs'), { recursive: true, mode: 0o700 });
       const log = fs.openSync(path.join(state, 'runs', `${runId}.log`), 'a', 0o600);
       const child = spawn(process.execPath, [AGENT_CLI, 'run', '--run-id', runId, ...(resume ? ['--continue'] : []), name, task], {
@@ -107,6 +108,19 @@ export const OPS = [
       const run_id = runnerFor(definition).start(agent, task, { resume, cwd, root, state, spawn, remote });
       return { run_id, status: 'running' };
     },
+  },
+  {
+    name: 'start_selected_run', access: 'run', title: 'Start on the selected runner',
+    description: 'Start explicitly on mac or dok. A request_id identifies this exact submission. Reusing it only checks the original; it never starts again. Unknown means reconcile with get_selected_start, never fall back to another runner.',
+    input: SELECTED_START_INPUT, annotations: { readOnlyHint: false },
+    run: (args, ctx) => startSelected(args, selectedOptions(ctx)),
+  },
+  {
+    name: 'get_selected_start', access: 'read', title: 'Check an original start request',
+    description: 'Reconcile a saved start request without starting or retrying any task.',
+    input: { type: 'object', required: ['request_id'], additionalProperties: false, properties: { request_id: SELECTED_START_INPUT.properties.request_id } },
+    annotations: { readOnlyHint: true },
+    run: ({ request_id }, ctx) => selectedStartStatus(request_id, selectedOptions(ctx)),
   },
   {
     name: 'list_runs', access: 'read', ...READ_OPS.list_runs,
@@ -201,13 +215,35 @@ export function dashboardData(ctx) {
 const hubOptions = (ctx) => ({ config: ctx.hub === undefined ? (ctx.state === STATE ? linkedHub(ctx.root) : null) : ctx.hub,
   fetchImpl: ctx.fetchImpl ?? fetch });
 
+function selectedOptions(ctx) {
+  const validateLocal = args => {
+    const definition = getAgent(args.agent, ctx.root);
+    validateCwd(definition, args.cwd);
+    assertSandboxAllowed(resolveWorkspace(definition, args.cwd ?? process.cwd()), 'agent run');
+    runnerFor(definition);
+  };
+  return { ...hubOptions(ctx), state: ctx.state, validateLocal, newRunId: () => newId('r'),
+    findLocal: id => listRuns(ctx.state, { running: true }).find(r => r.run_id === id),
+    startLocal: (args, runId) => ({ run_id: runnerFor(getAgent(args.agent, ctx.root)).start(args.agent, args.task,
+      { root: ctx.root, state: ctx.state, spawn: ctx.spawn, remote: ctx.remote, cwd: args.cwd, resume: args.continue, runId }), status: 'running' }),
+  };
+}
 export async function openDashboard(ctx) {
   const options = hubOptions(ctx);
+  // Local discovery is independent of remote health; Mac starts never wait for a Hub read.
+  const local = { id: 'mac', label: 'This Mac', available: true, reason: null,
+    agents: loadAgents(ctx.root).map(a => ({ ...agentSummary(a, []), reason: a.runner && a.runner !== 'local' ? 'Local runner is unavailable.' : null })) };
+  let data, remote;
   if (options.config) {
-    try { return { ...await hubPanel(options), transport: 'mac', decision_message: DECIDE_IN_HUB }; }
-    catch { return { ...dashboardData(ctx), source: 'local (Hub unreachable)', transport: 'mac' }; }
+    try { data = await hubPanel(options); remote = data.run_targets?.find(t => t.id === 'dok') ?? { ...dokTarget(data.relay), available: false, reason: 'Hub needs the runner-selection update.' }; }
+    catch { data = { ...dashboardData(ctx), source: 'local (Hub unreachable)' }; remote = { id: 'dok', label: 'dok', available: false, reason: 'Hub unreachable.', agents: [] }; }
+  } else {
+    data = { ...dashboardData(ctx), source: 'local' };
+    remote = { id: 'dok', label: 'dok', available: false, reason: 'This Mac is not linked to the Hub.', agents: [] };
   }
-  return { ...dashboardData(ctx), source: 'local', transport: 'mac' };
+  return { ...data, transport: 'mac', decision_message: DECIDE_IN_HUB,
+    runner_selection: SELECTION_VERSION, run_targets: [remote, local], start_requests: selectedStarts(ctx.state),
+    capabilities: { ...data.capabilities, run: true } };
 }
 
 export const defaultContext = () => ({ root: ROOT, state: STATE, spawn: nodeSpawn });

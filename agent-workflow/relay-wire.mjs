@@ -19,7 +19,21 @@ export const validId = (id) => typeof id === 'string' && /^[A-Za-z0-9_-]{8,80}$/
 export function validateStatus(value) {
   if (!value || typeof value.enabled !== 'boolean' || !Array.isArray(value.agents) || value.agents.length > 100
     || value.agents.some((s) => typeof s !== 'string' || s.length > 100)) throw new Error('Invalid relay status');
-  return { enabled: value.enabled, agents: value.agents };
+  let selection;
+  if (value.run_selection !== undefined) {
+    const s = value.run_selection;
+    if (s?.version !== 1 || !Array.isArray(s.agents) || s.agents.length > 100) throw new Error('Invalid runner selection status');
+    selection = { version: 1, agents: s.agents.map(a => {
+      if (!a || !value.agents.includes(a.name)) throw new Error('Invalid runner selection agent');
+      const out = { name: a.name };
+      for (const k of ['model', 'repo', 'reason']) if (a[k] !== undefined) {
+        if (typeof a[k] !== 'string' || a[k].length > 300) throw new Error('Invalid runner selection field');
+        out[k] = a[k];
+      }
+      return out;
+    }) };
+  }
+  return { enabled: value.enabled, agents: value.agents, ...(selection ? { run_selection: selection } : {}) };
 }
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
