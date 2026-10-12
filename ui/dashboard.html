@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents Hub · public demo</title>
+<style>
+:root { color-scheme: light dark; --bg:#151513; --panel:#1f1f1c; --line:#393934; --text:#eeeee8; --muted:#aaa9a0; --accent:#8ab4ff; --good:#79d18d; --warn:#e9bd64; }
+@media (prefers-color-scheme: light) { :root { --bg:#f7f7f3; --panel:#fff; --line:#deded7; --text:#242420; --muted:#66665e; --accent:#1f5fbf; --good:#237a3b; --warn:#8a5a00; } }
+* { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,sans-serif; } main { max-width:920px; margin:auto; padding:24px 18px 32px; } header,.line,.tabs { display:flex; align-items:center; gap:10px; flex-wrap:wrap; } h1 { font-size:18px; margin:0; } h2 { font-size:15px; margin:0 0 12px; } .subtle,.meta { color:var(--muted); } .meta { font-size:12px; margin-top:4px; overflow-wrap:anywhere; } .chips { display:flex; gap:6px; flex:1; flex-wrap:wrap; } .chip,.pill { border:1px solid var(--line); border-radius:999px; padding:2px 8px; font-size:12px; } .chip.good,.pill.completed { color:var(--good); } .chip.warn,.pill.running { color:var(--warn); } .tabs { margin:18px 0 12px; border-bottom:1px solid var(--line); } button { border:1px solid var(--line); border-radius:7px; background:var(--panel); color:var(--text); padding:7px 10px; cursor:pointer; } button[aria-selected=true] { border-color:var(--accent); color:var(--accent); } button:focus-visible,summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; } .list { display:grid; gap:8px; } .row { border:1px solid var(--line); border-radius:9px; background:var(--panel); padding:12px; } .row.click { cursor:pointer; } .grow { flex:1; min-width:0; } .ell { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } .name { font-weight:650; } .body { white-space:pre-wrap; overflow-wrap:anywhere; margin-top:8px; } dl { display:grid; grid-template-columns:max-content 1fr; gap:3px 12px; font-size:12px; margin:12px 0 0; } dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; } .empty { padding:30px 0; text-align:center; color:var(--muted); } .notice { margin:16px 0; padding:10px 12px; border-left:3px solid var(--accent); background:var(--panel); color:var(--muted); } details { margin-top:12px; } summary { cursor:pointer; color:var(--muted); } footer { margin-top:22px; color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body><main>
+<header><h1>Agents Hub</h1><div class="chips" id="chips"></div><button id="refresh">Refresh</button></header>
+<div class="notice">Public fixture demo · read-only · sample data only. No task can be started from this page.</div>
+<nav class="tabs" id="tabs" aria-label="Dashboard sections"></nav>
+<section id="view" aria-live="polite"></section>
+<footer>Sample data is deterministic and does not represent a live runner or customer result.</footer>
+</main>
+<script>
+const DATA = /*__FIXTURE_DATA__*/;
+const state = { tab:'runs', detail:null };
+const ago = value => { const seconds = Math.max(0, (Date.now()-Date.parse(value))/1000); return !Number.isFinite(seconds) ? '' : seconds < 60 ? `${Math.floor(seconds)}s ago` : `${Math.floor(seconds/60)}m ago`; };
+const el = (tag, attrs={}, ...children) => { const node=document.createElement(tag); for (const [key,value] of Object.entries(attrs)) { if (value === undefined || value === null) continue; if (key === 'text') node.textContent=value; else node.setAttribute(key,value); } for (const child of children.flat()) if (child !== null && child !== undefined) node.append(child.nodeType ? child : document.createTextNode(String(child))); return node; };
+function renderHeader() { const s=DATA.status; document.querySelector('#chips').replaceChildren(el('span',{class:'chip'},`${s.agents} agents`),el('span',{class:'chip warn'},`${s.running} running`),el('span',{class:'chip'},`${s.pending.proposals} to review`),el('span',{class:'chip good'},'read-only')); }
+function renderTabs() { const labels=[['runs','Runs'],['agents','Agents'],['review','Review']]; document.querySelector('#tabs').replaceChildren(...labels.map(([id,label])=>el('button',{'aria-selected':String(state.tab===id),onclick:()=>{state.tab=id;state.detail=null;render();}},label))); }
+function runCard(run) { return el('article',{class:'row click',tabindex:'0',onclick:()=>{state.detail=run.run_id;render();},onkeydown:e=>{if(e.key==='Enter')e.currentTarget.click();}},el('div',{class:'line'},el('span',{class:`pill ${run.status}`},run.status),el('strong',{class:'name'},run.agent),el('span',{class:'grow ell'},run.title),el('span',{class:'subtle'},run.feedback==='good'?'approved':'')),el('div',{class:'meta'},`${run.model} · ${ago(run.started)} · ${run.tool_calls} tool calls`),run.progress?el('div',{class:'meta'},`${run.progress.phase}: ${run.progress.action.replaceAll('_',' ')}`):null); }
+function runs() { return el('div',{class:'list'},...DATA.runs.slice().reverse().map(runCard)); }
+function agents() { return el('div',{class:'list'},...DATA.agents.map(agent=>el('article',{class:'row'},el('div',{class:'line'},el('strong',{class:'name'},agent.name),el('span',{class:'grow subtle'},agent.description)),el('div',{class:'meta'},`${agent.model} · ${agent.tools.join(', ')} · ${agent.workspace}`),agent.last_run?el('div',{class:'meta'},`Last run: ${agent.last_run.status} · ${ago(agent.last_run.started)}`):null))); }
+function review() { return el('div',{class:'list'},...DATA.pending.map(item=>el('article',{class:'row'},el('div',{class:'line'},el('strong',{class:'name'},item.kind),el('span',{class:'grow subtle'},item.why)),el('div',{class:'body'},item.body),el('div',{class:'meta'},'Review actions are disabled in the public demo.')))); }
+function detail() { const run=DATA.runs.find(item=>item.run_id===state.detail); return el('article',{class:'row'},el('button',{onclick:()=>{state.detail=null;render();}},'← All runs'),el('h2',{},run.title),el('div',{class:'body'},run.output ?? 'This run is still in progress.'),el('dl',{},el('dt',{},'Status'),el('dd',{},run.status),el('dt',{},'Agent'),el('dd',{},run.agent),el('dt',{},'Model'),el('dd',{},run.model),el('dt',{},'Started'),el('dd',{},new Date(run.started).toLocaleString()),el('dt',{},'Tool calls'),el('dd',{},run.tool_calls)),run.progress?el('details',{},el('summary',{},'Progress'),el('div',{class:'meta'},`${run.progress.phase}: ${run.progress.action}`)):null); }
+function render() { renderHeader();renderTabs();document.querySelector('#view').replaceChildren(state.detail?detail():state.tab==='agents'?agents():state.tab==='review'?review():runs()); }
+document.querySelector('#refresh').onclick=()=>render();render();
+</script></body></html>
