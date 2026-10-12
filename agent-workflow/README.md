@@ -110,11 +110,23 @@ tokens and cost, so you can see whether memory helped.
   baseline 20.9k/$0.025. Both still re-read the source, as instructed. One sample only.
 - `--continue` recalled the previous question and answer with no tool calls.
 
+## Remote runs on dok (2026-10-12)
+
+Hosted callers (ChatGPT/Dots, Claude) start agents with the Hub's `start_run`; it goes to **dok**, the always-on
+runner (`../tools/dok-runner/`), so the Mac does not need to be online. dok runs reviewed read-only agents (currently
+`helper`) on a fresh depth-1 clone of the bare repo's `main`, mounted read-only in bwrap, with exactly the agent's
+tools. `model` (`provider/model`, e.g. `openai/gpt-6.1-sol`) and `thinking` may be overridden per run; the worker
+verifies the live SDK session against them. Receipts go to the Hub's D1 `runs` table (`get_run`/`list_runs` read
+them with the Mac off). ChatGPT accounts `openai`, `openai-2`, `openai-3` form a pool: a usage-limit error records a
+cooldown in the Hub's `accounts` table (shared by every runner) and the read-only run restarts on the next account.
+The Mac relay remains a fallback for agents dok does not offer. Code: `dev-sessions.mjs` (runs lane),
+`dev-session-worker.mjs` (`executeRun`), Hub `src/runs.mjs`, `src/accounts.mjs`. Evidence:
+`../evidence/2026-10-12-dok-runner-step0-1b/`.
+
 ## Not here yet
 
-Memory retrieval once notes outgrow the prompt, a writer/reviewer pair, and cloud-only agents (Cloudflare PiHarness).
-Hosted helper-only starts already use the foreground WebSocket relay; see `LINK.md` and the dated acceptance evidence.
-That historical acceptance is separate from the local, undeployed Plan 1A health changes.
+Memory retrieval once notes outgrow the prompt, a writer/reviewer pair, write runs on dok (`workflow` one-shot with
+review branches), and the Hub as home for memory/reviews (today reviews and ratings still need the Mac).
 
 ## Guards (enforced, not instructed)
 

@@ -1,5 +1,8 @@
 # dok-dev development environment
 
+> 2026-10-12: the Agents Hub supervisor moves to its own container, `../dok-runner/` (`agents`, user `agent`).
+> The procedures below describe the supervisor inside the vm project's `dok-dev` devcontainer until that cutover.
+
 `pi-release.sh` runs as `vscode` inside dok-dev. `prepare 1.1.0` installs a pinned
 candidate with npm lifecycle scripts disabled and records registry integrity and
 the resolved dependency lock. `activate 1.1.0` atomically changes only the Pi
