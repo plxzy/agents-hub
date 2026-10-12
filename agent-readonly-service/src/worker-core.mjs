@@ -1,9 +1,10 @@
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
-import { RELAY_OPS, relayToolList } from '../../agent-workflow/relay-contract.mjs';
+import { RELAY_OPS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { relayFetch, relayStatus, requestRelay, startRun, getRun, dokEnabled, dokStatus } from './relay.mjs';
 import { readRun, recentRuns, mergeRuns } from './runs.mjs';
 import { readAccounts } from './accounts.mjs';
+import { issueCodes, redeemCode, rateRun } from './decisions.mjs';
 import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
 import { developmentCall } from './development.mjs';
@@ -67,6 +68,29 @@ const TOOLS = [
     run: (p, { limit = 20 }) => ({ snapshot: freshness(p.meta), ...page(p.snap.payload.context ?? [], null, limit) }) },
 ];
 
+// Counts must come from runs the Hub actually holds, not only from a snapshot the Mac last published.
+function hubCounts(snapRuns, hubRuns) {
+  const runs = mergeRuns(snapRuns ?? [], hubRuns), last = runs.filter((r) => r.status !== 'running').at(-1);
+  return { runs: runs.length, running: runs.filter((r) => r.status === 'running').length,
+    last_run: last ? { run_id: last.run_id, agent: last.agent, status: last.status, ended: last.ended } : null };
+}
+
+// Panel data without the Mac: runs from D1 (plus any snapshot runs), the dok runner's agents and one-time codes for
+// rating finished Hub runs. The dashboard treats `relay` as "a hosted runner is online", so dok presents itself there.
+async function nativePanel(env) {
+  const snap = await latest(env), m = snap ? meta(snap, env) : null, hubRuns = await recentRuns(env, { limit: 50 }), dok = await dokStatus(env);
+  const base = snap ? snapshotData(snap, m) : { generated_at: null, capabilities: CAPABILITIES, status: { agents: null, runs: null, running: null, pending: null, last_run: null },
+    agents: [], runs: [], pending: null, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
+  const known = new Set(base.agents.map((a) => a.name));
+  const agents = [...base.agents.map((a) => ({ ...a, remote_allowed: dok.agents.includes(a.name) })),
+    ...dok.agents.filter((n) => !known.has(n)).map((name) => ({ name, description: 'Runs on dok.', remote_allowed: true, last_run: null }))];
+  const runs = mergeRuns(base.runs, hubRuns).slice(-50);
+  const rate = await issueCodes(env, 'rate', hubRuns.filter((r) => r.status !== 'running').map((r) => r.run_id));
+  return { ...base, agents, runs, status: { ...base.status, ...hubCounts(snap?.payload.runs, hubRuns) },
+    capabilities: { ...base.capabilities, run: dok.online && dok.agents.length > 0, mutate: true },
+    confirm: { review: {}, rate }, relay: { online: dok.online, enabled: dok.enabled !== false, agents: dok.agents, runner: 'dok' } };
+}
+
 const toolList = TOOLS.map(({ name, title, description, input, annotations, ui }) => ({
   name, title, description, inputSchema: input, annotations: { title, ...annotations, readOnlyHint: true },
   ...(ui ? { icons: DASHBOARD_ICONS, _meta: DASHBOARD_TOOL_META } : {}),
@@ -92,8 +116,8 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: [...(env.RELAY_TOKEN || dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The unified panel uses the linked Mac when online and a published snapshot otherwise.' } : t),
-      // Without the Mac relay only the runner tools remain; panel controls need the Mac until reviews move to the Hub.
-      ...relayToolList().filter((t) => env.RELAY_TOKEN || ['start_run', 'get_remote_run'].includes(t.name)),
+      // Without the Mac relay the runner tools and the panel's run tools remain; review decisions move to the Hub in a later step.
+      ...relayToolList().filter((t) => env.RELAY_TOKEN || ['start_run', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run'].includes(t.name)),
     ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
@@ -108,6 +132,26 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
             ...(params.name === 'request_development' ? { structuredContent: { ...value, view: 'development',
               next_step: 'The user must approve this session in the card. Then check get_development and submit the task with start_development_task.' } } : {}),
             ...(confirm ? { _meta: { 'agents-hub/development-confirm': confirm } } : {}) });
+        } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
+      }
+      // Hub-held runs (dok) are read and rated here; without the Mac online the panel is served from D1.
+      if (dokEnabled(env) && ['panel_data', 'panel_run', 'rate_run'].includes(params?.name)) {
+        try {
+          const args = params.arguments ?? {};
+          const macOnline = env.RELAY_TOKEN ? (await relayStatus(env)).online : false;
+          if (params.name === 'panel_data' && !macOnline) {
+            const { confirm, ...value } = await nativePanel(env);
+            return reply({ content: [{ type: 'text', text: JSON.stringify(value) }], _meta: { 'agents-hub/confirm': confirm } });
+          }
+          if (params.name === 'panel_run') {
+            const run = await readRun(env, args.run_id);
+            if (run) return reply({ content: [{ type: 'text', text: JSON.stringify(run) }] });
+          }
+          if (params.name === 'rate_run' && await readRun(env, args.run_id)) {
+            validateRelay('rate_run', args);
+            await redeemCode(env, args.confirm, 'rate', args.run_id);
+            return reply({ content: [{ type: 'text', text: JSON.stringify(await rateRun(env, args)) }] });
+          }
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
       if ((env.RELAY_TOKEN || dokEnabled(env)) && RELAY_OPS[params?.name]) {
@@ -132,7 +176,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           const hub = await readRun(env, args.run_id);
           if (hub) return reply({ content: [{ type: 'text', text: JSON.stringify(hub, null, 2) }] });
         }
-        const hubRuns = ['list_runs', 'open_dashboard'].includes(params.name) ? await recentRuns(env, { agent: args.agent, limit: 50 }) : [];
+        const hubRuns = ['list_runs', 'open_dashboard'].includes(params.name) ? await recentRuns(env, { agent: args.agent, limit: params.name === 'open_dashboard' ? 200 : 50 }) : [];
         const snap = await latest(env), m = snap ? meta(snap, env) : null;
         if (!snap && params.name === 'list_runs') return reply({ content: [{ type: 'text', text: JSON.stringify({ snapshot: null, runs: hubRuns.slice(-(args.limit ?? 10)) }, null, 2) }] });
         if (!snap && !healthRead) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
@@ -141,10 +185,19 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         const value = snap ? tool.run({ snap, env, meta: m }, args)
           : params.name === 'get_status' ? { ...unknownStatus, ...unavailable }
           : { ...unavailable, status: unknownStatus, agents: [], runs: [], pending: null };
+        if (healthRead) {
+          const hubAll = params.name === 'open_dashboard' ? hubRuns : await recentRuns(env, { limit: 200 });
+          // No snapshot and nothing in the Hub stays unknown, never zero.
+          if (snap || hubAll.length) {
+            const counts = hubCounts(snap?.payload.runs, hubAll);
+            if (params.name === 'get_status') Object.assign(value, counts); else value.status = { ...value.status, ...counts };
+          }
+        }
         if (params.name === 'list_runs' && snap) value.runs = mergeRuns(snap.payload.runs.filter((r) => !args.agent || r.agent === args.agent), hubRuns).slice(-(args.limit ?? 10));
         if (params.name === 'open_dashboard') value.runs = mergeRuns(value.runs ?? [], hubRuns).slice(-50);
         if (healthRead) {
           value.development_available = Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true');
+          value.hub_panel = dokEnabled(env);
           value.runners = { dok: await dokStatus(env) };
           value.accounts = await readAccounts(env);
           value.relay = await relayStatus(env);

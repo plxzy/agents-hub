@@ -1,6 +1,7 @@
 // Run receipts in D1: written by authenticated runners, read by the Hub's MCP tools.
 import { containsSecret } from './snapshot.mjs';
 import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
+import { ratingsFor } from './decisions.mjs';
 
 export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 const STATUS = ['running', 'completed', 'failed', 'interrupted'];
@@ -56,7 +57,9 @@ export async function storeRun(env, receipt, runner) {
 export async function readRun(env, runId) {
   if (!env.DB || !RUN_ID.test(runId ?? '')) return null;
   const row = await env.DB.prepare('SELECT receipt FROM runs WHERE run_id = ?').bind(runId).first();
-  return row ? JSON.parse(row.receipt) : null;
+  if (!row) return null;
+  const receipt = JSON.parse(row.receipt), rating = (await ratingsFor(env, [runId])).get(runId);
+  return rating ? { ...receipt, feedback: rating } : receipt;
 }
 
 /** Newest `limit` receipts as briefs (oldest first, like the snapshot's run list). */
@@ -67,7 +70,8 @@ export async function recentRuns(env, { agent, limit = 50 } = {}) {
     const stmt = agent ? env.DB.prepare('SELECT receipt FROM runs WHERE agent = ? ORDER BY started DESC LIMIT ?').bind(agent, n)
       : env.DB.prepare('SELECT receipt FROM runs ORDER BY started DESC LIMIT ?').bind(n);
     const { results } = await stmt.all();
-    return results.map((x) => JSON.parse(x.receipt)).reverse().map((r) => ({ ...runBrief(r), runner: r.runner }));
+    const receipts = results.map((x) => JSON.parse(x.receipt)).reverse(), ratings = await ratingsFor(env, receipts.map((r) => r.run_id));
+    return receipts.map((r) => ({ ...runBrief({ ...r, feedback: ratings.get(r.run_id) }), runner: r.runner }));
   } catch { return []; } // table missing before migration: behave as before
 }
 

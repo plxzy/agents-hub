@@ -27,7 +27,7 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
     bindings: { DOK_RELAY_TOKEN: DOK, DEVELOPMENT_ENABLED: 'true' } }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB');
-  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql']) {
+  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql', '0005_decisions.sql']) {
     for (const sql of fs.readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8').replace(/--.*$/gm, '').split(';').map((x) => x.trim()).filter(Boolean)) await db.prepare(sql).run();
   }
   const tool = async (name, args = {}) => (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST',
@@ -35,7 +35,7 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   const post = (body, token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/runs', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify(body) });
 
   const listed = (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST', body: JSON.stringify({ id: 1, method: 'tools/list' }) })).json()).result.tools.map((x) => x.name);
-  assert.ok(listed.includes('start_run') && listed.includes('get_remote_run')); assert.ok(!listed.includes('panel_data'));
+  assert.ok(listed.includes('start_run') && listed.includes('get_remote_run')); assert.ok(listed.includes('panel_data') && listed.includes('rate_run') && !listed.includes('review_decide'));
   assert.match((await tool('start_run', { agent: 'helper', task: 'x', request_id: 'request-0000' })).content[0].text, /No runner is online/);
 
   const res = await mf.dispatchFetch('https://test/relay/dok-dev/connect', { headers: { upgrade: 'websocket', authorization: 'Bearer ' + DOK,
@@ -65,6 +65,28 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   const done = JSON.parse((await tool('get_remote_run', { run_id: RUN })).content[0].text);
   assert.equal(done.status, 'completed'); assert.match(done.output, /access\.mjs:9/);
   assert.equal(JSON.parse((await tool('list_runs')).content[0].text).runs.at(-1).runner, 'dok');
+
+  // The panel works without the Mac: data and one-time codes come from the Hub; the model's text never carries a code.
+  const panel = await tool('panel_data');
+  const codes = panel._meta['agents-hub/confirm'];
+  assert.ok(codes.rate[RUN] && codes.rate[RUN].length >= 20); assert.deepEqual(codes.review, {});
+  assert.doesNotMatch(panel.content[0].text, new RegExp(codes.rate[RUN]));
+  const view = JSON.parse(panel.content[0].text);
+  assert.equal(view.relay.online, true); assert.equal(view.relay.runner, 'dok'); assert.equal(view.capabilities.mutate, true);
+  assert.ok(view.runs.some((r) => r.run_id === RUN)); assert.ok(view.agents.some((a) => a.name === 'helper' && a.remote_allowed));
+  assert.equal(JSON.parse((await tool('panel_run', { run_id: RUN })).content[0].text).status, 'completed');
+  const rate = (args) => tool('rate_run', { run_id: RUN, rating: 'good', request_id: 'rate-request-1', ...args });
+  assert.match((await rate({})).content[0].text, /Invalid|Missing/); // schema: confirm is required
+  assert.match((await rate({ confirm: 'x'.repeat(24) })).content[0].text, /needs a click in the Agents Hub panel/);
+  assert.match((await rate({ confirm: codes.rate[RUN], comment: 'Right file, token sk-abcdefghijklmnopqrstuvwxyz0123 leaked' })).content[0].text, /rated r-/);
+  assert.match((await rate({ confirm: codes.rate[RUN] })).content[0].text, /needs a click/); // a code works once
+  const rated = JSON.parse((await tool('get_run', { run_id: RUN })).content[0].text);
+  assert.equal(rated.feedback.rating, 'good'); assert.match(rated.feedback.comment, /redacted line/);
+  assert.equal(JSON.parse((await tool('list_runs')).content[0].text).runs.find((r) => r.run_id === RUN).feedback, 'good');
+  assert.equal(JSON.parse((await tool('panel_data')).content[0].text).runs.find((r) => r.run_id === RUN).feedback, 'good');
+  assert.equal((await tool('rate_run', { run_id: 'r-20261012T120000Z-ffffff', rating: 'good', request_id: 'rate-request-2', confirm: 'y'.repeat(24) })).isError, true); // unknown run: no Mac, no rating
+  const counts = JSON.parse((await tool('get_status')).content[0].text);
+  assert.ok(counts.runs >= 1 && counts.last_run.run_id); // counts come from the Hub even with no snapshot
 
   const override = tool('start_run', { agent: 'helper', task: 'Deeper look', request_id: 'request-0004', model: 'openai/gpt-6.1-sol', thinking: 'high' });
   let o = await next(); while (o.type !== 'request') o = await next();

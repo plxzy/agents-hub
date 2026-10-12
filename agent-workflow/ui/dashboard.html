@@ -156,7 +156,8 @@ async function refresh() {
   try {
     let data = await call('open_dashboard');
     const developmentAvailable = data.development_available;
-    if (data.relay?.online === true) {
+    // panel_data is live data from the Mac relay when it is online, otherwise from the Hub (runs held in D1).
+    if (data.relay?.online === true || data.hub_panel === true) {
       try { const live = await call('panel_data'); data = { ...live, health: dashboardHealth(data, live) }; }
       catch (e) { data.relay.error = e.message; }
     }
