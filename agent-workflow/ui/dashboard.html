@@ -35,10 +35,13 @@
   .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--color-background-secondary); color: var(--color-text-secondary); }
   .chip.on { background: var(--color-background-info); color: var(--color-text-info); }
   .chip.attn { background: var(--color-background-warning); color: var(--color-text-warning); }
+  .runner-health { flex-basis: 100%; font-size: 12px; color: var(--color-text-secondary); }
+  .runner-health summary { cursor: pointer; min-height: 24px; padding: 2px 0; }
+  .runner-health ul { margin: 4px 0; padding-left: 20px; overflow-wrap: anywhere; }
   button { font: inherit; font-size: 13px; color: var(--color-text-primary); background: var(--color-background-secondary);
     border: 1px solid var(--color-border-primary); border-radius: var(--border-radius-sm); padding: 4px 10px; cursor: pointer; }
   button:hover { background: var(--color-background-tertiary); }
-  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--color-ring-primary); outline-offset: 1px; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--color-ring-primary); outline-offset: 1px; }
   button:disabled { opacity: .5; cursor: default; }
   button.primary { background: var(--color-text-primary); color: var(--color-background-primary); border-color: transparent; }
   button.ok { color: var(--color-text-success); } button.no { color: var(--color-text-danger); }
@@ -100,7 +103,7 @@ const { App, applyHostStyleVariables } = globalThis.ExtApps;
 const { healthOf, healthLabels, dashboardHealth } = globalThis.AgentsHealth;
 
 // ---------- state ----------
-const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null };
+const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null, healthOpen: false };
 const app = new App({ name: 'AgentsDashboard', version: '0.1.0' }, { availableDisplayModes: ['inline', 'fullscreen'] }, { autoResize: true });
 
 // ---------- tiny DOM helper (text only: agent output is never parsed as HTML) ----------
@@ -156,7 +159,7 @@ async function refresh() {
   try {
     let data = await call('open_dashboard');
     const developmentAvailable = data.development_available;
-    // panel_data is live data from the Mac relay when it is online, otherwise from the Hub (runs held in D1).
+    // Hosted panel_data reads the Hub; Mac transport already received that data through its read-only route.
     if (data.transport !== 'mac' && (data.relay?.online === true || data.hub_panel === true)) {
       try { const live = await call('panel_data'); data = { ...live, health: dashboardHealth(data, live) }; }
       catch (e) { data.relay.error = e.message; }
@@ -171,14 +174,14 @@ async function refresh() {
 function scheduleRefresh() {
   clearTimeout(S.poll);
   if (document.hidden || S.closed) return;
-  // Hosted data changes only when the Mac publishes. Local running tasks need faster updates.
-  const active = !S.data?.snapshot && S.data?.runs.some((r) => r.status === 'running');
+  // Follow active runs on either runner at the same interval.
+  const active = S.data?.runs?.some((r) => r.status === 'running');
   S.poll = setTimeout(refresh, active ? 4000 : 30000);
 }
 async function act(key, fn) {
   if (S.busy.has(key)) return;
   S.busy.add(key); render();
-  // Refresh owns its banner, including a successful snapshot fallback after a failed live read.
+  // Refresh owns its banner, including a successful local fallback after a failed Hub read.
   try { await fn(); if (key !== 'refresh') showError(); } catch (e) { showError(e.message); }
   finally { S.busy.delete(key); render(); }
 }
@@ -190,22 +193,25 @@ function setData(data) {
   render({ passive: true });
 }
 async function loadDetail(id) {
-  try { S.detail = await call(S.data?.transport !== 'mac' && S.data?.relay?.online && !S.data?.snapshot ? 'panel_run' : 'get_run', { run_id: id }); render({ passive: true }); } catch (e) { showError(e.message); }
+  try { S.detail = await call(S.data?.transport !== 'mac' && S.data?.source === 'hub' ? 'panel_run' : 'get_run', { run_id: id }); render({ passive: true }); } catch (e) { showError(e.message); }
 }
 
 // ---------- views ----------
 function chips() {
   const st = S.data?.status; if (!st) return [];
-  // pending is null when the hosted snapshot does not carry it: say so instead of showing a zero.
+  // Missing counts remain unknown rather than showing a zero.
   const review = Number.isInteger(st.pending?.memory) && st.pending.memory >= 0 && Number.isInteger(st.pending?.proposals) && st.pending.proposals >= 0
     ? st.pending.memory + st.pending.proposals : null;
-  const health = S.data.health ?? healthOf(S.data);
+  const health = S.data.health ?? healthOf(S.data, { expected: S.data.relay?.agents ?? [] });
+  const [runner, ...details] = healthLabels(health);
   return [h('span', { class: 'chip' }, `${st.agents ?? 'unknown'} agents`),
     h('span', { class: `chip${st.running ? ' on' : ''}` }, `${st.running ?? 'unknown'} running`),
     h('span', { class: `chip${review ? ' attn' : ''}` }, review === null ? 'review: unknown' : `${review} to review`),
-    ...healthLabels(health).map((text) => h('span', { class: 'chip', title: text }, text))];
+    ...(S.data.source ? [h('span', { class: 'chip' }, S.data.source === 'hub' ? 'Agents Hub' : S.data.source)] : []),
+    h('details', { class: 'runner-health', open: S.healthOpen, ontoggle: (e) => { S.healthOpen = e.currentTarget.open; } },
+      h('summary', {}, runner), h('ul', {}, ...details.map((text) => h('li', {}, text))))];
 }
-// Snapshot run=false stays false. Only live panel_data can expose remote Run controls.
+// Only explicit capabilities can expose Run controls.
 const canRun = () => S.data?.capabilities?.run === true && (!S.data?.relay || S.data.relay.online === true && S.data.relay.enabled === true);
 const allowedForRun = (a) => S.data?.relay ? a.remote_allowed === true : a.remote_allowed !== false;
 const canDecide = () => S.data?.capabilities?.mutate === true;
@@ -300,7 +306,6 @@ function detailView() {
     h('div', { class: 'line' }, h('span', { class: `pill ${r.status}` }, r.status), h('span', { class: 'name' }, r.agent),
       h('span', { class: 'grow muted small ell' }, r.run_id)),
     h('div', { class: 'body' }, r.task ?? r.title ?? ''),
-    S.data?.snapshot ? h('div', { class: 'meta' }, 'Hosted view: title and counts only, from the last published snapshot.') : null,
     r.status === 'running' ? h('div', { class: 'meta' }, h('span', { class: 'spin' }), ` started ${ago(r.started)}; this updates on its own`) : null,
     output ? h('pre', {}, output) : null,
     h('dl', {}, ...[
@@ -338,7 +343,7 @@ function reviewView() {
 }
 
 function formView() {
-  if (!canRun()) return h('div', { class: 'empty' }, 'Run is unavailable: snapshot capabilities are read-only; live remote starts require an online, enabled relay and an allowed agent.');
+  if (!canRun()) return h('div', { class: 'empty' }, 'Run is unavailable here. Remote starts need dok online, enabled, and ready to run the selected agent.');
   const agents = S.data.agents.filter(allowedForRun);
   const chosen = agents.find((a) => a.name === S.form.agent) ?? agents[0];
   const submit = (e) => {

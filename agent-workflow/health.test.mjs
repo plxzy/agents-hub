@@ -105,6 +105,19 @@ test('dashboard embeds and executes the same pure health code without network de
   const actual = context.AgentsHealth.healthOf(data(), { now });
   assert.deepEqual(JSON.parse(JSON.stringify(actual)), report(data()));
   assert.deepEqual(Array.from(context.AgentsHealth.healthLabels(actual)), healthLabels(report(data())));
-  assert.match(html, /Only live panel_data can expose remote Run controls/);
+  assert.match(html, /Only explicit capabilities can expose Run controls/);
   assert.match(html, /a\.remote_allowed === true/);
+});
+
+test('health labels lead with one current runner line and omit retired diagnostics', () => {
+  const d = data(); d.relay.agents = ['workflow', 'vm', 'helper', 'tikkytracker']; d.snapshot.stale = true;
+  const h = healthOf(d, { now, expected: d.relay.agents });
+  const labels = healthLabels(h);
+  assert.equal(labels[0], 'dok online · runs: helper, tikkytracker, vm, workflow');
+  assert.doesNotMatch(labels.join('\n'), /Snapshot|expected helper|Configuration allowlist|helper-only/i);
+  d.relay.online = false;
+  assert.equal(healthLabels(report(d))[0], 'dok offline');
+  assert.equal(healthLabels(report({}))[0], 'dok status unknown');
+  d.relay.online = true; d.relay.enabled = false;
+  assert.equal(healthLabels(report(d))[0], 'dok online · runs: paused');
 });

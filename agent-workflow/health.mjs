@@ -48,7 +48,7 @@ export function healthOf(data = {}, { now = Date.now(), snapshotMaxAge = 900000,
       time_problem: badTime ? 'malformed or future relay timestamp' : null, source: data.relay_source ?? 'unavailable' },
     execution: { enabled, available, configured_enabled: boolean(configured.enabled),
       reason: enabled === false ? 'deliberately off (not an outage)' : state === 'disconnected' ? 'relay disconnected; no remote starts'
-        : available === true ? 'fresh relay, enabled, helper-only allowlist' : 'permission or liveness not established' },
+        : available === true ? 'fresh relay, enabled, expected agents match' : 'permission or liveness not established' },
     allowlist: { expected, observed: observedAgents, authority: observedAgents === null ? 'unavailable' : live ? 'live' : 'last-known',
       observed_at: live ? observed.at : knownAt.at, matches_expected: matches, configured: configuredAgents, configuration_source: configured.source ?? 'unavailable' },
     snapshot: { state: snapshotState, age_ms: generated.age_ms, generated_at: generated.at, published_at: published.at,
@@ -76,16 +76,19 @@ export function dashboardHealth(hosted, live, { now = Date.now() } = {}) {
 }
 
 export function healthLabels(h) {
-  const age = h.snapshot.age_ms === null ? 'age unknown' : `age ${Math.floor(h.snapshot.age_ms / 1000)}s`;
-  const allowed = h.allowlist.observed?.join(', ') || (h.allowlist.observed ? 'none' : 'unknown');
+  const allowed = h.allowlist.observed?.join(', ') || (h.allowlist.observed ? 'none' : 'not reported');
+  const online = h.relay.state === 'connected' && h.relay.freshness === 'fresh';
   return [
-    `Relay: ${h.relay.state} · ${h.relay.freshness} · source ${h.relay.source} · last seen ${h.relay.last_seen_at ?? 'unknown'}`,
-    `Remote execution: ${h.execution.enabled === false ? 'deliberately off' : h.execution.enabled === true ? 'enabled' : 'unknown'} · ${h.execution.reason}`,
-    `Allowlist (${h.allowlist.authority}): ${allowed} · expected helper · ${h.allowlist.matches_expected === null ? 'comparison unknown' : h.allowlist.matches_expected ? 'matches' : 'MISMATCH'} · observed ${h.allowlist.observed_at ?? 'unknown'}`,
-    `Snapshot: ${h.snapshot.state} · ${age} · generated ${h.snapshot.generated_at ?? 'unknown'} · published ${h.snapshot.published_at ?? 'unknown'} · source ${h.snapshot.source} · capabilities.run ${h.snapshot.capabilities?.run ?? 'unknown'}`,
-    `Last successful relay run: ${h.last_successful_relay_run ? `${h.last_successful_relay_run.run_id} at ${h.last_successful_relay_run.ended} (historical; relay-journal)` : `unknown · ${h.history_limitation}`}`,
-    `Configuration allowlist: ${h.allowlist.configured?.join(', ') || (h.allowlist.configured ? 'none' : 'unknown')} · enabled ${h.execution.configured_enabled ?? 'unknown'} · source ${h.allowlist.configuration_source} (not liveness)`,
-    `Versions: relay protocol ${h.versions.relay_protocol ?? 'unknown'} · local Node ${h.versions.node ?? 'unknown'}`,
-    `Health observed ${h.observed_at}`,
+    online ? `dok online · runs: ${h.execution.enabled === false ? 'paused' : allowed}`
+      : h.relay.state === 'disconnected' ? 'dok offline' : 'dok status unknown',
+    `Last seen: ${h.relay.last_seen_at ?? 'not reported'} · ${h.relay.freshness} · ${h.relay.source}`,
+    `Execution: ${h.execution.enabled === false ? 'deliberately off' : h.execution.enabled === true ? 'enabled' : 'not established'}`,
+    ...(!online && h.allowlist.observed ? [`Runs (${h.allowlist.authority}): ${allowed}`] : []),
+    ...(h.allowlist.matches_expected === false ? ['Agent configuration: MISMATCH'] : []),
+    ...(h.last_successful_relay_run ? [`Last completed relay run: ${h.last_successful_relay_run.run_id} at ${h.last_successful_relay_run.ended} (historical)`] : []),
+    ...(h.allowlist.configured ? [`Configured runs: ${h.allowlist.configured.join(', ') || 'none'}`] : []),
+    ...(h.versions.relay_protocol !== null ? [`Relay protocol: ${h.versions.relay_protocol}`] : []),
+    ...(h.versions.node ? [`Node: ${h.versions.node}`] : []),
+    `Observed: ${h.observed_at}`,
   ];
 }
