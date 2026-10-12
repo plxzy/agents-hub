@@ -92,7 +92,7 @@ async function nativePanel(env) {
   const rate = await issueCodes(env, 'rate', hubRuns.filter((r) => r.status !== 'running').map((r) => r.run_id));
   const notes = await pendingMemory(env), review = await issueCodes(env, 'review', notes.map((n) => n.id));
   const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
-  return { ...base, agents, runs, pending, status: { ...base.status, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
+  return { ...base, agents, runs, pending, status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
     capabilities: { ...base.capabilities, run: dok.online && dok.agents.length > 0, mutate: true },
     confirm: { review, rate }, relay: { online: dok.online, enabled: dok.enabled !== false, agents: dok.agents, runner: 'dok' } };
 }

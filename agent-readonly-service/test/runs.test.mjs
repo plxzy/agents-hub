@@ -73,6 +73,14 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.ok(codes.rate[RUN] && codes.rate[RUN].length >= 20); assert.deepEqual(codes.review, {});
   assert.doesNotMatch(panel.content[0].text, new RegExp(codes.rate[RUN]));
   const view = JSON.parse(panel.content[0].text);
+  await t.test('panel agent count follows its returned list, not the retired snapshot', async () => {
+    await db.prepare('INSERT INTO snapshots (id, published_at, payload) VALUES (?, ?, ?)').bind('old', '2026-10-01T00:00:00Z',
+      JSON.stringify({ generated_at: '2026-10-01T00:00:00Z', agents: [{ name: 'helper' }], runs: [] })).run();
+    const refreshed = JSON.parse((await tool('panel_data')).content[0].text);
+    assert.deepEqual(refreshed.agents.map((a) => a.name).sort(), ['helper', 'workflow']);
+    assert.equal(refreshed.status.agents, refreshed.agents.length);
+    await db.prepare('DELETE FROM snapshots WHERE id = ?').bind('old').run();
+  });
   assert.equal(view.relay.online, true); assert.equal(view.relay.runner, 'dok'); assert.equal(view.capabilities.mutate, true);
   assert.ok(view.runs.some((r) => r.run_id === RUN)); assert.ok(view.agents.some((a) => a.name === 'helper' && a.remote_allowed));
   assert.equal(JSON.parse((await tool('panel_run', { run_id: RUN })).content[0].text).status, 'completed');
