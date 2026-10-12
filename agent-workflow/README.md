@@ -171,6 +171,15 @@ calls `hubPanel()` → `GET /relay/mac/panel`. The Mac route authenticates with 
 returns confirmation codes, and exposes no decision capability. `GET /relay/mac/runs/:id` supplies full Hub
 run details, including dok runs. Hosted decision checks and one-time code handling are unchanged.
 
+**Historical traceability (13 October 2026):** both detail renderers use `run-trace.mjs` to show
+recorded repository, workspace, review ref, base commit and commit, with exact values and explicit
+unavailable labels. The local `get_run` adds these presentation rows as `trace`; HTML formats the same
+receipt fields. A review ref is distinct from the checkout branch (not recorded). The hosted receipt
+does not include workspace paths or raw logs; these remain unavailable in the view. No current Git
+checkout is consulted, and no historical metadata is backfilled or inferred from agent defaults.
+Run output remains visible separately from raw logs. This is a display improvement using existing
+records, not new run telemetry. Dashboard resource v7 and plugins 0.4.1 contain the change.
+
 The shared view has the agents list, matching agent count, running/to-review counts, and latest 50 runs.
 `open_dashboard` performs a single Hub read, without flushing the outbox. On failure it returns current local
 data with `source: "local (Hub unreachable)"`; without a Hub link, `source` is `local`. Cached Hub review items

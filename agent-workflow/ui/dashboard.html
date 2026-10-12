@@ -100,7 +100,7 @@
 <script type="module">/*__HEALTH_BUNDLE__*/</script>
 <script type="module">
 const { App, applyHostStyleVariables } = globalThis.ExtApps;
-const { healthOf, healthLabels, dashboardHealth } = globalThis.AgentsHealth;
+const { healthOf, healthLabels, dashboardHealth, runTrace } = globalThis.AgentsHealth;
 
 // ---------- state ----------
 const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null, healthOpen: false };
@@ -312,9 +312,11 @@ function detailView() {
       ['runner', r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null)], ['model', r.model], ['started', r.started && new Date(r.started).toLocaleString()], ['tools', list(r.tool_calls, ', ', 'call(s)')],
       ['commands', r.commands?.length ? r.commands.join('\n') : null], ['blocked', list(r.blocked, '\n', 'attempt(s)')],
       ['memory used', r.memory_supplied?.length], ['memory proposed', r.memory_proposed?.length ? `${r.memory_proposed.length} (see Review)` : null],
-      ['tokens', r.usage?.totalTokens ?? r.tokens], ['workspace', r.workspace && home(r.workspace)],
+      ['tokens', r.usage?.totalTokens ?? r.tokens],
       ['your rating', typeof r.feedback === 'string' ? r.feedback : r.feedback ? `${r.feedback.rating}${r.feedback.comment ? ` — ${r.feedback.comment}` : ''}` : null],
     ].filter(([, v]) => v !== null && v !== undefined && v !== '').flatMap(([k, v]) => [h('dt', {}, k), h('dd', { style: k === 'commands' || k === 'blocked' ? 'white-space:pre-wrap;font-family:var(--font-mono)' : null }, v)])),
+    h('h3', {}, 'Recorded run context'),
+    h('dl', {}, ...runTrace(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)])),
     rateable ? h('div', { class: 'actions' },
       h('input', { id: 'rate-why', placeholder: 'Why (optional, your words)', 'aria-label': 'Reason for rating' }),
       h('button', { class: 'ok', disabled: S.busy.has(`rate-${r.run_id}`), onclick: () => rate('good') }, 'Good'),

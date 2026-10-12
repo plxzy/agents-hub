@@ -118,10 +118,14 @@ test('linked open_dashboard uses exactly the Hub lists and falls back explicitly
 test('get_run reads Hub output including dok runs and retains local fallback', async () => {
   const ctx = { ...fixture(), hub: { endpoint: 'https://hub.example', token: 't'.repeat(32) },
     fetchImpl: async (url) => { assert.ok(url.endsWith('/relay/mac/runs/r-dok')); return Response.json({ run_id: 'r-dok', runner: 'dok', output: 'done' }); } };
-  assert.equal((await callOp('get_run', { run_id: 'r-dok' }, { ctx })).output, 'done');
+  const remote = await callOp('get_run', { run_id: 'r-dok' }, { ctx });
+  assert.equal(remote.output, 'done');
+  assert.match(Object.fromEntries(remote.trace).Workspace, /Unavailable/);
   fs.mkdirSync(path.join(ctx.state, 'runs'), { recursive: true });
   fs.writeFileSync(path.join(ctx.state, 'runs/r-local.json'), JSON.stringify({ run_id: 'r-local', agent: 'demo', status: 'completed', raw_events: '/private', output: 'local' }));
   ctx.fetchImpl = async () => { throw new Error('offline'); };
   const local = await callOp('get_run', { run_id: 'r-local' }, { ctx });
   assert.equal(local.output, 'local'); assert.equal(local.raw_events, undefined);
+  assert.match(Object.fromEntries(local.trace).Logs, /Unavailable/);
+  assert.doesNotMatch(JSON.stringify(local.trace), /private/);
 });

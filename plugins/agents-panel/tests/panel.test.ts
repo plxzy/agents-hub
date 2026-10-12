@@ -53,7 +53,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
       calls.push([op ?? '', json ?? ''])
       const out = op === 'open_dashboard' ? DASHBOARD
         : op === 'list_agents' ? DASHBOARD.agents
-        : op === 'get_run' ? { run_id: 'r-1', agent: 'helper', status: 'completed', task: 'List the tools', output: 'tools/space-backup/' }
+        : op === 'get_run' ? { run_id: 'r-1', agent: 'helper', status: 'completed', task: 'List the tools', output: 'tools/space-backup/', trace: [['Repository', 'dev-workflow'], ['Recorded commit', 'a'.repeat(40)], ['Logs', 'Unavailable in this view; run output is shown separately']] }
         : op === 'review_decide' ? 'accepted m-1'
         : op === 'start_selected_run' ? { run_id: 'r-3', status: 'running' }
         : null
@@ -80,8 +80,12 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.press({ key: 'back' })
     await ui.press({ key: 'tab-runs' })
 
-    // a run's output
+    // a run's output and shared recorded context
     await ui.press({ key: 'run-r-1' })
+    expect(await ui.find({ text: 'Recorded run context' })).toBeDefined()
+    expect(await ui.find({ text: 'Repository: dev-workflow' })).toBeDefined()
+    expect(await ui.find({ text: `Recorded commit: ${'a'.repeat(40)}` })).toBeDefined()
+    expect(await ui.find({ text: 'Logs: Unavailable in this view; run output is shown separately' })).toBeDefined()
     expect(await ui.find({ text: 'tools/space-backup/' })).toBeDefined()
     await ui.press({ key: 'back' })
 

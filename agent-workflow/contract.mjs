@@ -13,7 +13,7 @@
 //               remain unchanged. Snapshot capabilities describe the published surface, never live relay authority.
 //   get_run     the run itself (local: the full receipt; hosted: its brief), plus `snapshot` on the hosted hub.
 
-export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v6.html';
+export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v7.html';
 /** Any earlier dashboard URI a host may still have cached; it is answered with the current page. */
 export const isDashboardUri = (uri) => typeof uri === 'string' && /^ui:\/\/agents(-hub)?\/dashboard(-v\d+)?\.html$/.test(uri);
 

@@ -106,7 +106,8 @@ async function openRun($: Engine, runId: string) {
     const tokens = r.usage?.total_tokens ?? r.usage?.totalTokens
     const meta = [r.runner ?? 'mac', String(r.model ?? '').split('/').pop(), took, r.tool_calls != null && `${r.tool_calls} tool calls`, tokens && `${tokens} tokens`]
       .filter(Boolean).join(' · ')
-    await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: String(r.task ?? r.title ?? ''), text: text.slice(0, 20000), meta }))
+    await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: String(r.task ?? r.title ?? ''), text: text.slice(0, 20000), meta,
+      trace: r.trace ?? [['Run context', 'Unavailable — update local operations to view recorded context']] }))
   } catch (err) {
     await fail($)(err)
   }
@@ -238,6 +239,10 @@ export const register: Register = on => {
           </Box>
           {shown.meta && <Text dimColor>{shown.meta}</Text>}
           <Markdown key="output" text={shown.text} />
+          <Box flexDirection="column">
+            <Text bold>Recorded run context</Text>
+            {(shown.trace ?? [['Run context', 'Unavailable — reopen this run to load recorded context']]).map(([label, value]) => <Text key={`trace-${label}`} wrap="wrap">{`${label}: ${value}`}</Text>)}
+          </Box>
           <Text dimColor>{shown.run_id}</Text>
         </Box>
       )

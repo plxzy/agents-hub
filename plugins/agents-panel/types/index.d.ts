@@ -16,7 +16,7 @@ export type Snapshot = {
   decisionMessage: string
   counts: { running: number; review: number }
 }
-export type Detail = { run_id: string; agent: string; status: string; runner?: string; task: string; text: string; meta: string }
+export type Detail = { run_id: string; agent: string; status: string; runner?: string; task: string; text: string; meta: string; trace: [string, string][] }
 export type Tab = 'runs' | 'review' | 'start' | 'agents'
 export type Form = { runner: 'mac' | 'dok'; agent: string; cwd: string }
 

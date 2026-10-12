@@ -6,6 +6,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import http from 'node:http';
 import { healthOf, healthLabels } from '../health.mjs';
+import { runTrace } from '../run-trace.mjs';
 import { bridgeScript, dashboardHtml } from './dashboard.mjs';
 import { createUiServer } from './server.mjs';
 
@@ -87,7 +88,7 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
   const html = dashboardHtml(), refreshed = [];
   const context = vm.createContext({
     S: { detail: { run_id: 'mac-run', agent: 'helper', status: 'unknown', error: 'Mac heartbeat expired' }, busy: new Set() },
-    canDecide: () => true, list: () => null, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
+    canDecide: () => true, list: () => null, runTrace, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
     h: (tag, attrs, ...children) => ({ tag, attrs, children }),
   });
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
@@ -97,6 +98,23 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
   assert.deepEqual(refreshed, ['mac-run']);
   context.S.detail.status = 'completed';
   assert.match(JSON.stringify(context.detailView()), /rate-why/);
+});
+
+test('run details render shared historical context as text and label absent fields', () => {
+  const html = dashboardHtml({ bridge: '' });
+  const receipt = { run_id: 'r-demo', agent: 'demo', repo: '<script>not executable</script>', commit: 'a'.repeat(40), status: 'failed', error: 'model turn failed' };
+  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace,
+    canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
+  const result = JSON.stringify(context.detailView());
+  for (const [label, value] of runTrace(receipt)) { assert.ok(result.includes(label)); assert.ok(result.includes(value)); }
+  assert.match(result, /Recorded run context/);
+  assert.doesNotMatch(result, /innerHTML/);
+  assert.ok(html.includes('globalThis.AgentsHealth = { healthOf, healthLabels, dashboardHealth, runTrace };'));
+  const bundled = vm.createContext({});
+  const module = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)].find((m) => m[1].includes('globalThis.AgentsHealth ='));
+  vm.runInContext(module[1], bundled);
+  assert.equal(JSON.stringify(bundled.AgentsHealth.runTrace(receipt)), JSON.stringify(runTrace(receipt)));
 });
 
 test('runner form defaults to dok, preserves the task, and clears incompatible fields', async () => {
