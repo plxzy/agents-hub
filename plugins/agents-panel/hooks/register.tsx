@@ -311,7 +311,7 @@ export const register: Register = on => {
         {chosen.here && <Text dimColor wrap="wrap">{`Works in this session's folder: ${sessionCwd}`}</Text>}
         <Input key="task" label="Task" placeholder="What should it do?" submitLabel="Start"
           onSubmit={(value: string) => void start($, { agent: chosen.name, cwd: chosen.here ? sessionCwd : '' }, value)} />
-        <Text dimColor>Runs in the background. Its receipt reaches the Hub when it finishes.</Text>
+        <Text dimColor>{snap.source === 'local' ? 'Runs in the background on this Mac.' : 'Shares running status and the final receipt with the Hub.'}</Text>
       </Box>
     )
 

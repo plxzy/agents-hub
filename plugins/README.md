@@ -40,8 +40,8 @@ It draws only: data comes from `agent call open_dashboard | get_run | list_agent
 (the operations catalog). On a linked Mac, `open_dashboard` reads `GET /relay/mac/panel` with the Mac's token;
 the hosted HTML panel uses the same Hub data. The Mac route never issues or returns one-time confirmation codes.
 If the Hub cannot be reached, the panel loads local data labelled `local (Hub unreachable)`. Cached Hub reviews
-remain read-only. Mac starts stay local and send their receipt when finished; an in-progress Mac run is not yet
-in the Hub counts. See `../agent-workflow/README.md` for the receipt evidence and read routes.
+remain read-only. Mac starts stay local, publish running status and a 15-second heartbeat, then replace that row with the final
+receipt. After 90 seconds without contact the Hub shows unknown and stops counting the run as active. See `../agent-workflow/README.md` for the receipt evidence and read routes.
 Claude Code only: Codex and ChatGPT panels need their own extension format, using the same operations.
 
 Check: `claude plugin validate plugins/agents-panel` and `claude plugin test plugins/agents-panel`.

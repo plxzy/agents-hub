@@ -10,7 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelGateway } from './model gateway.mjs';
 import { linuxPolicy } from './linux-sandbox.mjs';
-import { linkedHub, sendReceipt, flushOutbox, hubMemory, DECIDE_IN_HUB } from './hub.mjs';
+import { linkedHub, sendReceipt, flushOutbox, hubMemory, trackHubRun, DECIDE_IN_HUB } from './hub.mjs';
 
 export const ROOT = process.env.AGENT_HOME ?? path.join(os.homedir(), '.agents');
 export const STATE = process.env.AGENT_WORKFLOW_STATE ?? path.join(os.homedir(), '.local/state/agent-workflow');
@@ -391,14 +391,15 @@ export function writeRunningMarker(state, { run_id, agent, kind = 'task', task, 
   return marker;
 }
 
-export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd(), runId = newId('r') } = {}) {
+export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd(), runId = newId('r'), hubConfig, fetchImpl = fetch } = {}) {
   if (fs.existsSync(path.join(root, 'RELEASE.json'))) proposeMemory = false;
   const agent = remoteSandbox(resolveWorkspace(getAgent(name, root), cwd));
   assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
   if (process.platform === 'linux' && agent.writePaths && spawn === nodeSpawn) agent.linuxPolicy = linuxPolicy(agent, state);
   // Linked to the Hub (default home and state only): accepted notes come from there, local files are the offline fallback.
-  const hub = state === STATE && root === ROOT && linkedHub();
-  const fetched = useMemory && hub ? await hubMemory(agent.memory) : null;
+  const hub = hubConfig === undefined ? (state === STATE && root === ROOT && linkedHub()) : hubConfig;
+  const hubOptions = { config: hub, fetchImpl, state };
+  const fetched = useMemory && hub ? await hubMemory(agent.memory, hubOptions) : null;
   const memories = fetched ? fetched.items : useMemory ? loadMemory(agent.memory, root) : [];
   const runsDir = path.join(state, 'runs');
   // Eval and other non-task runs keep their own sessions, so `--continue` resumes real work only.
@@ -410,9 +411,11 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   const marker = path.join(runsDir, `${runId}.running`);
   const rawFile = path.join(runsDir, `${runId}.jsonl`);
 
-  const gateway = await modelGateway(agent);
-  let result;
+  const stopHeartbeat = await trackHubRun({ run_id: runId, agent: agent.name, kind, task, started, model: agent.model,
+    agent_version: agent.version }, hubOptions);
+  let result, gateway, launchError;
   try {
+    gateway = await modelGateway(agent);
     result = await new Promise((resolve, reject) => {
       const child = spawn(...piCommand(agent, piArgs(agent, { task, prompt, sessionDir, resume })), { cwd: agent.workspace, env: { ...agentEnv(agent, root), ...gateway.env }, stdio: ['ignore', 'pipe', 'pipe'] });
       const raw = fs.createWriteStream(rawFile, { mode: 0o600 });
@@ -427,14 +430,19 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
         for (const l of lines) if (l.trim()) { try { events.push(JSON.parse(l)); } catch { /* keep raw only */ } }
       });
       child.stderr.on('data', () => {});
-      child.on('error', (e) => { fs.rmSync(marker, { force: true }); reject(e); });
       const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
+      child.on('error', (e) => { clearTimeout(timer); raw.end(); reject(e); });
       child.on('close', (code) => { clearTimeout(timer); raw.end(); resolve({ events, exitCode: code, timedOut }); });
     });
-  } finally { await gateway.close(); }
+  } catch (e) { launchError = e; result = { events: [], exitCode: null, timedOut: false }; }
+  finally {
+    try { await gateway?.close(); } catch (e) { launchError ??= e; }
+    await stopHeartbeat();
+  }
   const { events, exitCode, timedOut } = result;
 
   const summary = summarize(events);
+  if (launchError) summary.error = launchError.message;
   const status = timedOut ? 'unknown' : exitCode === 0 && !summary.error ? 'completed' : 'failed';
   const proposals = status === 'completed' && proposeMemory ? extractRemember(summary.output, agent) : [];
   // Linked: proposals travel with the receipt and wait in the Hub panel; no local candidate file (that would fork the queue).
@@ -448,7 +456,8 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   };
   fs.writeFileSync(path.join(runsDir, `${runId}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
   fs.rmSync(marker, { force: true });
-  if (hub) { await flushOutbox({ state }); await sendReceipt(receipt, { state, proposals }); }
+  if (hub) { await flushOutbox(hubOptions); await sendReceipt(receipt, { ...hubOptions, proposals }); }
+  if (launchError) throw launchError;
   return receipt;
 }
 
@@ -464,6 +473,68 @@ export function chatArgs(agent, { prompt, sessionDir, resume }) {
     ...(agent.skills === 'none' ? ['--no-skills'] : (agent.skills ?? []).flatMap((d) => ['--skill', d])),
     '--append-system-prompt', prompt,
   ];
+}
+
+/** One interactive invocation has a stable running id, even before Pi has written a conversation file. */
+export async function runChat(name, { root = ROOT, state = STATE, resume = false, cwd = process.cwd(), spawn = nodeSpawn,
+  hubConfig, fetchImpl = fetch, log = console.log } = {}) {
+  const agent = resolveWorkspace(getAgent(name, root), cwd);
+  assertSandboxAllowed(agent, `agent chat ${name}${resume ? ' --continue' : ''}`);
+  if (process.platform === 'linux' && agent.writePaths && spawn === nodeSpawn) agent.linuxPolicy = linuxPolicy(agent, state);
+  const hub = hubConfig === undefined ? (state === STATE && root === ROOT && linkedHub()) : hubConfig;
+  const hubOptions = { config: hub, fetchImpl, state };
+  const fetched = hub ? await hubMemory(agent.memory, hubOptions) : null;
+  const memories = fetched ? fetched.items : loadMemory(agent.memory, root);
+  const sessionDir = sessionDirectory(agent, state), runsDir = path.join(state, 'runs');
+  fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+  const sessions = () => fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl'));
+  const before = new Map(sessions().map(f => [f, fs.statSync(path.join(sessionDir, f)).mtimeMs]));
+  log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
+  log('When you exit, this chat is saved as a run you can rate and the coach can learn from.\n');
+  const marker = writeRunningMarker(state, { run_id: newId('c'), agent: agent.name, kind: 'chat',
+    task: `Interactive chat with ${agent.name}`, workspace: agent.workspace, pid: process.pid });
+  const stopHeartbeat = await trackHubRun({ ...marker, model: agent.model, agent_version: agent.version }, hubOptions);
+  let gateway, launchError, exitCode;
+  try {
+    gateway = await modelGateway(agent);
+    const child = spawn(...piCommand(agent, chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume })),
+      { cwd: agent.workspace, env: { ...agentEnv(agent, root), ...gateway.env }, stdio: 'inherit' });
+    exitCode = await new Promise((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });
+  } catch (e) { launchError = e; }
+  finally {
+    try { await gateway?.close(); } catch (e) { launchError ??= e; }
+    await stopHeartbeat();
+  }
+  const receipts = sessions().flatMap(f => {
+    const file = path.join(sessionDir, f);
+    if (before.get(f) === fs.statSync(file).mtimeMs) return [];
+    const r = receiptFromSession(fs.readFileSync(file, 'utf8'), { agent, memories, file });
+    return r ? [r] : [];
+  });
+  if (!receipts.length) receipts.push({ ...marker, ...summarize([]), memory_supplied: memories.map(m => m.meta.id),
+    memory_proposed: [], turns: 0, status: 'interrupted', error: 'Chat closed without a saved conversation.' });
+  // Replace the live row, including when an empty chat closes. Additional Pi sessions keep distinct receipts.
+  receipts[0].run_id = marker.run_id;
+  receipts[0].started = marker.started;
+  for (const receipt of receipts) {
+    receipt.ended ??= new Date().toISOString();
+    if (launchError || exitCode !== 0) {
+      receipt.status = 'failed'; receipt.error = launchError?.message ?? `Chat process exited with code ${exitCode}`;
+    }
+    const proposals = receipt.status === 'completed' && !fs.existsSync(path.join(root, 'RELEASE.json'))
+      ? extractRemember(receipt.all_text, agent) : [];
+    receipt.memory_proposed = hub ? proposals.map(() => 'hub')
+      : proposals.length ? saveCandidates(proposals, { agent, runId: receipt.run_id, root }) : [];
+    if (hub) { receipt.memory_source = fetched ? 'hub' : 'local-fallback'; if (fetched) receipt.memory_hash = fetched.hash; }
+    delete receipt.all_text;
+    fs.writeFileSync(path.join(runsDir, `${receipt.run_id}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
+    if (hub) await sendReceipt(receipt, { ...hubOptions, proposals });
+    log(`\nsaved chat as ${receipt.run_id} (${receipt.turns} message(s), $${receipt.usage.cost.toFixed(4)}). ${hub ? 'Rate it in the Agents Hub panel.' : 'Rate it: agent feedback last good|bad "why"'}`);
+  }
+  fs.rmSync(path.join(runsDir, `${marker.run_id}.running`), { force: true });
+  if (hub) await flushOutbox(hubOptions);
+  if (launchError) throw launchError;
+  return receipts;
 }
 
 /** Builds a run receipt from a Pi session file written by `agent chat`, so chats can be rated and reflected on. */
@@ -574,37 +645,7 @@ async function main(argv) {
     const resume = args.includes('--continue');
     const name = args.find((a) => a !== '--continue');
     if (!name) throw new Error(USAGE);
-    const agent = resolveWorkspace(getAgent(name));
-    assertSandboxAllowed(agent, `agent chat ${name}${resume ? ' --continue' : ''}`);
-    if (process.platform === 'linux' && agent.writePaths) agent.linuxPolicy = linuxPolicy(agent, STATE);
-    const hubOn = linkedHub(), fetchedChat = hubOn ? await hubMemory(agent.memory) : null;
-    const memories = fetchedChat ? fetchedChat.items : loadMemory(agent.memory);
-    const sessionDir = sessionDirectory(agent);
-    fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
-    console.log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
-    console.log('When you exit, this chat is saved as a run you can rate (agent feedback last good|bad) and the coach can learn from.\n');
-    const startedAt = Date.now() - 1000;
-    const gateway = await modelGateway(agent);
-    try {
-      const child = nodeSpawn(...piCommand(agent, chatArgs(agent, { prompt: buildSystemPrompt(agent, memories), sessionDir, resume })), { cwd: agent.workspace, env: { ...agentEnv(agent), ...gateway.env }, stdio: 'inherit' });
-      await new Promise((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });
-    } finally { await gateway.close(); }
-    const runsDir = path.join(STATE, 'runs');
-    fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
-    for (const f of fs.readdirSync(sessionDir).filter((x) => x.endsWith('.jsonl'))) {
-      const file = path.join(sessionDir, f);
-      if (fs.statSync(file).mtimeMs < startedAt) continue;
-      const receipt = receiptFromSession(fs.readFileSync(file, 'utf8'), { agent, memories, file });
-      if (!receipt) continue;
-      const chatProposals = fs.existsSync(path.join(ROOT, 'RELEASE.json')) ? [] : extractRemember(receipt.all_text, agent);
-      receipt.memory_proposed = hubOn ? chatProposals.map(() => 'hub')
-        : chatProposals.length ? saveCandidates(chatProposals, { agent, runId: receipt.run_id }) : [];
-      if (hubOn) { receipt.memory_source = fetchedChat ? 'hub' : 'local-fallback'; if (fetchedChat) receipt.memory_hash = fetchedChat.hash; }
-      delete receipt.all_text;
-      fs.writeFileSync(path.join(runsDir, `${receipt.run_id}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
-      if (hubOn) { await flushOutbox({ state: STATE }); await sendReceipt(receipt, { state: STATE, proposals: chatProposals }); }
-      console.log(`\nsaved chat as ${receipt.run_id} (${receipt.turns} message(s), $${receipt.usage.cost.toFixed(4)})${receipt.memory_proposed.length ? `, ${receipt.memory_proposed.length} memory proposal(s)` : ''}. ${hubOn ? 'Rate it in the Agents Hub panel.' : 'Rate it: agent feedback last good|bad "why"'}`);
-    }
+    await runChat(name, { resume });
   } else if (cmd === 'runs') {
     for (const r of listRuns().slice(-(Number(args[0]) || 10))) {
       const fb = r.feedback ? ` [${r.feedback.rating}]` : '';

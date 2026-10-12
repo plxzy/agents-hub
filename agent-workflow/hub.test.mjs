@@ -3,11 +3,35 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hubConfig, hubReceipt, sendReceipt, flushOutbox, hubMemory, refreshHubCache, cachedPending, hubPanel, hubRun } from './hub.mjs';
+import { hubConfig, hubReceipt, sendReceipt, flushOutbox, hubMemory, refreshHubCache, cachedPending, hubPanel, hubRun, trackHubRun } from './hub.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hub-'));
 const config = { endpoint: 'https://hub.example', token: 't'.repeat(32) };
 const reply = (status, body) => ({ ok: status < 300, status, json: async () => body });
+
+test('live receipts retry without an outbox and stop drains the heartbeat before final publication', async () => {
+  const calls = [], timers = [];
+  let finish, count = 0, canceled;
+  const stop = await trackHubRun({ run_id: 'r-20261013T000000Z-abcdef', agent: 'helper', started: '2026-10-13T00:00:00Z',
+    workspace: '/private', pid: 123 }, { config,
+    schedule: fn => { timers.push(fn); return timers.length; }, cancel: id => { canceled = id; },
+    fetchImpl: async (_url, init) => {
+      calls.push(JSON.parse(init.body));
+      if (++count === 1) throw new Error('offline');
+      return new Promise(resolve => { finish = () => resolve(reply(200, {})); });
+    } });
+  assert.equal(calls[0].status, 'running'); assert.equal(calls[0].workspace, undefined); assert.equal(calls[0].pid, undefined);
+  assert.equal(timers.length, 1);
+  timers[0]();
+  let stopped = false;
+  const draining = stop().then(() => { stopped = true; });
+  await Promise.resolve(); assert.equal(stopped, false);
+  finish(); await draining;
+  assert.equal(stopped, true); assert.equal(canceled, 1); assert.equal(timers.length, 1);
+  assert.equal(calls.length, 2);
+  const unlinked = await trackHubRun({}, { config: null, fetchImpl: () => assert.fail('unlinked') });
+  await unlinked();
+});
 
 test('panel and run reads use the Mac routes, bounded requests, and no write body', async () => {
   const panel = { status: { agents: 1 }, agents: [{ name: 'helper' }], runs: [], pending: [] };

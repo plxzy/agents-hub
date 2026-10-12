@@ -92,7 +92,7 @@ async function nativePanel(env, { withConfirm = false } = {}) {
   const notes = await pendingMemory(env);
   // Only the authenticated Hub widget requests codes. Mac reads do not even issue them.
   const confirm = withConfirm ? {
-    rate: await issueCodes(env, 'rate', hubRuns.filter((r) => r.status !== 'running').map((r) => r.run_id)),
+    rate: await issueCodes(env, 'rate', hubRuns.filter((r) => ['completed', 'failed', 'interrupted'].includes(r.status)).map((r) => r.run_id)),
     review: await issueCodes(env, 'review', notes.map((n) => n.id)),
   } : null;
   const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];

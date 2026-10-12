@@ -112,6 +112,7 @@ test('Start reads local agents even when the Hub lists different agents', async 
   await ui.press({ key: 'tab-start' })
   expect(calls).toContain('list_agents')
   expect(await ui.find({ text: 'Runs on this Mac' })).toBeDefined()
+  expect(await ui.find({ text: 'Shares running status and the final receipt with the Hub.' })).toBeDefined()
   expect(await ui.find({ text: 'Local agent' })).toBeDefined()
   expect(await ui.find({ text: 'Remote agent' })).toBeUndefined()
 })

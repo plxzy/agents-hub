@@ -81,3 +81,19 @@ test('Hub running receipts poll quickly and detail reads work with dok offline',
   context.scheduleRefresh();
   assert.equal(delays.pop(), 30000);
 });
+
+test('unknown Mac details refresh after contact returns and cannot be rated', () => {
+  const html = dashboardHtml(), refreshed = [];
+  const context = vm.createContext({
+    S: { detail: { run_id: 'mac-run', agent: 'helper', status: 'unknown', error: 'Mac heartbeat expired' }, busy: new Set() },
+    canDecide: () => true, list: () => null, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
+    h: (tag, attrs, ...children) => ({ tag, attrs, children }),
+  });
+  vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
+  vm.runInContext(html.match(/function setData\(data\) \{[\s\S]*?\n\}/)[0], context);
+  assert.doesNotMatch(JSON.stringify(context.detailView()), /rate-why/);
+  context.setData({ runs: [] });
+  assert.deepEqual(refreshed, ['mac-run']);
+  context.S.detail.status = 'completed';
+  assert.match(JSON.stringify(context.detailView()), /rate-why/);
+});

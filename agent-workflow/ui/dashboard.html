@@ -188,7 +188,7 @@ async function act(key, fn) {
 
 function setData(data) {
   S.data = data;
-  if (S.detail?.status === 'running') loadDetail(S.detail.run_id);
+  if (['running', 'unknown'].includes(S.detail?.status)) loadDetail(S.detail.run_id);
   scheduleRefresh();
   render({ passive: true });
 }
@@ -295,7 +295,7 @@ function detailView() {
   const r = S.detail;
   const back = h('button', { class: 'back', onclick: () => { S.detail = null; render(); } }, '← All runs');
   if (!r.agent) return h('div', {}, back, h('div', { class: 'empty' }, 'Loading…'));
-  const rateable = canDecide() && r.status !== 'running' && ['task', 'chat'].includes(r.kind ?? 'task');
+  const rateable = canDecide() && ['completed', 'failed', 'interrupted'].includes(r.status) && ['task', 'chat'].includes(r.kind ?? 'task');
   const rate = (rating) => act(`rate-${r.run_id}`, async () => {
     const comment = document.getElementById('rate-why')?.value || undefined;
     await call('rate_run', { run_id: r.run_id, rating, comment, ...(S.data?.relay ? { confirm: S.confirm?.rate?.[r.run_id] } : {}) });

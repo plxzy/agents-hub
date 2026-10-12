@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
   agentEnv, assertSandboxAllowed, commitHome, piCommand, acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
-  loadMemory, parseFrontmatter, formatFrontmatter, formatCandidateList, piArgs, rejectCandidate, runAgent, formatAgentListEntry, resolveWorkspace, sessionDirectory, sandboxProfile,
+  loadMemory, parseFrontmatter, formatFrontmatter, formatCandidateList, piArgs, rejectCandidate, runAgent, runChat, formatAgentListEntry, resolveWorkspace, sessionDirectory, sandboxProfile,
 } from './agent.mjs';
 
 function fixture() {
@@ -138,6 +138,66 @@ test('run records a receipt, proposes candidates, and review controls what later
   const r2 = await runAgent('demo', 'q2', { root, state, spawn: fakeSpawn(reply('again'), calls) });
   assert.deepEqual(r2.memory_supplied, [cand.meta.id]);
   assert.match(calls[1].args[calls[1].args.indexOf('--append-system-prompt') + 1], /The sky is blue/);
+});
+
+test('linked task publishes running before spawn, then the same id as completed or failed', async (t) => {
+  const { root, state } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const posted = [], hubConfig = { endpoint: 'https://hub.example', token: 'test-only' };
+  const fetchImpl = async (_url, init) => { posted.push(JSON.parse(init.body)); return { ok: true, json: async () => ({}) }; };
+  const inner = fakeSpawn(reply('done'), []);
+  const result = await runAgent('demo', 'live test', { root, state, hubConfig, fetchImpl, useMemory: false,
+    spawn: (...args) => { assert.equal(posted.at(-1).status, 'running'); return inner(...args); } });
+  assert.deepEqual(posted.map(r => r.status), ['running', 'completed']);
+  assert.equal(posted[0].run_id, result.run_id); assert.equal(posted[1].run_id, result.run_id);
+  assert.equal(posted[0].started, posted[1].started);
+  posted.length = 0;
+  await assert.rejects(runAgent('demo', 'spawn error', { root, state, hubConfig, fetchImpl, useMemory: false,
+    spawn: () => { throw new Error('spawn refused'); } }), /spawn refused/);
+  assert.deepEqual(posted.map(r => r.status), ['running', 'failed']);
+  assert.match(posted[1].error, /spawn refused/);
+  assert.equal(fs.existsSync(path.join(state, 'runs', `${posted[0].run_id}.running`)), false);
+});
+
+test('offline task queues only its terminal receipt', async (t) => {
+  const { root, state } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const r = await runAgent('demo', 'offline', { root, state, useMemory: false,
+    hubConfig: { endpoint: 'https://hub.example', token: 'test-only' }, fetchImpl: async () => { throw new Error('offline'); },
+    spawn: fakeSpawn(reply('done'), []) });
+  const queued = JSON.parse(fs.readFileSync(path.join(state, 'hub-outbox', `${r.run_id}.json`), 'utf8'));
+  assert.equal(queued.status, 'completed');
+  assert.deepEqual(fs.readdirSync(path.join(state, 'hub-outbox')), [`${r.run_id}.json`]);
+});
+
+test('interactive chats replace their live row, including empty exits and spawn failures', async (t) => {
+  const { root, state } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const hubConfig = { endpoint: 'https://hub.example', token: 'test-only' }, posted = [];
+  const fetchImpl = async (url, init) => {
+    if (init.body) posted.push(JSON.parse(init.body));
+    return { ok: true, json: async () => url.includes('bundle') ? { memory: [], hash: 'test' } : {} };
+  };
+  const spawnChat = (write) => (_cmd, args) => {
+    assert.equal(posted.at(-1).status, 'running');
+    const child = new EventEmitter();
+    setImmediate(() => {
+      if (write) fs.writeFileSync(path.join(args[args.indexOf('--session-dir') + 1], 'session.jsonl'), [
+        { type: 'message', message: { role: 'user', content: 'hello', timestamp: Date.now() } },
+        { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], timestamp: Date.now() } },
+      ].map(x => JSON.stringify(x)).join('\n'));
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const opts = { root, state, hubConfig, fetchImpl, log() {} };
+  for (const [write, status] of [[true, 'completed'], [false, 'interrupted']]) {
+    posted.length = 0;
+    const [receipt] = await runChat('demo', { ...opts, spawn: spawnChat(write) });
+    assert.deepEqual(posted.map(r => r.status), ['running', status]);
+    assert.equal(posted[0].run_id, receipt.run_id); assert.equal(posted[1].run_id, receipt.run_id);
+    assert.equal(fs.existsSync(path.join(state, 'runs', `${receipt.run_id}.running`)), false);
+  }
+  posted.length = 0;
+  await assert.rejects(runChat('demo', { ...opts, spawn: () => { throw new Error('chat spawn refused'); } }), /chat spawn refused/);
+  assert.deepEqual(posted.map(r => r.status), ['running', 'failed']);
 });
 
 test('superseded and rejected items are not supplied', async () => {

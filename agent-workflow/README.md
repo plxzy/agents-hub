@@ -183,13 +183,29 @@ native `<details>`; the retired publisher's freshness is no longer displayed.
 
 **VERIFIED EVIDENCE:** the Mac was linked, with no queued outbox receipts; the Hub contained 98 Mac receipts,
 including local run `r-20261012T195223Z-45035e` (completed and posted on 2026-10-12).
-`runAgent` and interactive chat call `sendReceipt` after completion. **LIMITATION:** in-progress Mac markers
-stay local until that final receipt; the Hub view cannot show them yet. No second merge path was added.
+At that checkpoint only final receipts reached the Hub; the live-publication change below supersedes that limitation.
 Evidence and verification results: `../evidence/2026-10-12-dashboard-unification/`.
+
+## Mac running status (2026-10-13)
+
+Linked `agent run` and `agent chat` publish a running receipt through the existing `POST /relay/mac/runs`
+route before launching Pi, then heartbeat every 15 seconds after the previous request settles (3-second
+request timeout). Both dashboards read that same Hub row. Starts still run locally on this Mac.
+On exit, publication stops and drains before the final receipt replaces the running row with the same ID.
+Startup failures also publish a failed receipt; an empty interactive chat closes as interrupted.
+
+The Hub uses its own receipt observation time. After 90 seconds without a Mac heartbeat it shows
+**unknown**, explains that contact expired, and excludes the run from the running count. This is not
+proof of completion or failure. A new heartbeat restores running; a terminal receipt cannot be replaced
+by a late heartbeat. Unknown runs have no rating controls or newly issued rating codes.
+
+Running observations are never queued for replay. If the Hub is unreachable, work continues locally;
+only the final receipt enters the existing outbox for the next run or `agent sync`. The dashboard retains
+its explicit local fallback. No new service, endpoint or dashboard merge path is required.
 
 ## Not here yet
 
-Memory retrieval once notes outgrow the prompt, a writer/reviewer pair, Mac in-progress receipts in the Hub,
+Memory retrieval once notes outgrow the prompt, a writer/reviewer pair,
 and choosing a runner from the Claude panel. Memory/reviews and ratings already live in the Hub.
 
 ## Guards (enforced, not instructed)

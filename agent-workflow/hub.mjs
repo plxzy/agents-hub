@@ -59,6 +59,27 @@ export function hubReceipt(receipt, proposals = []) {
 
 const outbox = (state) => path.join(state, 'hub-outbox');
 
+/** Running receipts are live observations, never queued for replay. Stop and drain before sending the final receipt. */
+export async function trackHubRun(receipt, { config = hubConfig(), fetchImpl = fetch, intervalMs = 15000,
+  schedule = setTimeout, cancel = clearTimeout } = {}) {
+  if (!config) return async () => {};
+  const body = hubReceipt({ ...receipt, status: 'running' });
+  let stopped = false, timer, inFlight;
+  const publish = async () => {
+    try { await hubCall('runs', { method: 'POST', body, config, fetchImpl, timeoutMs: 3000 }); }
+    catch { /* A later heartbeat retries; stale running observations must never enter the outbox. */ }
+    finally {
+      if (!stopped) {
+        timer = schedule(() => { inFlight = publish(); }, intervalMs);
+        timer?.unref?.();
+      }
+    }
+  };
+  inFlight = publish();
+  await inFlight;
+  return async () => { stopped = true; cancel(timer); await inFlight; };
+}
+
 /** Posts one receipt; if the Hub is unreachable it waits in the outbox and goes out with the next run or `agent sync`. */
 export async function sendReceipt(receipt, { state, proposals = [], config = hubConfig(), fetchImpl = fetch } = {}) {
   if (!config) return 'unlinked';

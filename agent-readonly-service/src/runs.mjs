@@ -8,6 +8,7 @@ import { proposeMemory } from './memory.mjs';
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 const STATUS = ['running', 'completed', 'failed', 'interrupted'];
 const KEEP = 1000;
+export const MAC_HEARTBEAT_TTL_MS = 90000;
 const iso = (v) => typeof v === 'string' && v.length <= 40 && !Number.isNaN(Date.parse(v)) ? v : undefined;
 const num = (v) => Number.isFinite(v) && v >= 0 ? v : undefined;
 const short = (v, max) => typeof v === 'string' && v.length <= max ? v : undefined;
@@ -64,11 +65,21 @@ export async function storeRun(env, receipt, runner) {
   return r;
 }
 
+/** Missing contact is unknown, not proof of failure. Keep stored state running so a heartbeat can recover it. */
+export function observedRun(row, now = Date.now()) {
+  const receipt = JSON.parse(row.receipt);
+  if (receipt.runner !== 'mac' || receipt.status !== 'running') return receipt;
+  const seen = Date.parse(row.updated_at), age = now - seen;
+  return { ...receipt, last_seen_at: row.updated_at,
+    ...(!Number.isFinite(age) || age < 0 || age >= MAC_HEARTBEAT_TTL_MS
+      ? { status: 'unknown', error: 'Mac heartbeat expired; the run may still be active. Waiting for contact or a final receipt.' } : {}) };
+}
+
 export async function readRun(env, runId) {
   if (!env.DB || !RUN_ID.test(runId ?? '')) return null;
-  const row = await env.DB.prepare('SELECT receipt FROM runs WHERE run_id = ?').bind(runId).first();
+  const row = await env.DB.prepare('SELECT receipt, updated_at FROM runs WHERE run_id = ?').bind(runId).first();
   if (!row) return null;
-  const receipt = JSON.parse(row.receipt), rating = (await ratingsFor(env, [runId])).get(runId);
+  const receipt = observedRun(row), rating = (await ratingsFor(env, [runId])).get(runId);
   return rating ? { ...receipt, feedback: rating } : receipt;
 }
 
@@ -77,10 +88,10 @@ export async function recentRuns(env, { agent, limit = 50 } = {}) {
   if (!env.DB) return [];
   try {
     const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
-    const stmt = agent ? env.DB.prepare('SELECT receipt FROM runs WHERE agent = ? ORDER BY started DESC LIMIT ?').bind(agent, n)
-      : env.DB.prepare('SELECT receipt FROM runs ORDER BY started DESC LIMIT ?').bind(n);
+    const stmt = agent ? env.DB.prepare('SELECT receipt, updated_at FROM runs WHERE agent = ? ORDER BY started DESC LIMIT ?').bind(agent, n)
+      : env.DB.prepare('SELECT receipt, updated_at FROM runs ORDER BY started DESC LIMIT ?').bind(n);
     const { results } = await stmt.all();
-    const receipts = results.map((x) => JSON.parse(x.receipt)).reverse(), ratings = await ratingsFor(env, receipts.map((r) => r.run_id));
+    const receipts = results.map((x) => observedRun(x)).reverse(), ratings = await ratingsFor(env, receipts.map((r) => r.run_id));
     return receipts.map((r) => ({ ...runBrief({ ...r, feedback: ratings.get(r.run_id) }), runner: r.runner }));
   } catch { return []; } // table missing before migration: behave as before
 }

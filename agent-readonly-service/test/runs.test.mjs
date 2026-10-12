@@ -4,10 +4,24 @@ import fs from 'node:fs';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { build } from 'esbuild';
 import { encode, PONG } from '../../agent-workflow/relay-wire.mjs';
-import { sanitizeReceipt } from '../src/runs.mjs';
+import { sanitizeReceipt, observedRun, MAC_HEARTBEAT_TTL_MS } from '../src/runs.mjs';
 
 const DOK = 'dok-test-only';
 const RUN = 'r-20261012T120000Z-abcdef';
+
+test('Mac liveness uses the Hub observation time and never invents completion', () => {
+  const now = Date.parse('2026-10-13T00:00:00Z');
+  const row = { receipt: JSON.stringify({ run_id: RUN, runner: 'mac', status: 'running' }), updated_at: new Date(now).toISOString() };
+  assert.equal(observedRun(row, now).status, 'running');
+  const stale = observedRun(row, now + MAC_HEARTBEAT_TTL_MS);
+  assert.equal(stale.status, 'unknown'); assert.equal(stale.ended, undefined); assert.match(stale.error, /may still be active/);
+  assert.equal(JSON.parse(row.receipt).status, 'running', 'projection leaves stored state recoverable');
+  assert.equal(observedRun({ ...row, updated_at: 'bad' }, now).status, 'unknown');
+  assert.equal(observedRun(row, now - 1).status, 'unknown');
+  for (const receipt of [{ runner: 'dok', status: 'running' }, { runner: 'mac', status: 'completed' }]) {
+    assert.equal(observedRun({ ...row, receipt: JSON.stringify(receipt) }, now + MAC_HEARTBEAT_TTL_MS).status, receipt.status);
+  }
+});
 
 test('receipts keep useful fields, drop unknown ones and redact secret-looking lines', () => {
   const r = sanitizeReceipt({ run_id: RUN, agent: 'helper', status: 'completed', started: '2026-10-12T12:00:00.000Z', task: 'Where?\nmore',
@@ -140,6 +154,29 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
     assert.equal((await mac('runs/missing')).status, 404);
   });
   const decide = (args) => tool('review_decide', { id: noteId, decision: 'accept', request_id: 'review-request-1', ...args });
+  await t.test('Mac running rows expire to unknown, recover on heartbeat, and keep their final receipt', async () => {
+    const id = 'r-20261013T000000Z-aabbcc';
+    const live = { run_id: id, agent: 'helper', status: 'running', task: 'Mac liveness', started: new Date().toISOString() };
+    const postMac = receipt => mac('runs', { method: 'POST', body: JSON.stringify(receipt) });
+    const viewMac = async () => (await (await mac('panel')).json());
+    assert.equal((await postMac(live)).status, 200);
+    assert.equal((await viewMac()).status.running, 1);
+    assert.equal((await (await mac(`runs/${id}`)).json()).status, 'running');
+    await db.prepare('UPDATE runs SET updated_at = ? WHERE run_id = ?').bind('2000-01-01T00:00:00Z', id).run();
+    const stale = await viewMac();
+    assert.equal(stale.runs.find(r => r.run_id === id).status, 'unknown'); assert.equal(stale.status.running, 0);
+    const detail = await (await mac(`runs/${id}`)).json();
+    assert.equal(detail.status, 'unknown'); assert.match(detail.error, /heartbeat expired/);
+    assert.equal((await db.prepare('SELECT status FROM runs WHERE run_id = ?').bind(id).first()).status, 'running');
+    const hosted = await tool('panel_data');
+    assert.equal(hosted._meta['agents-hub/confirm'].rate[id], undefined, 'unknown does not authorize rating');
+    assert.equal((await postMac(live)).status, 200);
+    assert.equal((await viewMac()).status.running, 1, 'contact restores liveness');
+    assert.equal((await postMac({ ...live, status: 'completed', ended: new Date().toISOString(), output: 'done' })).status, 200);
+    await postMac(live);
+    assert.equal((await (await mac(`runs/${id}`)).json()).status, 'completed', 'late heartbeat cannot reopen a finished run');
+    assert.equal((await viewMac()).status.running, 0);
+  });
   assert.match((await decide({ confirm: 'z'.repeat(24) })).content[0].text, /needs a click/);
   assert.match((await decide({ confirm: review[noteId] })).content[0].text, /accepted/);
   assert.match((await decide({ confirm: review[noteId] })).content[0].text, /needs a click/);
