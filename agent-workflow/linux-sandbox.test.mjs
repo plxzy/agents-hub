@@ -17,6 +17,15 @@ test('sandbox mount policy rejects writable tool/runtime roots', () => {
   assert.ok(!args.includes('--share-net'));
 });
 
+test('read-only runs mount the workspace read-only and refuse write tools', () => {
+  const p = { workspace: '/home/project', release: '/home/release', runtime: '/home/runtime', sdk: '/home/runtime/index.js', protected: [], readonly_workspace: true };
+  const args = sandboxArgs(p), at = args.indexOf('/home/project');
+  assert.equal(args[at - 1], '--ro-bind');
+  assert.ok(!args.some((a, i) => a === '--bind' && args[i + 1] === '/home/project'));
+  assert.throws(() => sandboxExecute(p, 'write', { path: 'x', content: 'y' }), /Read-only run/);
+  assert.throws(() => sandboxExecute(p, 'edit', { path: 'x', edits: [] }), /Read-only run/);
+});
+
 test('real Linux tools isolate secrets, protect files, support loopback and kill detached descendants',
   { skip: process.platform !== 'linux' || process.env.AGENT_TEST_LINUX !== '1', timeout: 45000 }, async () => {
   const base = fs.mkdtempSync(path.join(os.homedir(), '.local/state/linux-acceptance-'));

@@ -96,7 +96,9 @@ for (const relay of [false, true]) test(`empty snapshot store supports authentic
   assert.equal(status.agents, null); assert.equal(opened.status.running, null);
   assert.equal(opened.health.snapshot.state, 'unavailable'); assert.equal(opened.capabilities.run, false);
   assert.equal(opened.health.relay.state, relay ? 'connected' : 'unknown');
-  for (const name of ['list_agents', 'list_runs', 'get_run', 'resolve_context']) {
+  // Hub run receipts (D1) do not depend on a snapshot.
+  assert.deepEqual(JSON.parse((await f.callTool('list_runs')).content[0].text).runs, []);
+  for (const name of ['list_agents', 'get_run', 'resolve_context']) {
     const response = await f.send('tools/call', { name, arguments: {} });
     assert.equal(response.status, 503); assert.equal((await response.json()).reason, 'no_snapshot');
   }

@@ -5,10 +5,11 @@ import os from 'node:os';
 import { spawn, execFileSync } from 'node:child_process';
 import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { getAgent, loadMemory, buildSystemPrompt } from './agent.mjs';
+import { getAgent, loadAgents, loadMemory, buildSystemPrompt, newId } from './agent.mjs';
 import { linuxPolicy, sandboxExecute } from './linux-sandbox.mjs';
 import { DEVELOPMENT, digest } from './dev-grants.mjs';
-import { DEVELOPMENT_RUNTIME, runtimeMatches } from './dev-runtime.mjs';
+import { DEVELOPMENT_RUNTIME, runtimeMatches, agentRuntime } from './dev-runtime.mjs';
+import { titleOf } from './contract.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
@@ -26,21 +27,30 @@ const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const safeOutput = text => /(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|Bearer\s+\S+|-----BEGIN.*PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}\.)/.test(text)
   ? '[redacted: output resembled a credential]' : text.slice(0, 48000);
 
+const READ_ONLY = ['read', 'grep', 'find', 'ls'];
+export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
+
 export class DevelopmentSessions {
-  constructor({ state, repository, knowledge, context, revision, processSession = randomUUID(), lease, limits = {} }) {
+  constructor({ state, repository, knowledge, context, revision, processSession = randomUUID(), lease, report, limits = {} }) {
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
     this.context = context ? fs.realpathSync(context) : null;
-    this.revision = revision; this.processSession = processSession; this.lease = lease;
+    this.revision = revision; this.processSession = processSession; this.lease = lease; this.reporter = report;
     const knowledgeManifest = read(path.join(this.knowledge, 'RELEASE.json'));
     for (const [name, expected] of Object.entries(knowledgeManifest.files)) {
       const file = fs.realpathSync(path.join(this.knowledge, name));
       if (!file.startsWith(this.knowledge + path.sep) || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected) throw new Error('Reviewed knowledge integrity check failed');
     }
-    this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, ...limits };
+    this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 1, runMs: 15 * 60000, ...limits };
     this.active = null;
+    this.runs = new Map();
     fs.mkdirSync(this.state, { recursive: true, mode: 0o700 });
-    for (const name of ['conversations', 'runs', 'requests', 'quarantine']) fs.mkdirSync(path.join(this.state, name), { mode: 0o700, recursive: true });
+    for (const name of ['conversations', 'runs', 'requests', 'quarantine', 'agent-runs', 'agent-requests', 'run-work']) fs.mkdirSync(path.join(this.state, name), { mode: 0o700, recursive: true });
+    for (const name of fs.readdirSync(path.join(this.state, 'agent-runs'))) {
+      const file = path.join(this.state, 'agent-runs', name), r = read(file);
+      if (r.status === 'running') save(file, { ...r, status: 'interrupted', ended: new Date().toISOString(), error: 'Runner restarted during the run' });
+    }
+    for (const name of fs.readdirSync(path.join(this.state, 'run-work'))) fs.rmSync(path.join(this.state, 'run-work', name, 'workspace'), { recursive: true, force: true });
     for (const name of fs.readdirSync(path.join(this.state, 'runs'))) {
       const file = path.join(this.state, 'runs', name), r = read(file);
       if (r.status === 'running') save(file, { ...r, status: 'interrupted', stopped_at: Date.now(), error: 'Supervisor restarted; new grant required' });
@@ -195,7 +205,132 @@ export class DevelopmentSessions {
       return receipt;
     } catch (e) { this.active = null; throw e; }
   }
-  stop() { this.active?.stop?.('Operator stopped supervisor'); }
+  stop() {
+    this.active?.stop?.('Operator stopped supervisor');
+    for (const run of this.runs.values()) run.stop?.('Runner stopped');
+  }
+
+  // ---------- one-shot agent runs (read-only agents on a fresh clone; no grant needed) ----------
+  project() { return path.basename(this.repository).replace(/\.git$/, ''); }
+  runnable() {
+    return loadAgents(this.knowledge).filter(a => a.tools.length && a.tools.every(t => READ_ONLY.includes(t))
+      && a.workspace !== 'here' && path.basename(a.workspace) === this.project());
+  }
+  runGet(runId) {
+    if (!RUN_ID.test(runId ?? '')) throw new Error('Invalid run');
+    const file = path.join(this.state, 'agent-runs', runId + '.json');
+    if (!fs.existsSync(file)) throw new Error('Unknown run');
+    const { reported_at, ...receipt } = read(file);
+    return receipt;
+  }
+  async runStart({ request_id, agent: name, task }) {
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(request_id ?? '') || typeof task !== 'string' || !task.trim() || task.length > 16000) throw new Error('Invalid task');
+    const fingerprint = hash({ agent: name, task });
+    const requestFile = path.join(this.state, 'agent-requests', request_id + '.json');
+    if (fs.existsSync(requestFile)) {
+      const old = read(requestFile);
+      if (old.fingerprint !== fingerprint) throw new Error('Request identity conflict');
+      return this.runGet(old.run_id);
+    }
+    const agent = this.runnable().find(a => a.name === name);
+    if (!agent) throw new Error('Agent is not runnable on dok');
+    if (this.runs.size >= this.limits.runs) throw new Error('dok runner is busy; retry when idle');
+    this.room();
+    const runtime = agentRuntime(agent), run_id = newId('r');
+    const receipt = { run_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
+      started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version };
+    save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
+    save(requestFile, { fingerprint, run_id });
+    this.runs.set(run_id, {});
+    void this.report(run_id);
+    // Clone and execution continue after the start acknowledgement; the transport attempt is short.
+    void this.executeRun(agent, runtime, receipt).catch(() => {});
+    return receipt;
+  }
+  async executeRun(agent, runtime, receipt) {
+    const base = path.join(this.state, 'run-work', receipt.run_id), workspace = path.join(base, 'workspace');
+    const file = path.join(this.state, 'agent-runs', receipt.run_id + '.json');
+    const entry = this.runs.get(receipt.run_id);
+    let failure, output = '', bytes = 0, observed, commit, killTimer, timeout;
+    const finish = async (code, result = {}) => {
+      clearTimeout(timeout); clearTimeout(killTimer);
+      if (code === 0 && !failure && !runtimeMatches(result.runtime, runtime)) failure = 'Missing verified Pi runtime';
+      save(file, { ...receipt, status: failure || result.error ? 'failed' : code === 0 ? 'completed' : 'interrupted',
+        ended: new Date().toISOString(), ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}),
+        ...(failure || result.error ? { error: failure ?? result.error } : {}),
+        output: safeOutput(result.output ?? ''), tool_calls: Array.isArray(result.tool_calls) ? result.tool_calls.slice(0, 500) : [],
+        ...(result.usage ? { usage: result.usage } : {}), ...(Number.isInteger(result.model_calls) ? { model_calls: result.model_calls } : {}) });
+      this.runs.delete(receipt.run_id);
+      fs.rmSync(workspace, { recursive: true, force: true });
+      await this.report(receipt.run_id);
+    };
+    try {
+      fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+      // Source is the supervisor-owned bare repository's main branch; checkout runs inside the sandbox.
+      execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'clone', '--no-checkout', '--depth', '1', '--branch', 'main', '--no-tags',
+        'file://' + this.repository, workspace], { env: gitEnv, stdio: 'pipe', timeout: 60000 });
+      const writable = linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], skills: [], context: null }, this.state);
+      await sandboxExecute(writable, 'bash', { command: 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
+      commit = execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
+      const policy = linuxPolicy({ ...agent, workspace, protectPaths: [], context: this.context }, this.state, { readOnly: true });
+      const skills = agent.skills === 'none' ? [] : agent.skills;
+      const prompt = buildSystemPrompt({ ...agent, workspace }, loadMemory(agent.memory, this.knowledge))
+        + (skills.length ? '\n\n' + skills.map(dir => fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).join('\n\n') : '')
+        + `\n\n## Current host boundary (dok)\nYou run on dok, the always-on Linux runner, over a read-only clone of ${this.project()} (main at ${commit.slice(0, 12)}). Mac paths in notes describe the Mac; files outside this clone are not available.`;
+      const manifest = { host: DEVELOPMENT.host, project: this.project(), agent: agent.name, run_id: receipt.run_id, commit,
+        implementation_revision: this.revision, knowledge_revision: read(path.join(this.knowledge, 'RELEASE.json')).source_revision,
+        policy_digest: await digest({ policy, prompt, runtime, revision: this.revision }) };
+      const sessions = path.join(base, 'pi-sessions'), agentDir = path.join(base, 'pi-config');
+      fs.mkdirSync(sessions, { recursive: true, mode: 0o700 }); fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+      const configFile = path.join(base, 'config.json');
+      save(configFile, { mode: 'run', conversation_id: randomUUID(), policy, prompt, sessions, agentDir, runtime, tools: agent.tools, manifest });
+      if (entry?.stopped) throw new Error(entry.stopped);
+      const child = spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), configFile],
+        { cwd: source, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
+      let stopped = false;
+      const stop = reason => {
+        if (stopped) return; stopped = true; failure = reason;
+        child.kill('SIGTERM'); killTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
+      };
+      if (entry) entry.stop = stop;
+      timeout = setTimeout(() => stop('Run time limit exceeded'), this.limits.runMs);
+      child.on('message', message => {
+        if (message?.type !== 'runtime' || !runtimeMatches(message.runtime, runtime)) { stop('Pi runtime identity mismatch'); return; }
+        observed = message.runtime;
+        save(file, { ...receipt, commit, runtime: observed });
+      });
+      child.stdout.on('data', b => { bytes += b.length; if (bytes > 262144) stop('Result limit exceeded'); else output += b; });
+      child.stderr.resume();
+      let finished = false;
+      const done = code => {
+        if (finished) return; finished = true;
+        let result = {};
+        try { result = JSON.parse(output || '{}'); } catch { failure ??= 'Invalid Pi result'; }
+        void finish(code, result);
+      };
+      child.on('error', () => { failure ??= 'Pi process could not start'; done(1); });
+      child.on('close', done); child.stdin.on('error', () => {}); child.stdin.end(receipt.task);
+    } catch (error) {
+      failure ??= /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(error.message) ? error.message : 'Run preparation failed';
+      await finish(1);
+    }
+  }
+  // Receipts go to the Hub when they change; unreported final receipts are retried by flushReports.
+  async report(runId) {
+    if (!this.reporter) return;
+    const file = path.join(this.state, 'agent-runs', runId + '.json');
+    try {
+      const receipt = this.runGet(runId);
+      await this.reporter(receipt);
+      if (receipt.status !== 'running' && read(file).status === receipt.status) save(file, { ...read(file), reported_at: Date.now() });
+    } catch { /* retried by flushReports */ }
+  }
+  async flushReports() {
+    for (const name of fs.readdirSync(path.join(this.state, 'agent-runs'))) {
+      const r = read(path.join(this.state, 'agent-runs', name));
+      if (r.status !== 'running' && !r.reported_at) await this.report(r.run_id);
+    }
+  }
   async export({ conversation_id, run_id, grant_id, policy_digest }) {
     if (this.active) throw new Error('Export requires an idle host');
     this.active = { exporting: true, grant_id };

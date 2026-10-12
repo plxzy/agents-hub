@@ -112,8 +112,8 @@ export class AgentRelay extends DurableObject {
     const running = [...this.waiters.values()].find((w) => w.id === id);
     if (running) return running.promise;
     const status = this.status();
-    if (!status.online) throw new Error('Mac is offline. No action was queued.');
-    if (operation === 'start_run' && (!status.enabled || !status.agents.includes(args.agent))) throw new Error('Remote runs are off or this agent is not remote-allowed.');
+    if (!status.online) throw new Error('Runner is offline. No action was queued.');
+    if (['start_run', 'run_start'].includes(operation) && (!status.enabled || !status.agents.includes(args.agent))) throw new Error('Remote runs are off or this agent is not remote-allowed.');
     if (this.waiters.size >= WIRE.capacity) throw new Error('Relay is busy. No action was queued.');
     const ws = this.socket(), a = ws.deserializeAttachment();
     const attempt = crypto.randomUUID(), expires = Date.now() + WIRE.attempt;

@@ -22,10 +22,11 @@ export function freezeLinuxTools(state) {
   return { dir, revision };
 }
 
-export function linuxPolicy(agent, state) {
+export function linuxPolicy(agent, state, { readOnly = false } = {}) {
   const workspace = fs.realpathSync(agent.workspace);
   // A whole-workspace mount must never broaden a here_write or read-only agent.
-  if (!(agent.writePaths ?? []).some(p => {
+  // Read-only runs instead mount the workspace read-only and never get write tools.
+  if (!readOnly && !(agent.writePaths ?? []).some(p => {
     try { return inside(fs.realpathSync(p), workspace); } catch { return false; }
   })) throw new Error('Linux execution requires an explicitly writable whole workspace');
   const { dir, revision } = freezeLinuxTools(state);
@@ -44,7 +45,7 @@ export function linuxPolicy(agent, state) {
   const evidence = path.join(workspace, 'evidence');
   if (fs.existsSync(evidence)) for (const name of fs.readdirSync(evidence)) protectedPaths.push(path.join(evidence, name));
   for (const name of ['space-mirror', '.context']) protectedPaths.push(path.join(workspace, name));
-  return { workspace, release: dir, release_revision: revision, runtime,
+  return { workspace, ...(readOnly ? { readonly_workspace: true } : {}), release: dir, release_revision: revision, runtime,
     sdk: path.join(packageDir, 'dist/index.js'), timeout_ms: 600_000, output_bytes: 1_048_576,
     readonly: [...(agent.skills === 'none' ? [] : agent.skills ?? []), ...(agent.context ? [agent.context] : [])].map(p => fs.realpathSync(p)).filter(p => !inside(workspace, p)),
     protected: protectedPaths.filter(p => fs.existsSync(p)).map(p => fs.realpathSync(p)).filter(p => inside(workspace, p)) };
@@ -57,7 +58,7 @@ export function sandboxArgs(policy) {
     '--ro-bind', '/usr', '/usr', '--ro-bind', '/opt', '/opt',
     '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
     '--dev', '/dev', '--dir', '/proc', '--tmpfs', '/tmp', '--dir', '/tmp/home',
-    '--bind', policy.workspace, policy.workspace,
+    policy.readonly_workspace ? '--ro-bind' : '--bind', policy.workspace, policy.workspace,
     '--ro-bind', policy.release, policy.release, '--ro-bind', policy.runtime, policy.runtime,
     ...(policy.readonly ?? []).flatMap(p => ['--ro-bind', p, p]),
     ...policy.protected.flatMap(p => ['--ro-bind', p, p]),
@@ -71,6 +72,7 @@ export function sandboxArgs(policy) {
 
 export function sandboxExecute(policy, tool, args, { signal, spawnImpl = spawn } = {}) {
   if (!['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash'].includes(tool)) throw new Error('Unknown sandbox tool');
+  if (policy.readonly_workspace && ['edit', 'write'].includes(tool)) throw new Error('Read-only run cannot write');
   return new Promise((resolve, reject) => {
     const child = spawnImpl('bwrap', sandboxArgs(policy), { stdio: ['pipe', 'pipe', 'pipe'], detached: true,
       env: { PATH: '/usr/bin:/bin', LANG: 'C.UTF-8' } });

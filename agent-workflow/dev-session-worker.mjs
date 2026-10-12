@@ -20,38 +20,64 @@ export function trustedLoader(sdk, prompt) {
   };
 }
 
+export function errorClass(message = '') {
+  const m = String(message);
+  if (/not[_ ]eligible|subscription_sharing/i.test(m)) return 'account not eligible';
+  if (/usage limit|rate limit|429|too many requests|quota/i.test(m)) return 'usage limit reached';
+  if (/unauthori[sz]ed|401|login|auth/i.test(m)) return 'model authentication failed';
+  if (/Pinned model unavailable/.test(m)) return 'model unavailable on this runner';
+  if (/abort/i.test(m)) return 'aborted';
+  return 'model turn failed';
+}
+const FACTORIES = { read: 'createReadTool', grep: 'createGrepTool', find: 'createFindTool', ls: 'createLsTool',
+  write: 'createWriteTool', edit: 'createEditTool', bash: 'createBashTool' };
+const READ_ONLY = ['read', 'grep', 'find', 'ls'];
+// Development sessions get every tool; one-shot runs get exactly the reviewed agent's tools (read-only for now).
+export function sessionTools(config) {
+  if (config.mode !== 'run') return Object.keys(FACTORIES);
+  const tools = config.tools ?? [];
+  if (!Array.isArray(tools) || tools.some(t => !READ_ONLY.includes(t))) throw new Error('Run tools must be read-only');
+  return [...new Set(tools)];
+}
+const sum = (a, b) => (Number.isFinite(a) ? a : 0) + (Number.isFinite(b) ? b : 0);
+
 export async function executeSession(config, task) {
-  if (!runtimeMatches(config.manifest.runtime)) throw new Error('Runtime requires a new approved manifest');
+  const run = config.mode === 'run', expected = run ? config.runtime : DEVELOPMENT_RUNTIME;
+  if (!run && !runtimeMatches(config.manifest.runtime)) throw new Error('Runtime requires a new approved manifest');
   const sdk = await import(config.policy.sdk);
   const piVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(config.policy.sdk), '../package.json'), 'utf8')).version;
   let runtime;
-  const factories = { read: 'createReadTool', grep: 'createGrepTool', find: 'createFindTool', ls: 'createLsTool',
-    write: 'createWriteTool', edit: 'createEditTool', bash: 'createBashTool' };
-  const customTools = Object.entries(factories).map(([name, factory]) => {
-    const definition = sdk[factory](config.policy.workspace);
+  const names = sessionTools(config);
+  const customTools = names.map(name => {
+    const definition = sdk[FACTORIES[name]](config.policy.workspace);
     return { name, label: name, description: definition.description, parameters: definition.parameters,
       execute: (_id, args, signal) => sandboxExecute(config.policy, name, args, { signal }) };
   });
   customTools.push({ name: 'session_runtime', label: 'Session runtime',
-    description: 'Read trusted Pi session identity, actual provider/model/thinking and executor. Pi and agent launchers are intentionally absent from sandbox PATH; you are already the workflow agent. This does not launch another agent.',
+    description: run ? 'Read trusted Pi session identity, actual provider/model/thinking and executor. This does not launch another agent.'
+      : 'Read trusted Pi session identity, actual provider/model/thinking and executor. Pi and agent launchers are intentionally absent from sandbox PATH; you are already the workflow agent. This does not launch another agent.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     execute: async () => ({ content: [{ type: 'text', text: JSON.stringify(runtime) }], details: runtime }) });
   const modelRuntime = await sdk.ModelRuntime.create({ authPath: path.join(os.homedir(), '.pi/agent/auth.json'),
     modelsPath: null, allowModelNetwork: false });
-  const model = modelRuntime.getModel(DEVELOPMENT_RUNTIME.provider, DEVELOPMENT_RUNTIME.model);
+  const model = modelRuntime.getModel(expected.provider, expected.model);
   if (!model) throw new Error('Pinned model unavailable');
   const previous = sdk.SessionManager.findById(config.policy.workspace, config.conversation_id, config.sessions);
   const sessionManager = previous ? sdk.SessionManager.open(previous, config.sessions, config.policy.workspace)
     : sdk.SessionManager.create(config.policy.workspace, config.sessions, { id: config.conversation_id });
   const { session } = await sdk.createAgentSession({ cwd: config.policy.workspace, agentDir: config.agentDir,
-    modelRuntime, model, thinkingLevel: DEVELOPMENT_RUNTIME.thinking, noTools: 'builtin', tools: [...Object.keys(factories), 'session_runtime'], customTools,
+    modelRuntime, model, thinkingLevel: expected.thinking, noTools: 'builtin', tools: [...names, 'session_runtime'], customTools,
     resourceLoader: trustedLoader(sdk, config.prompt), sessionManager,
     settingsManager: sdk.SettingsManager.inMemory({ packages: [], extensions: [], skills: [], enableSkillCommands: false }) });
-  let output = '', calls = [], failed = false;
+  let output = '', calls = [], failed = false, usage = { input: 0, output: 0, totalTokens: 0, cost: 0 }, models = 0;
   const unsubscribe = session.subscribe(event => {
     if (event.type === 'tool_execution_start') calls.push(event.toolName);
     if (event.type === 'message_end' && event.message.role === 'assistant') {
-      if (['error', 'aborted'].includes(event.message.stopReason)) failed = true;
+      models++;
+      const u = event.message.usage ?? {};
+      usage = { input: sum(usage.input, u.input), output: sum(usage.output, u.output),
+        totalTokens: sum(usage.totalTokens, u.totalTokens), cost: sum(usage.cost, u.cost?.total) };
+      if (['error', 'aborted'].includes(event.message.stopReason)) failed = event.message.errorMessage || true;
       output = (event.message.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('\n').slice(0, 64000);
     }
   });
@@ -61,12 +87,17 @@ export async function executeSession(config, task) {
     // Continuations can restore old settings. Apply the operator-approved setting and
     // inspect SDK getters before inference or any tool execution.
     await session.setModel(model);
-    session.setThinkingLevel(DEVELOPMENT_RUNTIME.thinking);
-    runtime = { ...observedRuntime(session, piVersion), host: config.manifest.host,
+    session.setThinkingLevel(expected.thinking);
+    runtime = { ...observedRuntime(session, piVersion, expected), host: config.manifest.host,
       implementation_revision: config.manifest.implementation_revision, policy_digest: config.manifest.policy_digest };
     process.send?.({ type: 'runtime', runtime });
-    await session.prompt(`Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are already the Pi workflow agent. The shell is an isolated Linux tool sandbox; host launchers and credentials are intentionally hidden. Use session_runtime to read this identity.\n\n${task}`); if (failed) throw new Error('Model turn failed');
-    observedRuntime(session, piVersion);
+    const preface = run
+      ? `Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are the ${config.manifest.agent} agent, started remotely through Agents Hub on dok. Your tools run in an isolated read-only Linux sandbox over a fresh clone of ${config.manifest.project} at commit ${config.manifest.commit}; there is no shell and you cannot change files.`
+      : `Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are already the Pi workflow agent. The shell is an isolated Linux tool sandbox; host launchers and credentials are intentionally hidden. Use session_runtime to read this identity.`;
+    await session.prompt(`${preface}\n\n${task}`);
+    if (failed) throw Object.assign(new Error('Model turn failed'), { detail: typeof failed === 'string' ? failed : undefined, partial: { output, tool_calls: calls, usage, model_calls: models } });
+    observedRuntime(session, piVersion, expected);
+    if (run) return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id, runtime, usage, model_calls: models };
     const git = await sandboxExecute(config.policy, 'bash', { command: 'git -c core.hooksPath=/dev/null rev-parse HEAD' });
     const commit = git.content?.find(c => c.type === 'text')?.text?.trim();
     if (!/^[a-f0-9]{40,64}$/.test(commit ?? '')) throw new Error('Cannot identify task commit');
@@ -83,5 +114,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url
     if (task.length > 16000) throw new Error('Task too large');
   }
   try { process.stdout.write(JSON.stringify(await executeSession(config, task))); }
-  catch { process.stderr.write('Pi task failed; inspect private host state.\n'); process.exitCode = 1; }
+  catch (error) {
+    // Runs report a bounded error class (e.g. usage limit) and partial usage; never stacks or host paths.
+    if (config.mode === 'run') process.stdout.write(JSON.stringify({ error: errorClass(error.detail ?? error.message), ...(error.partial ?? {}) }));
+    process.stderr.write('Pi task failed; inspect private host state.\n'); process.exitCode = 1;
+  }
 }

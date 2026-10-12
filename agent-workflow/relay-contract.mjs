@@ -5,7 +5,7 @@ const requestId = { type: 'string', pattern: '^[a-zA-Z0-9_-]{8,80}$', descriptio
 export const RELAY_OPS = {
   get_remote_run: { title: 'Get a remote run', read: true,
     input: { type: 'object', required: ['run_id'], additionalProperties: false, properties: { run_id: { type: 'string', pattern: '^r-[a-zA-Z0-9_-]+$', maxLength: 100 } } },
-    description: 'Read status and output of a run started through this relay. Requires the Mac online.' },
+    description: 'Read status and output of a run started with start_run (same as get_run). dok runs are stored in the Hub and readable any time; Mac relay runs need the Mac online.' },
   panel_data: { title: 'Live agents panel', appOnly: true, read: true, input: empty,
     description: 'Live dashboard data for the user’s panel, including the review queue.' },
   panel_run: { title: 'Run details for the panel', appOnly: true, read: true,
@@ -15,7 +15,7 @@ export const RELAY_OPS = {
     input: { type: 'object', required: ['agent', 'task', 'request_id'], additionalProperties: false, properties: {
       agent: { type: 'string', maxLength: 100 }, task: { type: 'string', minLength: 1, maxLength: 16000 },
       continue: { type: 'boolean' }, request_id: requestId,
-    } }, description: 'Start a remote-allowed agent on the linked Mac. Not the workflow development approval endpoint: use request_development for dok-dev, wait for the user approval card, then start_development_task. Returns run_id; use get_remote_run for Mac status and output. Requires the Mac online and remote runs enabled. Supply a unique request_id; reuse it only for the exact same request.' },
+    } }, description: 'Start one of the user\u2019s own Pi agents. Runs on dok, the always-on Linux runner, over a read-only clone of the repository; the Mac does not need to be online. Use this (e.g. agent helper) for questions about the user\u2019s repositories instead of delegating to Codex cloud tasks or operating the user\u2019s Mac. Returns run_id at once; poll get_run until the status is no longer running. Not for workflow development (changes): use request_development for that. Supply a unique request_id; reuse it only for the exact same request.' },
   rate_run: { title: 'Rate a run', appOnly: true, read: false,
     input: { type: 'object', required: ['run_id', 'rating', 'request_id', 'confirm'], additionalProperties: false, properties: {
       run_id: { type: 'string', maxLength: 100 }, rating: { type: 'string', enum: ['good', 'bad'] }, comment: { type: 'string', maxLength: 4000 }, request_id: requestId, confirm,

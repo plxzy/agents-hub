@@ -1,7 +1,8 @@
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList } from '../../agent-workflow/relay-contract.mjs';
-import { relayFetch, relayStatus, requestRelay } from './relay.mjs';
+import { relayFetch, relayStatus, requestRelay, startRun, getRun, dokEnabled, dokStatus } from './relay.mjs';
+import { readRun, recentRuns, mergeRuns } from './runs.mjs';
 import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
 import { developmentCall } from './development.mjs';
@@ -84,13 +85,14 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     const reply = (result) => json({ jsonrpc: '2.0', id, result });
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
       serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.3.0' },
-      instructions: env.RELAY_TOKEN
-        ? 'Agents Hub: published read metadata plus a live Mac relay. start_run is for remote-allowed Mac agents only. For workflow development on dok-dev, call request_development to show a session approval card; wait for the user click, check get_development, then call start_development_task. If these tools are missing, refresh the Agents Hub connection or use its Development panel. Use get_remote_run for Mac relay output. Ratings and reviews are user clicks in the panel, never model decisions.'
+      instructions: env.RELAY_TOKEN || dokEnabled(env)
+        ? 'Agents Hub runs the user\u2019s own Pi agents. They run on dok, the user\u2019s always-on Linux runner, so the Mac does not need to be online. For questions about the user\u2019s repositories (where something is, how it works) call start_run with a read-only agent such as helper, then poll get_run. Prefer this over delegating to Codex cloud tasks or driving the user\u2019s Mac. For workflow development (changes) on dok-dev, call request_development to show a session approval card; wait for the user click, check get_development, then call start_development_task. Ratings and reviews are user clicks in the panel, never model decisions.'
         : 'Read-only Agents Hub view of the user’s local agents and runs. Check get_status for freshness; run is explicitly unavailable.' });
     if (method === 'ping') return reply({});
-    if (method === 'tools/list') return reply({ tools: [...(env.RELAY_TOKEN ? [
+    if (method === 'tools/list') return reply({ tools: [...(env.RELAY_TOKEN || dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The unified panel uses the linked Mac when online and a published snapshot otherwise.' } : t),
-      ...relayToolList(),
+      // Without the Mac relay only the runner tools remain; panel controls need the Mac until reviews move to the Hub.
+      ...relayToolList().filter((t) => env.RELAY_TOKEN || ['start_run', 'get_remote_run'].includes(t.name)),
     ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
@@ -107,12 +109,17 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
             ...(confirm ? { _meta: { 'agents-hub/development-confirm': confirm } } : {}) });
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
-      if (env.RELAY_TOKEN && RELAY_OPS[params?.name]) {
+      if ((env.RELAY_TOKEN || dokEnabled(env)) && RELAY_OPS[params?.name]) {
         try {
           if (params.name === 'start_run' && params.arguments?.agent === 'workflow') {
             throw new Error('start_run targets the Mac and cannot approve workflow development. Call request_development with a unique request_id to display the dok-dev approval card; after the user approves, use start_development_task. If those tools are missing, refresh the Agents Hub connection or open Agents Hub > Development. No task was started.');
           }
-          const { confirm, ...value } = await requestRelay(env, params.name, params.arguments ?? {}) ?? {};
+          const args = params.arguments ?? {};
+          const result = params.name === 'start_run' ? await startRun(env, args)
+            : params.name === 'get_remote_run' ? await getRun(env, args.run_id)
+            : await requestRelay(env, params.name, args);
+          if (params.name === 'get_remote_run' && !result) throw new Error('Unknown run ' + args.run_id + ' (not in the Hub, and the Mac relay is offline).');
+          const { confirm, ...value } = result ?? {};
           // Confirmation codes go only to the panel: hosts pass a result's _meta to the widget, never to the model.
           return reply({ content: [{ type: 'text', text: JSON.stringify(value) }], ...(confirm ? { _meta: { 'agents-hub/confirm': confirm } } : {}) });
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
@@ -121,15 +128,26 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
       if (!tool) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool ' + params?.name } });
       try {
         const healthRead = params.name === 'open_dashboard' || params.name === 'get_status';
+        const args = params.arguments ?? {};
+        // Runner receipts live in the Hub (D1): readable without the Mac or a fresh snapshot.
+        if (params.name === 'get_run') {
+          const hub = await readRun(env, args.run_id);
+          if (hub) return reply({ content: [{ type: 'text', text: JSON.stringify(hub, null, 2) }] });
+        }
+        const hubRuns = ['list_runs', 'open_dashboard'].includes(params.name) ? await recentRuns(env, { agent: args.agent, limit: 50 }) : [];
         const snap = await latest(env), m = snap ? meta(snap, env) : null;
+        if (!snap && params.name === 'list_runs') return reply({ content: [{ type: 'text', text: JSON.stringify({ snapshot: null, runs: hubRuns.slice(-(args.limit ?? 10)) }, null, 2) }] });
         if (!snap && !healthRead) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
         const unknownStatus = { agents: null, runs: null, running: null, pending: null, last_run: null };
         const unavailable = { generated_at: null, capabilities: CAPABILITIES, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
-        const value = snap ? tool.run({ snap, env, meta: m }, params.arguments ?? {})
+        const value = snap ? tool.run({ snap, env, meta: m }, args)
           : params.name === 'get_status' ? { ...unknownStatus, ...unavailable }
           : { ...unavailable, status: unknownStatus, agents: [], runs: [], pending: null };
+        if (params.name === 'list_runs' && snap) value.runs = mergeRuns(snap.payload.runs.filter((r) => !args.agent || r.agent === args.agent), hubRuns).slice(-(args.limit ?? 10));
+        if (params.name === 'open_dashboard') value.runs = mergeRuns(value.runs ?? [], hubRuns).slice(-50);
         if (healthRead) {
           value.development_available = Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true');
+          value.runners = { dok: await dokStatus(env) };
           value.relay = await relayStatus(env);
           value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env) });
         }

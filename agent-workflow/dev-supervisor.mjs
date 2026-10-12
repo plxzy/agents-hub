@@ -40,8 +40,17 @@ const lease = async args => {
   if (value.authorized && (value.grant_id !== args.grant_id || value.policy_digest !== args.policy_digest)) throw new Error('Execution lease mismatch');
   return value;
 };
+// Run receipts go to the Hub (D1) so results stay readable when this host or the socket is down.
+const report = async receipt => {
+  const response = await fetch(new URL('/relay/dok-dev/runs', endpoint), { method: 'POST',
+    headers: { authorization: 'Bearer ' + config.token, 'content-type': 'application/json' },
+    body: JSON.stringify(receipt), redirect: 'error', signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error('Receipt not accepted');
+};
 const processSession = randomUUID();
-const sessions = new DevelopmentSessions({ ...config, processSession, lease });
+const sessions = new DevelopmentSessions({ ...config, processSession, lease, report });
+// The knowledge release is frozen, so the runnable list is computed once per supervisor boot.
+const agents = [...new Set(['workflow', ...sessions.runnable().map(a => a.name)])];
 save(pidFile, { pid: process.pid, started: identity(process.pid), process_session: processSession });
 const controller = new AbortController();
 const stop = () => { sessions.stop(); controller.abort(); };
@@ -52,6 +61,8 @@ async function execute(message) {
   try {
     validateDevelopment(operation, args, true);
     if (operation === 'dev_read') return { ok: true, value: sessions.get(args.run_id) };
+    if (operation === 'run_read') return { ok: true, value: sessions.runGet(args.run_id) };
+    if (operation === 'run_start') return { ok: true, value: await sessions.runStart(args) };
     if (operation === 'dev_start') return { ok: true, value: await sessions.start(args) };
     const file = path.join(journal, args.request_id + '.json'), fp = fingerprintText(operation, args);
     if (fs.existsSync(file)) {
@@ -70,6 +81,10 @@ async function execute(message) {
     return { ok: false, kind: 'rejected', error: /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(message) ? message : 'Development operation failed; inspect private host state' };
   }
 }
+async function publish() {
+  await sessions.flushReports();
+  await acknowledgeStopped();
+}
 async function acknowledgeStopped() {
   for (const file of fs.readdirSync(path.join(config.state, 'runs'))) {
     const r = JSON.parse(fs.readFileSync(path.join(config.state, 'runs', file), 'utf8'));
@@ -80,8 +95,8 @@ async function acknowledgeStopped() {
 }
 try {
   await serveSocket({ host: 'dok-dev', session: processSession, signal: controller.signal,
-    readConfig: () => ({ endpoint: config.endpoint, token: config.token, enabled: true, agents: ['workflow'] }),
-    execute, publish: acknowledgeStopped });
+    readConfig: () => ({ endpoint: config.endpoint, token: config.token, enabled: true, agents }),
+    execute, publish });
 } finally {
   sessions.stop();
   for (let n = 0; n < 60 && sessions.active; n++) await new Promise(r => setTimeout(r, 100));
