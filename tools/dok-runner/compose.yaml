@@ -1,0 +1,21 @@
+name: agents
+services:
+  runner:
+    image: agents-runner:pi-1.1.0
+    build: .
+    container_name: agents
+    restart: unless-stopped
+    cpus: 2
+    mem_limit: 3g
+    memswap_limit: 3g
+    pids_limit: 512
+    volumes:
+      - home:/home/agent
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      # The existing profile allows bwrap's unprivileged user namespaces.
+      - seccomp=${AGENTS_SECCOMP_PROFILE:-${HOME}/.config/dok-dev/seccomp.json}
+volumes:
+  home:
+    name: agents-home

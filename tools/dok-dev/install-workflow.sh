@@ -27,4 +27,10 @@ if test -e "$HOME/.local/bin/agent"; then
   cp -P "$HOME/.local/bin/agent" "$base/previous-launcher-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
 mv "$wrapper" "$HOME/.local/bin/agent"
+# The runner container's main process; it reads its own private config path argument.
+supervisor=$(mktemp "$HOME/.local/bin/.agent-supervisor-XXXXXX")
+printf '#!/bin/bash\nexport PATH="$HOME/.local/bin:$PATH"\nexec /usr/local/bin/node %q "$@"\n' \
+  "$release/agent-workflow/dev-supervisor.mjs" > "$supervisor"
+chmod 700 "$supervisor"
+mv "$supervisor" "$HOME/.local/bin/agent-supervisor"
 printf 'Activated implementation %s; knowledge %s\n' "$revision" "$(basename "$knowledge")"
