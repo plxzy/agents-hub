@@ -7,7 +7,7 @@ const DASHBOARD = {
     { run_id: 'r-1', agent: 'helper', status: 'completed', task: 'List the tools', started: '2026-10-09T04:50:00.000Z', ended: '2026-10-09T04:51:00.000Z' },
     { run_id: 'r-2', agent: 'network', status: 'running', task: 'Which app uses the most data?', started: '2026-10-09T04:59:00.000Z' },
   ],
-  agents: [{ name: 'helper', description: 'Answers questions', workspace: '/repo' }, { name: 'workflow', description: 'Develops', workspace: 'here' }],
+  agents: [{ name: 'helper', description: 'Answers questions', workspace: '/repo', last_run: { run_id: 'r-1', status: 'completed' } }, { name: 'workflow', description: 'Develops', workspace: 'here' }],
   pending: [{ id: 'm-1', kind: 'memory', agent: 'claude-code', body: 'Prefer small real examples.' }],
 }
 
@@ -65,6 +65,14 @@ for (const surface of ['terminal', 'desktop'] as const) {
     await ui.press({ key: 'refresh' })
     expect(await ui.find({ text: 'network' })).toBeDefined()
     expect(await ui.find({ text: '1 running' })).toBeDefined()
+
+    await ui.press({ key: 'tab-agents' })
+    expect(await ui.find({ text: 'Answers questions' })).toBeDefined()
+    expect(await ui.find({ text: 'No recorded run.' })).toBeDefined()
+    await ui.press({ key: 'last-helper' })
+    expect(await ui.find({ text: 'tools/space-backup/' })).toBeDefined()
+    await ui.press({ key: 'back' })
+    await ui.press({ key: 'tab-runs' })
 
     // a run's output
     await ui.press({ key: 'run-r-1' })

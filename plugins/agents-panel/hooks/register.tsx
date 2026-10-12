@@ -66,8 +66,8 @@ async function refresh($: Engine): Promise<Snapshot | null> {
       decisionMessage: d.decision_message ?? '',
       counts: { running: d.status?.running ?? runs.filter(r => r.status === 'running').length,
         review: d.status?.pending ? d.status.pending.memory + d.status.pending.proposals : (d.pending ?? []).length },
-      agents: (d.agents ?? []).map((a: { name: string; description?: string; workspace?: string }) => ({
-        name: a.name, description: firstLine(a.description, 120), here: a.workspace === 'here',
+      agents: (d.agents ?? []).map((a: { name: string; description?: string; workspace?: string; last_run?: AgentInfo['lastRun'] }) => ({
+        name: a.name, description: firstLine(a.description, 120), here: a.workspace === 'here', lastRun: a.last_run,
       })),
       running: runs.filter(r => r.status === 'running'),
       recent: runs.filter(r => r.status !== 'running').slice(-RECENT).reverse(),
@@ -196,7 +196,7 @@ export const register: Register = on => {
 
     const tabs = (
       <Box flexDirection="row" gap={1}>
-        {([['runs', 'Runs', '1'], ['review', `Review${snap?.pending.length ? ` (${snap.pending.length})` : ''}`, '2'], ['start', 'Start a run', '3']] as const)
+        {([['runs', 'Runs', '1'], ['review', `Review${snap?.pending.length ? ` (${snap.pending.length})` : ''}`, '2'], ['start', 'Start a run', '3'], ['agents', 'Agents', '4']] as const)
           .filter(([id]) => id !== 'start' || (Input && Select)).map(([id, label, key]) => (
           <Button key={`tab-${id}`} hotkey={key} variant={current === id ? 'primary' : undefined} dimColor={current !== id}
             onPress={() => void (id === 'start' ? openStart($) : update($, tab, () => id as Tab))}>{label}</Button>
@@ -286,6 +286,20 @@ export const register: Register = on => {
       </Box>
     )
 
+    const agentsView = snap && (
+      <Box flexDirection="column" gap={1}>
+        {snap.agents.map(a => (
+          <Box key={`agent-${a.name}`} flexDirection="column" borderStyle="round" borderDimColor paddingX={1}>
+            <Text bold>{a.name}</Text>
+            <Text dimColor wrap="wrap">{a.description}</Text>
+            {a.lastRun ? <Button key={`last-${a.name}`} plain onPress={() => void openRun($, a.lastRun!.run_id)}>
+              {`Last run: ${a.lastRun.status}${a.lastRun.ended || a.lastRun.started ? ` · ${ago(a.lastRun.ended ?? a.lastRun.started, now)} ago` : ''}`}
+            </Button> : <Text dimColor>No recorded run.</Text>}
+          </Box>
+        ))}
+      </Box>
+    )
+
     const chosen: AgentInfo | undefined = locals.find(a => a.name === f?.agent) ?? locals[0]
     const startView = snap && chosen && Input && Select && (
       <Box flexDirection="column" gap={1} borderStyle="round" borderDimColor paddingX={1}>
@@ -310,6 +324,7 @@ export const register: Register = on => {
         {!snap && !err && <Text dimColor>Loading…</Text>}
         {current === 'runs' && runsView}
         {current === 'review' && reviewView}
+        {current === 'agents' && agentsView}
         {current === 'start' && startView}
         {current === 'start' && !chosen && <Text dimColor>No agents configured on this Mac.</Text>}
       </Box>

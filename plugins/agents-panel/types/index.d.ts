@@ -1,6 +1,6 @@
 export type Run = { run_id: string; agent: string; status: string; task: string; started: string; ended?: string; tool_calls?: number }
 export type Pending = { id: string; kind: string; agent?: string; why?: string; body: string; hub?: boolean }
-export type AgentInfo = { name: string; description: string; here: boolean }
+export type AgentInfo = { name: string; description: string; here: boolean; lastRun?: { run_id: string; status: string; started?: string; ended?: string } | null }
 export type Snapshot = {
   at: string
   agents: AgentInfo[]
@@ -12,7 +12,7 @@ export type Snapshot = {
   counts: { running: number; review: number }
 }
 export type Detail = { run_id: string; agent: string; status: string; task: string; text: string; meta: string }
-export type Tab = 'runs' | 'review' | 'start'
+export type Tab = 'runs' | 'review' | 'start' | 'agents'
 export type Form = { agent: string; cwd: string }
 
 declare module 'claude-code' {
