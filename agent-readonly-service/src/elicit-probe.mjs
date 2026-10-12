@@ -87,13 +87,15 @@ export async function probeCall(request, env, id, params) {
   }
   const method = args.method && args.method !== 'auto' ? args.method : isCodexApp(request) ? 'openai/form' : 'elicitation/create';
   const askId = `probe-${crypto.randomUUID()}`;
-  await record(env, 'classic-ask', { method, ask_id: askId, ...f });
+  await record(env, 'classic-ask', { method, ask_id: askId, schema: env.ELICIT_SCHEMA ?? 'choice', ...f });
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter(), enc = new TextEncoder();
   const send = (msg) => writer.write(enc.encode(`event: message\ndata: ${JSON.stringify(msg)}\n\n`));
   (async () => {
     try {
-      await send({ jsonrpc: '2.0', id: askId, method, params: method === 'openai/form' ? { message: MESSAGE, requestedSchema: SCHEMA } : { mode: 'form', message: MESSAGE, requestedSchema: SCHEMA } });
+      // ELICIT_SCHEMA=minimal sends Bits & Bolts' simplest form (cad.reference: message + empty object schema).
+      const schema = env.ELICIT_SCHEMA === 'minimal' ? { type: 'object', properties: {} } : SCHEMA;
+      await send({ jsonrpc: '2.0', id: askId, method, params: method === 'openai/form' ? { message: MESSAGE, requestedSchema: schema } : { mode: 'form', message: MESSAGE, requestedSchema: schema } });
       let answer = null, lastPing = Date.now();
       for (const end = Date.now() + WAIT_MS; Date.now() < end;) {
         await new Promise((r) => setTimeout(r, POLL_MS));

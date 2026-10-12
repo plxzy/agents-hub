@@ -18,6 +18,7 @@ export default defineConfig({
 			STALE_AFTER_MS: bindings.text("900000"),
 			// TEMPORARY 2026-10-12: elicitation probe (src/elicit-probe.mjs); remove after the test.
 			ELICIT_PROBE: bindings.text(process.env.HUB_ELICIT_PROBE ?? "true"),
+			ELICIT_SCHEMA: bindings.text(process.env.HUB_ELICIT_SCHEMA ?? "choice"),
 			DEVELOPMENT_ENABLED: bindings.text(process.env.HUB_DEVELOPMENT_ENABLED ?? "true"),
 			DB: bindings.d1({
 				name: "agent-readonly",
