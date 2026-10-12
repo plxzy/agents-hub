@@ -10,7 +10,6 @@ import { pendingMemory, pendingCounts, isMemory, decideMemory } from './memory.m
 import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
 import { developmentCall } from './development.mjs';
-import { probeTools, probeInitialize, probeClientResponse, probeCall } from './elicit-probe.mjs';
 
 const KEEP_SNAPSHOTS = 20;
 const CAPABILITIES = { discovery: true, status: true, context: true, run: false, mutate: false };
@@ -113,10 +112,8 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     let msg; try { msg = await request.json(); } catch { return json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }, 400); }
     const { id, method, params } = msg ?? {};
     // Connection, discovery and UI resources must work before the first snapshot is published.
-    const probed = await probeClientResponse(env, msg); if (probed) return probed;
     if (id === undefined || id === null) return new Response(null, { status: 202 });
     const reply = (result) => json({ jsonrpc: '2.0', id, result });
-    if (method === 'initialize') await probeInitialize(request, env, params);
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
       serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.3.0' },
       instructions: dokEnabled(env)
@@ -126,15 +123,11 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'tools/list') return reply({ tools: [...(dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The panel shows runs, agents and the review queue held by the Hub.' } : t),
       ...relayToolList().filter((t) => ['start_run', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
-    ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : []), ...probeTools(env)] });
+    ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
       if (!isDashboardUri(params?.uri)) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown resource' } });
       return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_MIME, text: dashboardHtml, _meta: DASHBOARD_RESOURCE_META }].map((c) => ({ ...c, uri: params.uri })) });
-    }
-    if (method === 'tools/call' && params?.name === 'elicitation_probe' && probeTools(env).length) {
-      const out = await probeCall(request, env, id, params);
-      return out instanceof Response ? out : json(out);
     }
     if (method === 'tools/call') {
       if (Object.hasOwn(DEV_OPS, params?.name ?? '')) {
