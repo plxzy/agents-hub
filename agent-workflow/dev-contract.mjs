@@ -18,7 +18,8 @@ export const HOST_OPS = {
   dev_export: schema({ request_id: id, grant_id: id, conversation_id: id, policy_digest: id, run_id: id }),
   // One-shot runs of reviewed read-only agents on a fresh clone; no grant (nothing can be written).
   run_start: schema({ request_id: id, agent: { type: 'string', pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' }, task: { type: 'string', minLength: 1, maxLength: 16000 },
-    model: { type: 'string', pattern: '^[a-z0-9-]{1,40}/[A-Za-z0-9._:-]{1,80}$' }, thinking: { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] } }, ['request_id', 'agent', 'task']),
+    model: { type: 'string', pattern: '^[a-z0-9-]{1,40}/[A-Za-z0-9._:-]{1,80}$' }, thinking: { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+    repo: { type: 'string', pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }, continue_from: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' } }, ['request_id', 'agent', 'task']),
   run_read: schema({ run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' } }),
 };
 export function validateDevelopment(name, args, host = false) {

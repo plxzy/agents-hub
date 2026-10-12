@@ -48,7 +48,7 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
 
   const status = JSON.parse((await tool('get_status')).content[0].text);
   assert.equal(Object.keys(status)[0], 'start_run'); assert.equal(status.start_run.available, true);
-  assert.deepEqual(status.start_run.runners, { dok: ['helper'] }); assert.equal(status.capabilities.run, true);
+  assert.deepEqual(status.start_run.runners, { dok: ['workflow', 'helper'] }); assert.equal(status.capabilities.run, true);
   assert.equal(status.health.execution.available, true); assert.match(status.health.execution.reason, /dok runner online/);
   const started = tool('start_run', { agent: 'helper', task: 'Where is the JWT checked?', request_id: 'request-0001' });
   const m = await next();
@@ -75,8 +75,22 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.equal(ov.model, 'openai/gpt-6.1-sol'); assert.equal(ov.thinking, 'high');
   assert.equal((await tool('start_run', { agent: 'helper', task: 'x', request_id: 'request-0005', thinking: 'extreme' })).isError, true);
   assert.equal((await tool('start_run', { agent: 'helper', task: 'x', request_id: 'request-0006', model: 'no-slash' })).isError, true);
-  assert.match((await tool('start_run', { agent: 'network', task: 'x', request_id: 'request-0002' })).content[0].text, /dok does not run network; it offers: helper/);
-  assert.match((await tool('start_run', { agent: 'workflow', task: 'x', request_id: 'request-0003' })).content[0].text, /request_development/);
+  assert.match((await tool('start_run', { agent: 'network', task: 'x', request_id: 'request-0002' })).content[0].text, /dok does not run network; it offers: workflow, helper/);
+  const WRUN = 'r-20261012T121000Z-0a0b0c', PREV = 'r-20261012T120900Z-aaaaaa';
+  const write = tool('start_run', { agent: 'workflow', task: 'Add a comment', request_id: 'request-0003', repo: 'dev-workflow', continue_from: PREV });
+  let w = await next(); while (w.type !== 'request') w = await next();
+  assert.deepEqual(w.args, { request_id: 'request-0003', agent: 'workflow', task: 'Add a comment', repo: 'dev-workflow', continue_from: PREV });
+  const wrun = { run_id: WRUN, agent: 'workflow', kind: 'task', runner: 'dok', status: 'running', task: 'Add a comment', started: '2026-10-12T12:10:00.000Z', repo: 'dev-workflow' };
+  ws.send(encode({ v: 1, session: 'dok-session-1', socket: hello.socket, type: 'result', attempt: w.attempt, id: w.id, result: { ok: true, value: wrun } }));
+  assert.equal(JSON.parse((await write).content[0].text).repo, 'dev-workflow');
+  const sha = 'a'.repeat(40);
+  assert.equal((await post({ ...wrun, status: 'completed', ended: '2026-10-12T12:12:00.000Z', commit: sha, base_commit: 'b'.repeat(40),
+    review_ref: `refs/heads/review/runs/${WRUN}`, continued_from: PREV, changed_files: ['a.mjs', 'x\ny', 7] })).status, 200);
+  const wdone = JSON.parse((await tool('get_run', { run_id: WRUN })).content[0].text);
+  assert.equal(wdone.review_ref, `refs/heads/review/runs/${WRUN}`); assert.deepEqual(wdone.changed_files, ['a.mjs']); assert.equal(wdone.repo, 'dev-workflow'); assert.equal(wdone.continued_from, PREV);
+  assert.equal((await post({ ...wrun, run_id: 'r-20261012T121100Z-0a0b0d', status: 'completed', review_ref: 'refs/heads/main' })).status, 200);
+  assert.equal(JSON.parse((await tool('get_run', { run_id: 'r-20261012T121100Z-0a0b0d' })).content[0].text).review_ref, undefined); // only a run's own review ref is kept
+  assert.equal((await tool('start_run', { agent: 'workflow', task: 'x', request_id: 'request-0007', repo: 'Bad Repo' })).isError, true);
   assert.equal((await post({ run_id: 'bad' })).status, 400);
   const accounts = (body, method = 'POST', token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/accounts', { method, headers: { authorization: 'Bearer ' + token }, ...(body ? { body: JSON.stringify(body) } : {}) });
   assert.equal((await accounts({ slot: 'openai', state: 'cooldown', until: '2999-01-01T00:00:00.000Z', last_error_kind: 'usage limit reached' }, 'POST', 'wrong')).status, 401);

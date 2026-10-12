@@ -31,6 +31,11 @@ export function sanitizeReceipt(r, runner) {
     tool_calls: Array.isArray(r.tool_calls) ? r.tool_calls.filter((t) => /^[a-z_]{1,40}$/.test(t)).slice(0, 500) : undefined,
     model_calls: Number.isInteger(r.model_calls) && r.model_calls >= 0 ? r.model_calls : undefined,
     accounts_used: Array.isArray(r.accounts_used) ? r.accounts_used.filter((x) => /^openai(-[1-9]\d*)?$/.test(x)).slice(0, 10) : undefined,
+    repo: /^[a-z0-9][a-z0-9_.-]{0,63}$/.test(r.repo ?? '') ? r.repo : undefined,
+    base_commit: /^[a-f0-9]{40,64}$/.test(r.base_commit ?? '') ? r.base_commit : undefined,
+    review_ref: new RegExp(`^refs/heads/review/runs/${r.run_id}$`).test(r.review_ref ?? '') ? r.review_ref : undefined,
+    continued_from: RUN_ID.test(r.continued_from ?? '') ? r.continued_from : undefined,
+    changed_files: Array.isArray(r.changed_files) ? r.changed_files.filter((f) => typeof f === 'string' && f.length <= 300 && !/[\r\n]/.test(f)).slice(0, 200) : undefined,
     usage, runtime, error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
   };
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined));

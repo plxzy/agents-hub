@@ -28,12 +28,15 @@ const safeOutput = text => /(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|Bearer\s+\S+|----
   ? '[redacted: output resembled a credential]' : text.slice(0, 48000);
 
 const READ_ONLY = ['read', 'grep', 'find', 'ls'];
+const ALL_TOOLS = [...READ_ONLY, 'write', 'edit', 'bash'];
 export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 
 export class DevelopmentSessions {
-  constructor({ state, repository, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, accounts_module = null, limits = {} }) {
+  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, accounts_module = null, limits = {} }) {
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
+    this.repos = { [path.basename(this.repository).replace(/\.git$/, '')]: this.repository,
+      ...Object.fromEntries(Object.entries(repositories).map(([name, dir]) => [name, fs.realpathSync(dir)])) };
     this.context = context ? fs.realpathSync(context) : null;
     this.revision = revision; this.processSession = processSession; this.lease = lease; this.reporter = report;
     this.accounts = accounts; this.accountsModule = accounts_module;
@@ -42,7 +45,7 @@ export class DevelopmentSessions {
       const file = fs.realpathSync(path.join(this.knowledge, name));
       if (!file.startsWith(this.knowledge + path.sep) || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected) throw new Error('Reviewed knowledge integrity check failed');
     }
-    this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 1, runMs: 15 * 60000,
+    this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 1, runMs: 15 * 60000, writeRuns: 1, writeMs: 30 * 60000, keepConversations: 20, keepMs: 7 * 24 * 3600000,
       slots: ['openai', 'openai-2', 'openai-3'], cooldownMs: 60 * 60000, disableMs: 24 * 60 * 60000, ...limits };
     this.active = null;
     this.runs = new Map();
@@ -212,22 +215,38 @@ export class DevelopmentSessions {
     for (const run of this.runs.values()) run.stop?.('Runner stopped');
   }
 
-  // ---------- one-shot agent runs (read-only agents on a fresh clone; no grant needed) ----------
+  // ---------- one-shot agent runs (a fresh clone per run; no grant needed) ----------
+  // Read-only agents get a read-only clone. Agents with write tools get a writable clone inside the same
+  // sandbox as development sessions; their result leaves only as an append-only review ref, never merged.
   project() { return path.basename(this.repository).replace(/\.git$/, ''); }
   runnable() {
-    return loadAgents(this.knowledge).filter(a => a.tools.length && a.tools.every(t => READ_ONLY.includes(t))
-      && a.workspace !== 'here' && path.basename(a.workspace) === this.project());
+    return loadAgents(this.knowledge).filter(a => a.tools.length && a.tools.every(t => ALL_TOOLS.includes(t))
+      && (a.workspace === 'here' || this.repos[path.basename(a.workspace)]));
+  }
+  isWrite(agent) { return agent.tools.some(t => !READ_ONLY.includes(t)); }
+  // A fixed-workspace agent works in the repo named like its workspace; `workspace: here` agents choose one.
+  repoFor(agent, repo) {
+    const names = Object.keys(this.repos);
+    if (agent.workspace !== 'here') {
+      const own = path.basename(agent.workspace);
+      if (repo && repo !== own) throw new Error(`${agent.name} works in ${own} only`);
+      return own;
+    }
+    const chosen = repo ?? (names.length === 1 ? names[0] : null);
+    if (!chosen || !this.repos[chosen]) throw new Error(`Choose a repo: ${names.join(', ')}`);
+    return chosen;
   }
   runGet(runId) {
     if (!RUN_ID.test(runId ?? '')) throw new Error('Invalid run');
     const file = path.join(this.state, 'agent-runs', runId + '.json');
     if (!fs.existsSync(file)) throw new Error('Unknown run');
-    const { reported_at, ...receipt } = read(file);
+    const { reported_at, root, ...receipt } = read(file);
     return receipt;
   }
-  async runStart({ request_id, agent: name, task, model, thinking }) {
+  async runStart({ request_id, agent: name, task, model, thinking, repo, continue_from }) {
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(request_id ?? '') || typeof task !== 'string' || !task.trim() || task.length > 16000) throw new Error('Invalid task');
-    const fingerprint = hash({ agent: name, task, model: model ?? null, thinking: thinking ?? null });
+    if (continue_from !== undefined && !RUN_ID.test(continue_from)) throw new Error('Invalid continue_from');
+    const fingerprint = hash({ agent: name, task, model: model ?? null, thinking: thinking ?? null, repo: repo ?? null, continue_from: continue_from ?? null });
     const requestFile = path.join(this.state, 'agent-requests', request_id + '.json');
     if (fs.existsSync(requestFile)) {
       const old = read(requestFile);
@@ -236,62 +255,96 @@ export class DevelopmentSessions {
     }
     const agent = this.runnable().find(a => a.name === name);
     if (!agent) throw new Error('Agent is not runnable on dok');
-    if (this.runs.size >= this.limits.runs) throw new Error('dok runner is busy; retry when idle');
+    const write = this.isWrite(agent), project = this.repoFor(agent, repo);
+    if (continue_from && !write) throw new Error('continue_from applies to runs that change files');
+    const busy = [...this.runs.values()].filter(r => r.write === write).length >= (write ? this.limits.writeRuns : this.limits.runs);
+    if (busy) throw new Error(`dok runner is busy with another ${write ? 'write ' : ''}run; retry when idle`);
     this.room();
+    let root, previous;
+    if (continue_from) {
+      const storedFile = path.join(this.state, 'agent-runs', continue_from + '.json');
+      if (!fs.existsSync(storedFile)) throw new Error('Unknown run to continue');
+      const stored = read(storedFile);
+      previous = stored; root = stored.root;
+      if (stored.agent !== agent.name || stored.repo !== project || stored.status !== 'completed' || !stored.review_ref || !root) throw new Error('Only a completed run of this agent that changed files can be continued');
+      let latest; try { latest = fs.readFileSync(path.join(this.state, 'run-work', root, 'head'), 'utf8').trim(); } catch { /* conversation expired */ }
+      if (latest !== continue_from) throw new Error(latest ? `Continue from the latest run of this conversation: ${latest}` : 'That conversation has expired; start a new run');
+    }
     // Per-run overrides from the caller; only providers this runner holds credentials for.
     const runtime = agentRuntime({ model: model ?? agent.model, thinking: thinking ?? agent.thinking }), run_id = newId('r');
     if (!(this.limits.providers ?? ['openai']).includes(runtime.provider)) throw new Error('Provider not available on dok');
     const receipt = { run_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
-      started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version };
+      started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version,
+      repo: project, write, ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
     save(requestFile, { fingerprint, run_id });
-    this.runs.set(run_id, {});
+    this.runs.set(run_id, { write });
     void this.report(run_id);
     // Clone and execution continue after the start acknowledgement; the transport attempt is short.
-    void this.executeRun(agent, runtime, receipt).catch(() => {});
-    return receipt;
+    void this.executeRun(agent, runtime, receipt, previous).catch(() => {});
+    const { root: _root, ...visible } = receipt;
+    return visible;
   }
-  async executeRun(agent, runtime, receipt) {
-    const base = path.join(this.state, 'run-work', receipt.run_id), workspace = path.join(base, 'workspace');
+  async executeRun(agent, runtime, receipt, previous) {
+    const { write, repo, root } = receipt, repository = this.repos[repo];
+    const base = path.join(this.state, 'run-work', root), workspace = path.join(base, 'workspace');
     const file = path.join(this.state, 'agent-runs', receipt.run_id + '.json');
     const entry = this.runs.get(receipt.run_id);
-    let failure, output = '', bytes = 0, observed, commit, killTimer, timeout;
+    const branch = receipt.continued_from ? 'review/runs/' + receipt.continued_from : 'main';
+    let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer;
     const finish = async (code, result = {}) => {
-      clearTimeout(timeout); clearTimeout(killTimer);
+      clearTimeout(timeout); clearTimeout(killTimer); clearInterval(diskTimer);
       const { provider: _p, ...pinnedRuntime } = runtime;
       if (code === 0 && !failure && !(runtimeMatches(result.runtime, pinnedRuntime) && (runtime.provider !== 'openai' ? result.runtime.provider === runtime.provider : this.limits.slots.includes(result.runtime.provider)))) failure = 'Missing verified Pi runtime';
+      const done = !failure && !result.error && code === 0;
+      if (write && done && harvested?.review_ref) fs.writeFileSync(path.join(base, 'head'), receipt.run_id, { mode: 0o600 });
       save(file, { ...receipt, status: failure || result.error ? 'failed' : code === 0 ? 'completed' : 'interrupted',
-        ended: new Date().toISOString(), ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}),
+        ended: new Date().toISOString(), ...(commit ? { commit } : {}), ...(baseCommit ? { base_commit: baseCommit } : {}),
+        ...(done && harvested ? harvested : {}), ...(observed ? { runtime: observed } : {}),
         ...(failure || result.error ? { error: failure ?? result.error } : {}),
         output: safeOutput(result.output ?? ''), tool_calls: Array.isArray(result.tool_calls) ? result.tool_calls.slice(0, 500) : [],
         ...(result.usage ? { usage: result.usage } : {}), ...(Number.isInteger(result.model_calls) ? { model_calls: result.model_calls } : {}),
         ...(Array.isArray(result.slots_used) ? { accounts_used: result.slots_used.filter(s => /^openai(-[1-9]\d*)?$/.test(s)) } : {}) });
       this.runs.delete(receipt.run_id);
-      fs.rmSync(workspace, { recursive: true, force: true });
+      // Write conversations keep their Pi history (not the checkout) so a follow-up can continue; others are removed.
+      fs.rmSync(write ? workspace : base, { recursive: true, force: true });
+      if (write) this.prune();
       await this.report(receipt.run_id);
     };
     try {
       fs.mkdirSync(base, { recursive: true, mode: 0o700 });
-      // Source is the supervisor-owned bare repository's main branch; checkout runs inside the sandbox.
-      execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'clone', '--no-checkout', '--depth', '1', '--branch', 'main', '--no-tags',
-        'file://' + this.repository, workspace], { env: gitEnv, stdio: 'pipe', timeout: 60000 });
-      const writable = linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], skills: [], context: null }, this.state);
-      await sandboxExecute(writable, 'bash', { command: 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
-      commit = execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
-      const policy = linuxPolicy({ ...agent, workspace, protectPaths: [], context: this.context }, this.state, { readOnly: true });
+      fs.rmSync(workspace, { recursive: true, force: true });
+      // Source is the supervisor-owned bare repository; checkout runs inside the sandbox.
+      execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'clone', '--no-checkout', '--no-tags', '--single-branch', '--branch', branch,
+        ...(write ? [] : ['--depth', '1']), 'file://' + repository, workspace], { env: gitEnv, stdio: 'pipe', timeout: 120000 });
+      const checkout = linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], skills: [], context: null }, this.state);
+      await sandboxExecute(checkout, 'bash', { command: write ? `git -c core.hooksPath=/dev/null checkout -q -b agent-run origin/${branch}` : 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
+      // Read before the agent can touch the checkout; later git calls on it run only inside the sandbox.
+      baseCommit = commit = execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
+      const policy = write ? linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], context: this.context }, this.state)
+        : linuxPolicy({ ...agent, workspace, protectPaths: [], context: this.context }, this.state, { readOnly: true });
       const skills = agent.skills === 'none' ? [] : agent.skills;
+      const boundary = write
+        ? `You run on dok, the always-on Linux runner, in a writable clone of ${repo} (${branch} at ${commit.slice(0, 12)}). Your shell has no network and cannot see credentials or other runs. Do not commit: when you stop, your changes are committed and exported as a review branch for the user, never merged automatically. Mac paths in notes describe the Mac; tools that exist only on macOS are unavailable here.`
+        : `You run on dok, the always-on Linux runner, over a read-only clone of ${repo} (${branch} at ${commit.slice(0, 12)}). Mac paths in notes describe the Mac; files outside this clone are not available.`;
       const prompt = buildSystemPrompt({ ...agent, workspace }, loadMemory(agent.memory, this.knowledge))
         + (skills.length ? '\n\n' + skills.map(dir => fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).join('\n\n') : '')
-        + `\n\n## Current host boundary (dok)\nYou run on dok, the always-on Linux runner, over a read-only clone of ${this.project()} (main at ${commit.slice(0, 12)}). Mac paths in notes describe the Mac; files outside this clone are not available.`;
-      const manifest = { host: DEVELOPMENT.host, project: this.project(), agent: agent.name, run_id: receipt.run_id, commit,
+        + `\n\n## Current host boundary (dok)\n${boundary}`;
+      const manifest = { host: DEVELOPMENT.host, project: repo, agent: agent.name, run_id: receipt.run_id, commit,
         implementation_revision: this.revision, knowledge_revision: read(path.join(this.knowledge, 'RELEASE.json')).source_revision,
         policy_digest: await digest({ policy, prompt, runtime, revision: this.revision }) };
       const sessions = path.join(base, 'pi-sessions'), agentDir = path.join(base, 'pi-config');
       fs.mkdirSync(sessions, { recursive: true, mode: 0o700 }); fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
       const configFile = path.join(base, 'config.json');
-      const slots = runtime.provider === 'openai' ? await this.poolSlots() : [runtime.provider];
-      save(configFile, { mode: 'run', conversation_id: randomUUID(), policy, prompt, sessions, agentDir, runtime, tools: agent.tools, manifest,
-        slots, accounts_module: this.accountsModule });
+      let slots = runtime.provider === 'openai' ? await this.poolSlots() : [runtime.provider];
+      if (previous) {
+        // Reasoning history is bound to the account that produced it: continue on that account or not at all.
+        const last = previous.accounts_used?.at(-1);
+        if (!last || !slots.includes(last)) throw new Error('The previous run’s account is unavailable; retry later');
+        slots = [last];
+      }
+      save(configFile, { mode: 'run', writable: write, resume: Boolean(previous), conversation_id: root, policy, prompt, sessions, agentDir, runtime,
+        tools: agent.tools, manifest, slots, accounts_module: this.accountsModule });
       if (entry?.stopped) throw new Error(entry.stopped);
       const child = spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), configFile],
         { cwd: source, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
@@ -301,7 +354,18 @@ export class DevelopmentSessions {
         child.kill('SIGTERM'); killTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
       };
       if (entry) entry.stop = stop;
-      timeout = setTimeout(() => stop('Run time limit exceeded'), this.limits.runMs);
+      timeout = setTimeout(() => stop('Run time limit exceeded'), write ? this.limits.writeMs : this.limits.runMs);
+      if (write) {
+        let checking = false;
+        diskTimer = setInterval(() => {
+          if (checking || stopped) return; checking = true;
+          try { this.room(); } catch { stop('Host free-space watermark reached'); }
+          const du = spawn('du', ['-sk', '--', workspace], { env: gitEnv });
+          let size = ''; du.stdout.on('data', b => { if (size.length < 200) size += b; }); du.stderr.resume();
+          du.on('error', () => { checking = false; stop('Disk accounting unavailable'); });
+          du.on('close', code => { checking = false; if (code !== 0 || Number.parseInt(size) * 1024 > this.limits.diskBytes) stop('Run disk budget exceeded'); });
+        }, 5000);
+      }
       const { provider: _provider, ...pinned } = runtime;
       child.on('message', message => {
         if (message?.type === 'account' && slots.includes(message.slot) && ['usage limit reached', 'account not eligible'].includes(message.kind)) {
@@ -315,19 +379,50 @@ export class DevelopmentSessions {
       child.stdout.on('data', b => { bytes += b.length; if (bytes > 262144) stop('Result limit exceeded'); else output += b; });
       child.stderr.resume();
       let finished = false;
-      const done = code => {
+      const done = async code => {
         if (finished) return; finished = true;
+        clearInterval(diskTimer);
         let result = {};
         try { result = JSON.parse(output || '{}'); } catch { failure ??= 'Invalid Pi result'; }
+        if (write && code === 0 && !failure && !result.error) {
+          try { harvested = await this.harvest(policy, receipt, baseCommit, repository); commit = harvested.commit; }
+          catch (error) { failure = /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(error.message) ? error.message : 'Export failed'; }
+        }
         void finish(code, result);
       };
-      child.on('error', () => { failure ??= 'Pi process could not start'; done(1); });
-      child.on('close', done); child.stdin.on('error', () => {}); child.stdin.end(receipt.task);
+      child.on('error', () => { failure ??= 'Pi process could not start'; void done(1); });
+      child.on('close', code => void done(code)); child.stdin.on('error', () => {}); child.stdin.end(receipt.task);
     } catch (error) {
       failure ??= /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(error.message) ? error.message : 'Run preparation failed';
       await finish(1);
     }
   }
+  // After a write run: commit and bundle inside the sandbox (the checkout's git config is agent-controlled),
+  // then import the bundle into the bare repository as an append-only review ref.
+  async harvest(policy, receipt, base, repository) {
+    const run = receipt.run_id, exportRef = 'refs/heads/export-' + run, filename = '.git/review-' + run + '.bundle';
+    if (!/^[a-f0-9]{40,64}$/.test(base)) throw new Error('No base commit');
+    const git = 'git -c core.hooksPath=/dev/null';
+    const script = ['set -e', `${git} add -A`,
+      `${git} diff --cached --quiet || ${git} -c user.name=dok-agent -c user.email=agent@dok.invalid commit -q -m "Agents Hub run ${run}"`,
+      `${git} merge-base --is-ancestor ${base} HEAD`,
+      `if [ "$(${git} rev-parse HEAD)" = ${base} ]; then echo unchanged; else ${git} update-ref ${exportRef} HEAD && ${git} bundle create ${filename} ${exportRef} ^${base} >/dev/null 2>&1 && echo bundled; fi`].join('\n');
+    const result = await sandboxExecute(policy, 'bash', { command: script });
+    const text = result?.content?.find(c => c.type === 'text')?.text ?? '';
+    if (/\bunchanged\s*$/.test(text)) return { commit: base, changed_files: [] };
+    if (!/\bbundled\s*$/.test(text)) throw new Error('Run did not produce an exportable result');
+    const imported = this.importBundle({ workspace: policy.workspace, filename, id: run, exportRef, ref: 'refs/heads/review/runs/' + run, repository });
+    const names = execFileSync('git', ['--git-dir', repository, 'diff', '--name-only', '-z', base, imported.commit], { env: gitEnv, encoding: 'utf8', timeout: 15000 })
+      .split('\0').filter(n => n && n.length <= 300 && !/[\r\n]/.test(n)).slice(0, 200);
+    return { commit: imported.commit, review_ref: imported.ref, changed_files: names };
+  }
+  // Keep the newest few write conversations for a week; read runs and everything else is removed.
+  prune() {
+    const dir = path.join(this.state, 'run-work'), live = new Set([...this.runs.keys()].map(id => this.runRoot(id)));
+    const items = fs.readdirSync(dir).filter(n => !live.has(n)).map(n => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs })).sort((a, b) => b.t - a.t);
+    items.forEach(({ n, t }, i) => { if (i >= this.limits.keepConversations || Date.now() - t > this.limits.keepMs) fs.rmSync(path.join(dir, n), { recursive: true, force: true }); });
+  }
+  runRoot(runId) { try { return read(path.join(this.state, 'agent-runs', runId + '.json')).root ?? runId; } catch { return runId; } }
   // Account pool: skip slots another runner (or an earlier run) found at their limit; Hub state is shared.
   async poolSlots(now = Date.now()) {
     let states = [];
@@ -359,6 +454,31 @@ export class DevelopmentSessions {
       if (r.status !== 'running' && !r.reported_at) await this.report(r.run_id);
     }
   }
+  // Quarantine a bundle the sandbox produced and add one append-only ref from it (no force, no checkout, no hooks).
+  importBundle({ workspace, filename, id, exportRef, ref, repository = this.repository, expected }) {
+    const candidate = fs.realpathSync(path.join(workspace, filename));
+    if (!candidate.startsWith(workspace + path.sep)) throw new Error('Invalid export path');
+    const fd = fs.openSync(candidate, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const target = path.join(this.state, 'quarantine', id + '.bundle');
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > 64 * 1024 ** 2) throw new Error('Export exceeds 64 MiB limit');
+      if (!fs.existsSync(target)) fs.writeFileSync(target, fs.readFileSync(fd), { mode: 0o400, flag: 'wx' });
+    } finally { fs.closeSync(fd); }
+    const args = ['-c', 'core.hooksPath=/dev/null', '-c', 'protocol.file.allow=always', '--git-dir', repository];
+    // No plus/force: existing review refs cannot be replaced. No checkout or hooks.
+    execFileSync('git', [...args, 'bundle', 'verify', target], { env: gitEnv, stdio: 'pipe' });
+    const head = execFileSync('git', [...args, 'bundle', 'list-heads', target, exportRef], { env: gitEnv, timeout: 15000, encoding: 'utf8' }).split(' ')[0];
+    if (!/^[a-f0-9]{40,64}$/.test(head)) throw new Error('Bundle has no matching head');
+    if (expected && head !== expected) throw new Error('Bundle does not match task commit');
+    try {
+      const existing = execFileSync('git', [...args, 'rev-parse', '--verify', ref], { env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+      if (existing !== head) throw new Error('Review ref already exists with different content');
+      return { ref, commit: head };
+    } catch (error) { if (error.message === 'Review ref already exists with different content') throw error; }
+    execFileSync('git', [...args, 'fetch', '--no-tags', '--no-write-fetch-head', target, `${exportRef}:${ref}`], { env: gitEnv, timeout: 15000, stdio: 'pipe' });
+    return { ref, commit: head };
+  }
   async export({ conversation_id, run_id, grant_id, policy_digest }) {
     if (this.active) throw new Error('Export requires an idle host');
     this.active = { exporting: true, grant_id };
@@ -375,28 +495,7 @@ export class DevelopmentSessions {
     try { await sandboxExecute(config.policy, 'bash', { command: `git -c core.hooksPath=/dev/null update-ref ${exportRef} ${receipt.commit} && git -c core.hooksPath=/dev/null bundle create ${filename} ${exportRef}` }, { signal: controller.signal }); }
     finally { clearTimeout(timer); }
     if (!(await this.lease(leaseArgs)).authorized) throw new Error('Export revoked before import');
-    const candidate = fs.realpathSync(path.join(config.policy.workspace, filename));
-    if (!candidate.startsWith(config.policy.workspace + path.sep)) throw new Error('Invalid export path');
-    const fd = fs.openSync(candidate, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    const target = path.join(this.state, 'quarantine', run_id + '.bundle');
-    try {
-      const stat = fs.fstatSync(fd);
-      if (!stat.isFile() || stat.size > 64 * 1024 ** 2) throw new Error('Export exceeds 64 MiB limit');
-      if (!fs.existsSync(target)) fs.writeFileSync(target, fs.readFileSync(fd), { mode: 0o400, flag: 'wx' });
-    } finally { fs.closeSync(fd); }
-    const args = ['-c', 'core.hooksPath=/dev/null', '-c', 'protocol.file.allow=always', '--git-dir', this.repository];
-    const ref = `refs/heads/review/${conversation_id}/${run_id}`;
-    // No plus/force: existing review refs cannot be replaced. No checkout or hooks.
-    execFileSync('git', [...args, 'bundle', 'verify', target], { env: gitEnv, stdio: 'pipe' });
-    const head = execFileSync('git', [...args, 'bundle', 'list-heads', target, exportRef], { env: gitEnv, timeout: 15000, encoding: 'utf8' }).split(' ')[0];
-    if (head !== receipt.commit) throw new Error('Bundle does not match task commit');
-    try {
-      const existing = execFileSync('git', [...args, 'rev-parse', '--verify', ref], { env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-      if (existing !== head) throw new Error('Review ref already exists with different content');
-      return { ref, commit: head };
-    } catch (error) { if (error.message === 'Review ref already exists with different content') throw error; }
-    execFileSync('git', [...args, 'fetch', '--no-tags', '--no-write-fetch-head', target, `${exportRef}:${ref}`], { env: gitEnv, timeout: 15000, stdio: 'pipe' });
-    return { ref, commit: head };
+    return this.importBundle({ workspace: config.policy.workspace, filename, id: run_id, exportRef, ref: `refs/heads/review/${conversation_id}/${run_id}`, expected: receipt.commit });
     } finally {
       this.active = null;
       try { await this.lease({ grant_id, process_session: this.processSession, policy_digest, execution_state: 'stopped' }); } catch {}

@@ -87,7 +87,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
       serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.3.0' },
       instructions: env.RELAY_TOKEN || dokEnabled(env)
-        ? 'Agents Hub runs the user\u2019s own Pi agents. They run on dok, the user\u2019s always-on Linux runner, so the Mac does not need to be online. For questions about the user\u2019s repositories (where something is, how it works) call start_run with a read-only agent such as helper, then poll get_run. Prefer this over delegating to Codex cloud tasks or driving the user\u2019s Mac. For workflow development (changes) on dok-dev, call request_development to show a session approval card; wait for the user click, check get_development, then call start_development_task. Ratings and reviews are user clicks in the panel, never model decisions.'
+        ? 'Agents Hub runs the user\u2019s own Pi agents. They run on dok, the user\u2019s always-on Linux runner, so the Mac does not need to be online. For questions about the user\u2019s repositories (where something is, how it works) call start_run with a read-only agent such as helper. For coding work call start_run with an agent that changes files (workflow for dev-workflow, videotor for Videotor): it works in an isolated clone on dok and returns a review branch (review_ref in get_run) that the user fetches with git fetch dok; nothing is merged. Pass continue_from (the previous run id) for a follow-up. Poll get_run for results. Prefer start_run over delegating to Codex cloud tasks or driving the user\u2019s Mac. request_development (approval card, then start_development_task) is the older interactive route for workflow. Ratings and reviews are user clicks in the panel, never model decisions.'
         : 'Read-only Agents Hub view of the user’s local agents and runs. Check get_status for freshness; run is explicitly unavailable.' });
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: [...(env.RELAY_TOKEN || dokEnabled(env) ? [
@@ -112,9 +112,6 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
       }
       if ((env.RELAY_TOKEN || dokEnabled(env)) && RELAY_OPS[params?.name]) {
         try {
-          if (params.name === 'start_run' && params.arguments?.agent === 'workflow') {
-            throw new Error('start_run targets the Mac and cannot approve workflow development. Call request_development with a unique request_id to display the dok-dev approval card; after the user approves, use start_development_task. If those tools are missing, refresh the Agents Hub connection or open Agents Hub > Development. No task was started.');
-          }
           const args = params.arguments ?? {};
           const result = params.name === 'start_run' ? await startRun(env, args)
             : params.name === 'get_remote_run' ? await getRun(env, args.run_id)
@@ -153,7 +150,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           value.relay = await relayStatus(env);
           value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env) });
           // Callers decide from this summary whether start_run works; the Mac relay is only one possible runner.
-          const dok = value.runners.dok, dokAgents = dok.online ? dok.agents.filter((a) => a !== 'workflow') : [];
+          const dok = value.runners.dok, dokAgents = dok.online ? dok.agents : [];
           const macAgents = value.relay.online && value.relay.enabled ? value.relay.agents : [];
           value.start_run = dokAgents.length || macAgents.length
             ? { available: true, runners: { ...(dokAgents.length ? { dok: dokAgents } : {}), ...(macAgents.length ? { mac: macAgents } : {}) },

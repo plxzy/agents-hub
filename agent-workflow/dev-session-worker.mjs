@@ -32,13 +32,20 @@ export function errorClass(message = '') {
 const FACTORIES = { read: 'createReadTool', grep: 'createGrepTool', find: 'createFindTool', ls: 'createLsTool',
   write: 'createWriteTool', edit: 'createEditTool', bash: 'createBashTool' };
 const READ_ONLY = ['read', 'grep', 'find', 'ls'];
-// Development sessions get every tool; one-shot runs get exactly the reviewed agent's tools (read-only for now).
+// Development sessions get every tool; one-shot runs get exactly the reviewed agent's tools (read-only unless config.writable).
 export function sessionTools(config) {
   if (config.mode !== 'run') return Object.keys(FACTORIES);
-  const tools = config.tools ?? [];
-  if (!Array.isArray(tools) || tools.some(t => !READ_ONLY.includes(t))) throw new Error('Run tools must be read-only');
+  const tools = config.tools ?? [], allowed = config.writable ? Object.keys(FACTORIES) : READ_ONLY;
+  if (!Array.isArray(tools) || tools.some(t => !allowed.includes(t))) throw new Error(config.writable ? 'Unknown run tool' : 'Run tools must be read-only');
   return [...new Set(tools)];
 }
+export function runPreface(config, runtime) {
+  const where = config.writable
+    ? `Your tools run in an isolated Linux sandbox with no network over a writable clone of ${config.manifest.project} at commit ${config.manifest.commit}; changes are exported afterwards as a review branch.`
+    : `Your tools run in an isolated read-only Linux sandbox over a fresh clone of ${config.manifest.project} at commit ${config.manifest.commit}; there is no shell and you cannot change files.`;
+  return `Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are the ${config.manifest.agent} agent, started remotely through Agents Hub on dok. ${where}`;
+}
+const WRITING = ['write', 'edit', 'bash'];
 const sum = (a, b) => (Number.isFinite(a) ? a : 0) + (Number.isFinite(b) ? b : 0);
 
 export async function executeSession(config, task) {
@@ -92,7 +99,7 @@ export async function executeSession(config, task) {
       implementation_revision: config.manifest.implementation_revision, policy_digest: config.manifest.policy_digest };
     process.send?.({ type: 'runtime', runtime });
     const preface = run
-      ? `Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are the ${config.manifest.agent} agent, started remotely through Agents Hub on dok. Your tools run in an isolated read-only Linux sandbox over a fresh clone of ${config.manifest.project} at commit ${config.manifest.commit}; there is no shell and you cannot change files.`
+      ? runPreface(config, runtime)
       : `Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are already the Pi workflow agent. The shell is an isolated Linux tool sandbox; host launchers and credentials are intentionally hidden. Use session_runtime to read this identity.`;
     await session.prompt(`${preface}\n\n${task}`);
     if (failed) throw Object.assign(new Error('Model turn failed'), { detail: typeof failed === 'string' ? failed : undefined, partial: { output, tool_calls: calls, usage, model_calls: models } });
@@ -150,10 +157,12 @@ export async function executeRun(config, task) {
       description: 'Read trusted Pi session identity, actual provider/model/thinking and executor. This does not launch another agent.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
       execute: async () => ({ content: [{ type: 'text', text: JSON.stringify(runtime) }], details: runtime }) });
-    // Every attempt is a fresh read-only session: no conversation state crosses accounts.
-    const sessions = path.join(config.sessions, slot);
+    // Every attempt is a fresh session unless continuing: no conversation state crosses accounts.
+    const sessions = path.join(config.sessions, slot), sessionId = config.conversation_id + '-' + slot;
     fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
-    const sessionManager = sdk.SessionManager.create(config.policy.workspace, sessions, { id: config.conversation_id + '-' + slot });
+    const earlier = config.resume ? sdk.SessionManager.findById(config.policy.workspace, sessionId, sessions) : null;
+    const sessionManager = earlier ? sdk.SessionManager.open(earlier, sessions, config.policy.workspace)
+      : sdk.SessionManager.create(config.policy.workspace, sessions, { id: sessionId });
     const { session } = await sdk.createAgentSession({ cwd: config.policy.workspace, agentDir: config.agentDir,
       modelRuntime, model, thinkingLevel: expected.thinking, noTools: 'builtin', tools: [...names, 'session_runtime'], customTools,
       resourceLoader: trustedLoader(sdk, config.prompt), sessionManager,
@@ -178,15 +187,20 @@ export async function executeRun(config, task) {
       runtime = { ...observedRuntime(session, piVersion, expected), host: config.manifest.host,
         implementation_revision: config.manifest.implementation_revision, policy_digest: config.manifest.policy_digest };
       process.send?.({ type: 'runtime', runtime });
-      await session.prompt(`Trusted harness runtime (not shell discovery): ${JSON.stringify(runtime)}\nYou are the ${config.manifest.agent} agent, started remotely through Agents Hub on dok. Your tools run in an isolated read-only Linux sandbox over a fresh clone of ${config.manifest.project} at commit ${config.manifest.commit}; there is no shell and you cannot change files.\n\n${task}`);
+      await session.prompt(`${runPreface(config, runtime)}\n\n${task}`);
       if (!failed) {
         observedRuntime(session, piVersion, expected);
         return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id, runtime, usage, model_calls: models, slots_used: used };
       }
       const kind = limitKind(failed);
       if (!kind) throw Object.assign(new Error('Model turn failed'), { detail: failed });
-      // Read-only runs are safe to restart; tell the supervisor so every runner skips this account.
+      // Tell the supervisor so every runner skips this account.
       process.send?.({ type: 'account', slot, kind });
+      // Read-only runs are safe to restart elsewhere. A run that may have changed files is not: a new session
+      // would meet a half-edited tree.
+      if (config.writable && calls.some(c => WRITING.includes(c))) {
+        throw Object.assign(new Error(kind), { detail: failed, partial: { output: '', tool_calls: calls, usage, model_calls: models, slots_used: used } });
+      }
       output = '';
     } finally { unsubscribe(); process.removeListener('SIGTERM', abort); session.dispose(); }
   }

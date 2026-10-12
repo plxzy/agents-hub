@@ -28,6 +28,12 @@ test('one-shot runs get exactly the reviewed read-only tools; development keeps 
   assert.throws(() => sessionTools({ mode: 'run', tools: ['read', 'bash'] }), /read-only/);
   assert.throws(() => sessionTools({ mode: 'run', tools: ['write'] }), /read-only/);
   assert.equal(sessionTools({}).length, 7);
+  assert.deepEqual(sessionTools({ mode: 'run', writable: true, tools: ['read', 'bash', 'edit', 'write'] }), ['read', 'bash', 'edit', 'write']);
+  assert.throws(() => sessionTools({ mode: 'run', writable: true, tools: ['curl'] }), /Unknown run tool/);
+  const { runPreface } = await import('./dev-session-worker.mjs');
+  const manifest = { agent: 'workflow', project: 'dev-workflow', commit: 'c'.repeat(40) };
+  assert.match(runPreface({ writable: true, manifest }, {}), /no network.*writable clone.*review branch/s);
+  assert.match(runPreface({ manifest }, {}), /read-only Linux sandbox.*cannot change files/s);
   assert.equal(errorClass('You have hit your ChatGPT usage limit'), 'usage limit reached');
   assert.equal(errorClass('403 subscription_sharing_user_not_eligible'), 'account not eligible');
   assert.equal(errorClass('subscription_sharing_usage_limit_exceeded'), 'usage limit reached');
