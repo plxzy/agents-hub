@@ -55,10 +55,23 @@ const hub = async (route, init = {}) => {
 };
 const accounts = { get: async () => (await hub('/relay/dok-dev/accounts')).accounts,
   post: value => hub('/relay/dok-dev/accounts', { method: 'POST', body: JSON.stringify(value) }) };
-// Accepted memory for an agent's scopes, from the Hub; the runner holds no memory of its own.
-const bundle = async scopes => hub('/relay/dok-dev/bundle?scopes=' + encodeURIComponent(scopes.join(',')));
+// Definitions, skills and accepted memory come from the Hub per run. At boot the published agent list is written
+// to a folder so the runnable set follows the Hub; if the Hub is unreachable the frozen release is used.
+const knowledgeHub = async name => hub('/relay/dok-dev/knowledge?agent=' + encodeURIComponent(name));
+let hubAgents = null;
+try {
+  const published = await hub('/relay/dok-dev/knowledge');
+  const dir = path.join(config.state, 'hub-knowledge');
+  fs.rmSync(dir, { recursive: true, force: true }); fs.mkdirSync(path.join(dir, 'agents'), { recursive: true, mode: 0o700 });
+  let count = 0;
+  for (const [name, text] of Object.entries(published.files ?? {})) {
+    if (!/^agents\/[a-z0-9][a-z0-9_-]{0,63}\.md$/.test(name) || typeof text !== 'string') continue;
+    fs.writeFileSync(path.join(dir, name), text, { mode: 0o600 }); count++;
+  }
+  if (count) hubAgents = dir;
+} catch { /* frozen release */ }
 const processSession = randomUUID();
-const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts, bundle });
+const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts, knowledgeHub, hub_agents: hubAgents });
 // The knowledge release is frozen, so the runnable list is computed once per supervisor boot.
 const agents = [...new Set(['workflow', ...sessions.runnable().map(a => a.name)])];
 const started = identity(process.pid);

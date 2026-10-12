@@ -24,15 +24,16 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
     format: 'esm', external: ['cloudflare:workers'], platform: 'browser', loader: { '.html': 'text' } });
   const mf = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: 'hub-test', modules: true, script: bundle.outputFiles[0].text,
     compatibilityDate: '2026-10-01', d1Databases: ['DB'], durableObjects: { RELAY: { className: 'AgentRelay', useSQLite: true } },
-    bindings: { DOK_RELAY_TOKEN: DOK, DEVELOPMENT_ENABLED: 'true' } }] }));
+    bindings: { DOK_RELAY_TOKEN: DOK, MAC_TOKEN: 'mac-secret-token', DEVELOPMENT_ENABLED: 'true' } }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB');
-  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql', '0005_decisions.sql', '0006_memory.sql']) {
+  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql', '0005_decisions.sql', '0006_memory.sql', '0007_knowledge.sql']) {
     for (const sql of fs.readFileSync(new URL(`../migrations/${file}`, import.meta.url), 'utf8').replace(/--.*$/gm, '').split(';').map((x) => x.trim()).filter(Boolean)) await db.prepare(sql).run();
   }
   const tool = async (name, args = {}) => (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST',
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) })).json()).result;
   const post = (body, token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/runs', { method: 'POST', headers: { authorization: 'Bearer ' + token }, body: JSON.stringify(body) });
+  const dokGet = (route, token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/' + route, { headers: { authorization: 'Bearer ' + token } });
 
   const listed = (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST', body: JSON.stringify({ id: 1, method: 'tools/list' }) })).json()).result.tools.map((x) => x.name);
   assert.ok(listed.includes('start_run') && listed.includes('get_remote_run')); assert.ok(listed.includes('panel_data') && listed.includes('rate_run') && listed.includes('review_decide'));
@@ -85,6 +86,22 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.equal(JSON.parse((await tool('list_runs')).content[0].text).runs.find((r) => r.run_id === RUN).feedback, 'good');
   assert.equal(JSON.parse((await tool('panel_data')).content[0].text).runs.find((r) => r.run_id === RUN).feedback, 'good');
   assert.equal((await tool('rate_run', { run_id: 'r-20261012T120000Z-ffffff', rating: 'good', request_id: 'rate-request-2', confirm: 'y'.repeat(24) })).isError, true); // unknown run: no Mac, no rating
+  // The Mac is its own principal: it posts receipts (chat/eval kinds, blocked counts), reads bundle, pending and decisions.
+  const mac = (route, init = {}, token = 'mac-secret-token') => mf.dispatchFetch('https://test/relay/mac/' + route, { ...init, headers: { authorization: 'Bearer ' + token } });
+  const CHAT = 'c-20261012T130000Z-abcdef';
+  const chat = { run_id: CHAT, agent: 'workflow', kind: 'chat', status: 'completed', started: '2026-10-12T13:00:00.000Z', task: 'Talk', blocked: [{ x: 1 }, { x: 2 }], commands: ['rm -rf /'], workspace: '/Users/x', output: 'ok' };
+  assert.equal((await mac('runs', { method: 'POST', body: JSON.stringify(chat) })).status, 200);
+  assert.equal((await mac('runs', { method: 'POST', body: JSON.stringify(chat) }, 'wrong')).status, 401);
+  assert.equal((await mac('runs', { method: 'POST', body: JSON.stringify(chat) }, DOK)).status, 401); // the dok token is not the Mac's
+  assert.equal((await post(chat, 'mac-secret-token')).status, 401); // and the Mac token does not reach dok routes
+  const macRun = JSON.parse((await tool('get_run', { run_id: CHAT })).content[0].text);
+  assert.equal(macRun.kind, 'chat'); assert.equal(macRun.runner, 'mac'); assert.equal(macRun.blocked, 2); assert.equal(macRun.commands, undefined); assert.equal(macRun.workspace, undefined);
+  assert.equal((await mac('bundle?scopes=shared')).status, 200);
+  assert.ok(Array.isArray((await (await mac('pending')).json()).pending));
+  const dec = await (await mac('decisions?since=2000-01-01T00:00:00Z')).json();
+  assert.ok(Array.isArray(dec.notes) && dec.ratings.some((r) => r.run_id === RUN && r.rating === 'good'));
+  assert.equal((await mac('decisions', { method: 'POST', body: '{}' })).status, 404); // the Mac token cannot decide or rate
+  assert.equal((await mac('rate', { method: 'POST', body: '{}' })).status, 404);
   const counts = JSON.parse((await tool('get_status')).content[0].text);
 
   // Memory: a note proposed in a receipt waits in the panel; only a click (one-time code) decides it.
@@ -102,6 +119,30 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.match((await decide({ confirm: review[noteId] })).content[0].text, /needs a click/);
   assert.equal(JSON.parse((await tool('panel_data')).content[0].text).pending.length, 0);
   assert.equal(JSON.parse((await tool('get_status')).content[0].text).pending.memory, 0);
+
+  // Definitions, skills and evals are published from git by the Mac; runners read bundles; list_agents follows the published set.
+  const REV = 'a'.repeat(40), REV2 = 'b'.repeat(40);
+  const push = (body, token = 'mac-secret-token') => mac('knowledge', { method: 'POST', body: JSON.stringify(body) }, token);
+  const files = { 'agents/helper.md': '---\nname: helper\ndescription: Answers questions.\nmodel: openai/gpt-6-luna\ntools: read, grep\nskills: demo\nmemory_scopes: shared, agent:helper\n---\nBe brief.\n',
+    'agent-skills/demo/SKILL.md': '# Demo skill\n', 'evals/helper/e-1.md': 'question' };
+  assert.equal((await push({ revision: REV, base: null, files }, 'wrong')).status, 401);
+  for (const bad of [{ 'agents/../x.md': 'x' }, { 'memory/shared/m.md': 'x' }, { 'agents/helper.md': 'token sk-abcdefghijklmnopqrstuvwxyz0123' }]) assert.equal((await push({ revision: REV, base: null, files: bad })).status, 400);
+  const pushed = await (await push({ revision: REV, base: null, files })).json();
+  assert.deepEqual([pushed.ok, pushed.files, pushed.removed], [true, 3, 0]);
+  assert.equal((await (await mac('knowledge')).json()).revision, REV);
+  const refused = await push({ revision: REV2, base: 'c'.repeat(40), files }); // not built on what the Hub holds
+  assert.equal(refused.status, 400); assert.match((await refused.json()).error, /The Hub holds/);
+  assert.equal((await push({ revision: REV2, base: REV, files: { 'agents/helper.md': files['agents/helper.md'] } })).status, 200); // drops the skill and eval
+  assert.deepEqual(Object.keys((await (await dokGet('knowledge')).json()).files), ['agents/helper.md']);
+  await push({ revision: REV, base: REV2, files });
+  const kb = await (await dokGet('knowledge?agent=helper')).json();
+  assert.deepEqual(Object.keys(kb.files).sort(), ['agent-skills/demo/SKILL.md', 'agents/helper.md']); assert.equal(kb.revision, REV);
+  assert.deepEqual(kb.memory.map((m) => m.body), ['Use git fetch dok to read review branches.']); assert.match(kb.hash, /^[a-f0-9]{16}$/);
+  assert.equal((await dokGet('knowledge?agent=nope')).status, 404);
+  assert.equal((await dokGet('knowledge', 'wrong')).status, 401);
+  const listed2 = JSON.parse((await tool('list_agents')).content[0].text);
+  assert.deepEqual(listed2.agents.map((a) => [a.name, a.tools]), [['helper', ['read', 'grep']]]);
+  assert.equal(listed2.agents[0].last_run.run_id !== undefined, true);
   // The runner's bundle: accepted notes for its scopes plus a content hash; the runner token only.
   const getBundle = (scopes, token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/bundle?scopes=' + scopes, { headers: { authorization: 'Bearer ' + token } });
   const b = await (await getBundle('shared,agent:helper')).json();

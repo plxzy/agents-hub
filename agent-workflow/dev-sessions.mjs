@@ -32,14 +32,16 @@ const ALL_TOOLS = [...READ_ONLY, 'write', 'edit', 'bash'];
 export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 
 export class DevelopmentSessions {
-  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, bundle, accounts_module = null, limits = {} }) {
+  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, knowledgeHub, hub_agents = null, accounts_module = null, limits = {} }) {
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
     this.repos = { [path.basename(this.repository).replace(/\.git$/, '')]: this.repository,
       ...Object.fromEntries(Object.entries(repositories).map(([name, dir]) => [name, fs.realpathSync(dir)])) };
     this.context = context ? fs.realpathSync(context) : null;
     this.revision = revision; this.processSession = processSession; this.lease = lease; this.reporter = report;
-    this.accounts = accounts; this.accountsModule = accounts_module; this.bundle = bundle;
+    this.accounts = accounts; this.accountsModule = accounts_module; this.knowledgeHub = knowledgeHub;
+    // Agent definitions published to the Hub (a folder with agents/*.md written at boot); the frozen release is the fallback.
+    this.hubAgents = hub_agents ? fs.realpathSync(hub_agents) : null;
     const knowledgeManifest = read(path.join(this.knowledge, 'RELEASE.json'));
     for (const [name, expected] of Object.entries(knowledgeManifest.files)) {
       const file = fs.realpathSync(path.join(this.knowledge, name));
@@ -220,7 +222,7 @@ export class DevelopmentSessions {
   // sandbox as development sessions; their result leaves only as an append-only review ref, never merged.
   project() { return path.basename(this.repository).replace(/\.git$/, ''); }
   runnable() {
-    return loadAgents(this.knowledge).filter(a => a.tools.length && a.tools.every(t => ALL_TOOLS.includes(t))
+    return loadAgents(this.hubAgents ?? this.knowledge).filter(a => a.tools.length && a.tools.every(t => ALL_TOOLS.includes(t))
       && (a.workspace === 'here' || this.repos[path.basename(a.workspace)]));
   }
   isWrite(agent) { return agent.tools.some(t => !READ_ONLY.includes(t)); }
@@ -285,7 +287,8 @@ export class DevelopmentSessions {
     const { root: _root, ...visible } = receipt;
     return visible;
   }
-  async executeRun(agent, runtime, receipt, previous) {
+  async executeRun(bootAgent, runtime, receipt, previous) {
+    let agent = bootAgent;
     const { write, repo, root } = receipt, repository = this.repos[repo];
     const base = path.join(this.state, 'run-work', root), workspace = path.join(base, 'workspace');
     const file = path.join(this.state, 'agent-runs', receipt.run_id + '.json');
@@ -325,22 +328,34 @@ export class DevelopmentSessions {
       await sandboxExecute(checkout, 'bash', { command: write ? `git -c core.hooksPath=/dev/null checkout -q -b agent-run origin/${branch}` : 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
       // Read before the agent can touch the checkout; later git calls on it run only inside the sandbox.
       baseCommit = commit = execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
+      // The Hub holds the agent's definition, skills and accepted memory. Files go to a folder outside the workspace
+      // (skills are mounted read-only from there); the frozen release is only the fallback when the Hub is unreachable.
+      let memory, kb = null;
+      try { kb = this.knowledgeHub ? await this.knowledgeHub(agent.name) : null; } catch { /* fall back below */ }
+      if (kb && kb.files && Array.isArray(kb.memory)) {
+        const dir = path.join(base, 'kb');
+        fs.rmSync(dir, { recursive: true, force: true });
+        for (const [name, content] of Object.entries(kb.files)) {
+          if (typeof content !== 'string' || /(^|\/)\.\.(\/|$)|^\//.test(name) || !/^(agents|agent-skills)\//.test(name)) continue;
+          const dest = path.join(dir, name);
+          fs.mkdirSync(path.dirname(dest), { recursive: true, mode: 0o700 }); fs.writeFileSync(dest, content, { mode: 0o600 });
+        }
+        const live = loadAgents(dir).find(a => a.name === agent.name);
+        if (!live) throw new Error('Hub definition unreadable');
+        if (this.isWrite(live) !== write) throw new Error('Agent definition changed; restart the runner');
+        agent = { ...live, workspace: bootAgent.workspace };
+        memory = kb.memory.map(m => ({ meta: { id: m.id, scope: m.scope, status: 'accepted' }, body: m.body }));
+        receipt.memory_source = 'hub'; receipt.memory_hash = kb.hash; receipt.agent_version = live.version;
+      } else {
+        memory = loadMemory(agent.memory, this.knowledge);
+        receipt.memory_source = 'frozen-release';
+      }
       const policy = write ? linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], context: this.context }, this.state)
         : linuxPolicy({ ...agent, workspace, protectPaths: [], context: this.context }, this.state, { readOnly: true });
       const skills = agent.skills === 'none' ? [] : agent.skills;
       const boundary = write
         ? `You run on dok, the always-on Linux runner, in a writable clone of ${repo} (${branch} at ${commit.slice(0, 12)}). Your shell has no network and cannot see credentials or other runs. Do not commit: when you stop, your changes are committed and exported as a review branch for the user, never merged automatically. Mac paths in notes describe the Mac; tools that exist only on macOS are unavailable here.`
         : `You run on dok, the always-on Linux runner, over a read-only clone of ${repo} (${branch} at ${commit.slice(0, 12)}). Mac paths in notes describe the Mac; files outside this clone are not available.`;
-      // Memory comes from the Hub's accepted notes; the frozen release is only the fallback when the Hub is unreachable.
-      let memory, memoryHash;
-      try {
-        const fetched = this.bundle ? await this.bundle(agent.memory) : null;
-        if (fetched && Array.isArray(fetched.memory)) {
-          memory = fetched.memory.map(m => ({ meta: { id: m.id, scope: m.scope, status: 'accepted' }, body: m.body })); memoryHash = fetched.hash;
-        }
-      } catch { /* fall back below */ }
-      memory ??= loadMemory(agent.memory, this.knowledge);
-      receipt.memory_source = memoryHash ? 'hub' : 'frozen-release'; if (memoryHash) receipt.memory_hash = memoryHash;
       const prompt = buildSystemPrompt({ ...agent, workspace }, memory)
         + (skills.length ? '\n\n' + skills.map(dir => fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).join('\n\n') : '')
         + `\n\n## Current host boundary (dok)\n${boundary}`;

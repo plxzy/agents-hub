@@ -4,7 +4,8 @@ import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
 import { ratingsFor } from './decisions.mjs';
 import { proposeMemory } from './memory.mjs';
 
-export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
+// r-… task runs and evals, c-… chats
+export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 const STATUS = ['running', 'completed', 'failed', 'interrupted'];
 const KEEP = 1000;
 const iso = (v) => typeof v === 'string' && v.length <= 40 && !Number.isNaN(Date.parse(v)) ? v : undefined;
@@ -26,10 +27,11 @@ export function sanitizeReceipt(r, runner) {
   const usage = r.usage && typeof r.usage === 'object' ? Object.fromEntries(['input', 'output', 'totalTokens', 'cost']
     .map((k) => [k, num(r.usage[k])]).filter(([, v]) => v !== undefined)) : undefined;
   const out = {
-    run_id: r.run_id, agent: r.agent, kind: 'task', runner, status: r.status,
+    run_id: r.run_id, agent: r.agent, kind: ['task', 'chat', 'eval'].includes(r.kind) ? r.kind : 'task', runner, status: r.status,
     title: redactLines(titleOf(r.task ?? r.title ?? ''), 200), task: redactLines(r.task, 16000),
     started: iso(r.started), ended: iso(r.ended), model: short(r.model, 100), thinking: short(r.thinking, 20),
     agent_version: short(r.agent_version, 40), commit: /^[a-f0-9]{40,64}$/.test(r.commit ?? '') ? r.commit : undefined,
+    blocked: Array.isArray(r.blocked) ? Math.min(r.blocked.length, 1000) : Number.isInteger(r.blocked) && r.blocked >= 0 ? Math.min(r.blocked, 1000) : undefined,
     tool_calls: Array.isArray(r.tool_calls) ? r.tool_calls.filter((t) => /^[a-z_]{1,40}$/.test(t)).slice(0, 500) : undefined,
     model_calls: Number.isInteger(r.model_calls) && r.model_calls >= 0 ? r.model_calls : undefined,
     accounts_used: Array.isArray(r.accounts_used) ? r.accounts_used.filter((x) => /^openai(-[1-9]\d*)?$/.test(x)).slice(0, 10) : undefined,

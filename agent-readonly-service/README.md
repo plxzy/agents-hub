@@ -13,7 +13,7 @@ Live: `https://YOUR-HUB.workers.dev`
 | `POST /mcp` | OAuth 2.1 bearer token | MCP + Agents Hub dashboard resource: `open_dashboard`, `list_agents`, `list_runs`, `get_run`, `get_status`, `resolve_context` |
 | `GET /mcp/v1/agents[/:name]`, `/mcp/v1/runs[/:id]`, `/mcp/v1/context` | OAuth 2.1 bearer token | The same data as REST, beneath the `/mcp` resource |
 | `GET /relay/connect` (WebSocket upgrade) | Separate machine token | Foreground Mac relay transport |
-| `POST /v1/snapshots` | Bearer publish token | Used only by `publisher.mjs`; keeps the newest 20 snapshots |
+| `POST /v1/snapshots` | Bearer publish token | Retired with the publisher; closed by deleting `PUBLISH_TOKEN` |
 
 **What is published** (`src/snapshot.mjs`): agent name, description, model, tools, skill names, guard, workspace (with
 `~`); per run: id, agent, kind, status, a title (first line of the task, at most 120 characters, never the full
@@ -36,10 +36,12 @@ snapshot counts and can observe the existing relay independently. On dashboard r
 is retained while successful live panel data contributes validated journal-backed history and local runtime metadata;
 a live unknown or incomplete history is never inferred from ordinary recent runs.
 
-**Publishing:** `agent` publishes in the background after every run and chat when
-`~/.config/agent-readonly/publish.env` exists (`AGENT_READONLY_ENDPOINT`, `AGENT_PUBLISH_TOKEN`; log in
-`~/.local/state/agent-workflow/publish.log`). By hand: `node publisher.mjs` or `node publisher.mjs --dry-run` to see
-exactly what would be sent. Set `AGENT_PUBLISH=0` to skip.
+**Snapshots are retired (2026-10-12).** `agent` no longer publishes snapshots and `publisher.mjs` is gone; the Hub reads runs,
+ratings, memory notes, agent definitions and counts from D1. `POST /v1/snapshots` and the snapshot readers remain only as a
+fallback for the old data; delete the `PUBLISH_TOKEN` secret to close the endpoint (done after this change), then the
+snapshot code and the `snapshots` table can be removed. The Mac posts receipts and reads memory through its own principal
+(`/relay/mac/*`, secret `MAC_TOKEN`, file `~/.config/agent-readonly/mac.json`), which can post receipts, read bundles, pending
+notes and decisions, and publish committed definitions (`agent sync push`), but cannot rate, decide or start anything.
 
 **Sign-in:** Cloudflare Access is the OAuth server (Managed OAuth on the "Agents Hub MCP" Access application, path
 `/mcp`, owner-only policy): clients get a 401 with Access's metadata, register themselves (redirects limited to

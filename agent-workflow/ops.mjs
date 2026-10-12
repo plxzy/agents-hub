@@ -15,6 +15,7 @@ import {
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
 import { DASHBOARD_URI, READ_OPS, lastRunOf, runBrief } from './contract.mjs';
 import { doctorHealth } from './doctor.mjs';
+import { linkedHub, refreshHubCache, flushOutbox } from './hub.mjs';
 
 export { DASHBOARD_URI };
 const AGENT_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent.mjs');
@@ -200,5 +201,9 @@ export async function callOp(name, args = {}, { ctx = defaultContext(), allow = 
   const op = OPS.find((o) => o.name === name);
   if (!op) throw new Error(`unknown operation ${name}`);
   if (!allow.includes(op.access)) throw new Error(`${name} is not available here (${op.access})`);
+  // Linked to the Hub: bring the review queue up to date (and send any receipts that were waiting) before showing it.
+  if (['open_dashboard', 'get_status', 'list_pending'].includes(name) && ctx.state === STATE && linkedHub()) {
+    await refreshHubCache({ state: ctx.state }); await flushOutbox({ state: ctx.state });
+  }
   return op.run(args ?? {}, ctx);
 }

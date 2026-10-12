@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelGateway } from './model gateway.mjs';
 import { linuxPolicy } from './linux-sandbox.mjs';
+import { linkedHub, sendReceipt, flushOutbox, hubMemory, DECIDE_IN_HUB } from './hub.mjs';
 
 export const ROOT = process.env.AGENT_HOME ?? path.join(os.homedir(), '.agents');
 export const STATE = process.env.AGENT_WORKFLOW_STATE ?? path.join(os.homedir(), '.local/state/agent-workflow');
@@ -395,7 +396,10 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   const agent = remoteSandbox(resolveWorkspace(getAgent(name, root), cwd));
   assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
   if (process.platform === 'linux' && agent.writePaths && spawn === nodeSpawn) agent.linuxPolicy = linuxPolicy(agent, state);
-  const memories = useMemory ? loadMemory(agent.memory, root) : [];
+  // Linked to the Hub (default home and state only): accepted notes come from there, local files are the offline fallback.
+  const hub = state === STATE && root === ROOT && linkedHub();
+  const fetched = useMemory && hub ? await hubMemory(agent.memory) : null;
+  const memories = fetched ? fetched.items : useMemory ? loadMemory(agent.memory, root) : [];
   const runsDir = path.join(state, 'runs');
   // Eval and other non-task runs keep their own sessions, so `--continue` resumes real work only.
   const sessionDir = sessionDirectory(agent, state, kind);
@@ -432,28 +436,20 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
 
   const summary = summarize(events);
   const status = timedOut ? 'unknown' : exitCode === 0 && !summary.error ? 'completed' : 'failed';
-  const candidates = status === 'completed' && proposeMemory ? saveCandidates(extractRemember(summary.output, agent), { agent, runId, root }) : [];
+  const proposals = status === 'completed' && proposeMemory ? extractRemember(summary.output, agent) : [];
+  // Linked: proposals travel with the receipt and wait in the Hub panel; no local candidate file (that would fork the queue).
+  const candidates = hub ? proposals.map(() => 'hub') : proposals.length ? saveCandidates(proposals, { agent, runId, root }) : [];
   const receipt = {
     run_id: runId, agent: agent.name, kind, agent_version: agent.version, status, task, resumed: resume, memory_enabled: useMemory,
     workspace: agent.workspace, tools: agent.tools, started, ended: new Date().toISOString(),
     memory_supplied: memories.map((m) => m.meta.id), memory_proposed: candidates,
+    ...(hub && useMemory ? { memory_source: fetched ? 'hub' : 'local-fallback', ...(fetched ? { memory_hash: fetched.hash } : {}) } : {}),
     exit_code: exitCode, ...summary, raw_events: rawFile,
   };
   fs.writeFileSync(path.join(runsDir, `${runId}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
   fs.rmSync(marker, { force: true });
-  publishInBackground({ state });
+  if (hub) { await flushOutbox({ state }); await sendReceipt(receipt, { state, proposals }); }
   return receipt;
-}
-
-// Keeps the hosted read-only view (agent-readonly-service) current: after each run or chat, publish a sanitized
-// snapshot in the background when ~/.config/agent-readonly/publish.env exists. Never blocks or fails a run.
-const PUBLISHER = path.join(path.dirname(fileURLToPath(import.meta.url)), '../agent-readonly-service/publisher.mjs');
-export const PUBLISH_CONFIG = path.join(os.homedir(), '.config/agent-readonly/publish.env');
-export function publishInBackground({ state = STATE, spawn = nodeSpawn, config = PUBLISH_CONFIG } = {}) {
-  if (state !== STATE || process.env.AGENT_PUBLISH === '0' || !fs.existsSync(config) || !fs.existsSync(PUBLISHER)) return false;
-  const log = fs.openSync(path.join(state, 'publish.log'), 'a', 0o600);
-  spawn(process.execPath, [PUBLISHER], { detached: true, stdio: ['ignore', log, log] }).unref();
-  return true;
 }
 
 /** Opens an interactive Pi session as the agent (same prompt, tools, memory and session folder). */
@@ -526,6 +522,8 @@ export function listRuns(state = STATE, { running = false } = {}) {
 
 const USAGE = `usage:
   agent list
+  agent sync pull                    mirror the Agents Hub's decisions (memory notes, ratings) into ~/.agents
+  agent sync push                    publish committed agents, skills and evals from ~/.agents to the Hub
   agent run <agent> [--continue] [--no-memory] <task...>
   agent chat <agent> [--continue]    interactive Pi session as that agent
   agent runs [n]                      recent run receipts
@@ -582,7 +580,8 @@ async function main(argv) {
     const agent = resolveWorkspace(getAgent(name));
     assertSandboxAllowed(agent, `agent chat ${name}${resume ? ' --continue' : ''}`);
     if (process.platform === 'linux' && agent.writePaths) agent.linuxPolicy = linuxPolicy(agent, STATE);
-    const memories = loadMemory(agent.memory);
+    const hubOn = linkedHub(), fetchedChat = hubOn ? await hubMemory(agent.memory) : null;
+    const memories = fetchedChat ? fetchedChat.items : loadMemory(agent.memory);
     const sessionDir = sessionDirectory(agent);
     fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     console.log(`${agent.name}: ${memories.length} reviewed note(s) loaded; tools=${agent.tools.join(',') || 'none'}; cwd=${agent.workspace}`);
@@ -600,12 +599,14 @@ async function main(argv) {
       if (fs.statSync(file).mtimeMs < startedAt) continue;
       const receipt = receiptFromSession(fs.readFileSync(file, 'utf8'), { agent, memories, file });
       if (!receipt) continue;
-      receipt.memory_proposed = fs.existsSync(path.join(ROOT, 'RELEASE.json')) ? []
-        : saveCandidates(extractRemember(receipt.all_text, agent), { agent, runId: receipt.run_id });
+      const chatProposals = fs.existsSync(path.join(ROOT, 'RELEASE.json')) ? [] : extractRemember(receipt.all_text, agent);
+      receipt.memory_proposed = hubOn ? chatProposals.map(() => 'hub')
+        : chatProposals.length ? saveCandidates(chatProposals, { agent, runId: receipt.run_id }) : [];
+      if (hubOn) { receipt.memory_source = fetchedChat ? 'hub' : 'local-fallback'; if (fetchedChat) receipt.memory_hash = fetchedChat.hash; }
       delete receipt.all_text;
       fs.writeFileSync(path.join(runsDir, `${receipt.run_id}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
-      publishInBackground();
-      console.log(`\nsaved chat as ${receipt.run_id} (${receipt.turns} message(s), $${receipt.usage.cost.toFixed(4)})${receipt.memory_proposed.length ? `, ${receipt.memory_proposed.length} memory proposal(s)` : ''}. Rate it: agent feedback last good|bad "why"`);
+      if (hubOn) { await flushOutbox({ state: STATE }); await sendReceipt(receipt, { state: STATE, proposals: chatProposals }); }
+      console.log(`\nsaved chat as ${receipt.run_id} (${receipt.turns} message(s), $${receipt.usage.cost.toFixed(4)})${receipt.memory_proposed.length ? `, ${receipt.memory_proposed.length} memory proposal(s)` : ''}. ${hubOn ? 'Rate it in the Agents Hub panel.' : 'Rate it: agent feedback last good|bad "why"'}`);
     }
   } else if (cmd === 'runs') {
     for (const r of listRuns().slice(-(Number(args[0]) || 10))) {
@@ -619,6 +620,7 @@ async function main(argv) {
   } else if (cmd === 'memory') {
     const [sub, id, ...rest] = args;
     if (sub && fs.existsSync(path.join(ROOT, 'RELEASE.json'))) throw new Error('Reviewed release is read-only; review memory in its owning repository and install a new knowledge release');
+    if (['accept', 'reject', 'add'].includes(sub) && linkedHub()) throw new Error(DECIDE_IN_HUB);
     if (!sub) {
       console.log(formatCandidateList(listCandidates()));
     } else if (sub === 'accept') {
@@ -634,6 +636,8 @@ async function main(argv) {
       console.log(path.relative(ROOT, dest));
       commitHome(`Reject memory ${path.basename(dest, '.md')}`);
     } else throw new Error(USAGE);
+  } else if (cmd === 'sync') {
+    await (await import('./sync.mjs')).cli(args);
   } else if (cmd === 'mcp') {
     (await import('./mcp.mjs')).serveStdio();
   } else if (cmd === 'call') {

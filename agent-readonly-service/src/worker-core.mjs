@@ -5,6 +5,7 @@ import { relayFetch, relayStatus, requestRelay, startRun, getRun, dokEnabled, do
 import { readRun, recentRuns, mergeRuns } from './runs.mjs';
 import { readAccounts } from './accounts.mjs';
 import { issueCodes, redeemCode, rateRun } from './decisions.mjs';
+import { agentSummaries } from './knowledge.mjs';
 import { pendingMemory, pendingCounts, isMemory, decideMemory } from './memory.mjs';
 import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
@@ -82,6 +83,8 @@ async function nativePanel(env) {
   const snap = await latest(env), m = snap ? meta(snap, env) : null, hubRuns = await recentRuns(env, { limit: 50 }), dok = await dokStatus(env);
   const base = snap ? snapshotData(snap, m) : { generated_at: null, capabilities: CAPABILITIES, status: { agents: null, runs: null, running: null, pending: null, last_run: null },
     agents: [], runs: [], pending: null, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
+  const published = await agentSummaries(env);
+  if (published.length) base.agents = published.map((a) => ({ ...a, last_run: lastRunOf(a.name, mergeRuns(snap?.payload.runs ?? [], hubRuns)) }));
   const known = new Set(base.agents.map((a) => a.name));
   const agents = [...base.agents.map((a) => ({ ...a, remote_allowed: dok.agents.includes(a.name) })),
     ...dok.agents.filter((n) => !known.has(n)).map((name) => ({ name, description: 'Runs on dok.', remote_allowed: true, last_run: null }))];
@@ -187,12 +190,24 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         const hubRuns = ['list_runs', 'open_dashboard'].includes(params.name) ? await recentRuns(env, { agent: args.agent, limit: params.name === 'open_dashboard' ? 200 : 50 }) : [];
         const snap = await latest(env), m = snap ? meta(snap, env) : null;
         if (!snap && params.name === 'list_runs') return reply({ content: [{ type: 'text', text: JSON.stringify({ snapshot: null, runs: hubRuns.slice(-(args.limit ?? 10)) }, null, 2) }] });
+        const published = ['list_agents', 'open_dashboard', 'get_status'].includes(params.name) ? await agentSummaries(env) : [];
+        const withLast = (list, runs) => list.map((a) => ({ ...a, last_run: lastRunOf(a.name, runs) }));
+        if (!snap && params.name === 'list_agents' && published.length) {
+          return reply({ content: [{ type: 'text', text: JSON.stringify({ snapshot: null, agents: withLast(published, await recentRuns(env, { limit: 200 })) }, null, 2) }] });
+        }
         if (!snap && !healthRead) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
         const unknownStatus = { agents: null, runs: null, running: null, pending: null, last_run: null };
         const unavailable = { generated_at: null, capabilities: CAPABILITIES, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
         const value = snap ? tool.run({ snap, env, meta: m }, args)
           : params.name === 'get_status' ? { ...unknownStatus, ...unavailable }
           : { ...unavailable, status: unknownStatus, agents: [], runs: [], pending: null };
+        // Published definitions (from git, via agent sync push) win over the snapshot's agent list.
+        if (published.length) {
+          const runsNow = mergeRuns(snap?.payload.runs ?? [], params.name === 'list_agents' ? await recentRuns(env, { limit: 200 }) : hubRuns);
+          if (params.name === 'list_agents') value.agents = withLast(published, runsNow);
+          else if (params.name === 'open_dashboard') { value.agents = withLast(published, runsNow); value.status = { ...value.status, agents: published.length }; }
+          else value.agents = published.length;
+        }
         if (healthRead) {
           const hubAll = params.name === 'open_dashboard' ? hubRuns : await recentRuns(env, { limit: 200 });
           // No snapshot and nothing in the Hub stays unknown, never zero.

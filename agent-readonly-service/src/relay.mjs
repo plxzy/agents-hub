@@ -1,6 +1,8 @@
 import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { storeRun, readRun } from './runs.mjs';
-import { bundleFor } from './memory.mjs';
+import { bundleFor, pendingMemory } from './memory.mjs';
+import { decisionsSince } from './decisions.mjs';
+import { publishKnowledge, knowledgeRevision, agentBundle, readFiles } from './knowledge.mjs';
 import { readAccounts, recordAccount } from './accounts.mjs';
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
 const relay = (env) => env.RELAY.getByName('owner-mac');
@@ -12,8 +14,8 @@ export async function relayStatus(env) {
 }
 export async function relayFetch(request, env) {
   const pathname = new URL(request.url).pathname;
-  const dok = pathname.startsWith('/relay/dok-dev/');
-  const token = dok ? env.DOK_RELAY_TOKEN : env.RELAY_TOKEN;
+  const dok = pathname.startsWith('/relay/dok-dev/'), mac = pathname.startsWith('/relay/mac/');
+  const token = dok ? env.DOK_RELAY_TOKEN : mac ? env.MAC_TOKEN : env.RELAY_TOKEN;
   if (!token || dok && env.DEVELOPMENT_ENABLED !== 'true') return json({ error: 'unauthorized' }, 401);
   const digest = (s) => crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
   const [a, b] = await Promise.all([digest(request.headers.get('authorization') ?? ''), digest('Bearer ' + token)]);
@@ -38,6 +40,12 @@ export async function relayFetch(request, env) {
     try { return json(await bundleFor(env, (new URL(request.url).searchParams.get('scopes') ?? '').split(',').filter(Boolean).slice(0, 10))); }
     catch { return json({ error: 'Bundle unavailable' }, 503); }
   }
+  if (dok && pathname === '/relay/dok-dev/knowledge' && request.method === 'GET') {
+    try {
+      const name = new URL(request.url).searchParams.get('agent');
+      return json(name ? await agentBundle(env, name) : { revision: await knowledgeRevision(env), files: await readFiles(env, 'agents/%') });
+    } catch (e) { return json({ error: /Unknown agent|Invalid agent/.test(e.message) ? e.message : 'Knowledge unavailable' }, /Unknown|Invalid/.test(e.message) ? 404 : 503); }
+  }
   if (dok && pathname === '/relay/dok-dev/accounts') {
     if (request.method === 'GET') return json({ accounts: await readAccounts(env) });
     if (request.method === 'POST') {
@@ -49,6 +57,8 @@ export async function relayFetch(request, env) {
       } catch { return json({ ok: false, error: 'Account state refused' }, 400); }
     }
   }
+  // The Mac's own principal: posts its receipts, reads bundles and decisions. It cannot rate, decide, start or read /mcp.
+  if (mac) return macRoute(request, env, pathname);
   if (pathname !== (dok ? '/relay/dok-dev/connect' : '/relay/connect')) return json({ error: 'not_found' }, 404);
   if (request.method !== 'GET') return json({ error: 'method_not_allowed' }, 405);
   return target.fetch(request);
@@ -103,4 +113,38 @@ export async function getRun(env, runId) {
   if (hub) return hub;
   if ((await relayStatus(env)).online) return requestRelay(env, 'get_remote_run', { run_id: runId });
   return null;
+}
+
+async function macRoute(request, env, pathname) {
+  const get = request.method === 'GET', url = new URL(request.url);
+  const scopes = (url.searchParams.get('scopes') ?? '').split(',').filter(Boolean).slice(0, 10);
+  try {
+    if (pathname === '/relay/mac/runs' && request.method === 'POST') {
+      const text = await request.text();
+      if (text.length > 262144) throw new Error('Receipt too large');
+      const r = await storeRun(env, JSON.parse(text), 'mac');
+      return json({ ok: true, run_id: r.run_id, status: r.status });
+    }
+    if (pathname === '/relay/mac/knowledge') {
+      if (get) return json({ revision: await knowledgeRevision(env) });
+      if (request.method === 'POST') {
+        const text = await request.text();
+        if (text.length > 1_000_000) throw new Error('Too large');
+        return json({ ok: true, ...(await publishKnowledge(env, JSON.parse(text))) });
+      }
+    }
+    if (pathname === '/relay/mac/bundle' && get) return json(await bundleFor(env, scopes));
+    if (pathname === '/relay/mac/pending' && get) return json({ pending: await pendingMemory(env) });
+    if (pathname === '/relay/mac/decisions' && get) return json(await decisionsSince(env, url.searchParams.get('since')));
+    if (pathname === '/relay/mac/accounts') {
+      if (get) return json({ accounts: await readAccounts(env) });
+      if (request.method === 'POST') {
+        const text = await request.text();
+        if (text.length > 2048) throw new Error('Too large');
+        await recordAccount(env, JSON.parse(text), 'mac');
+        return json({ ok: true });
+      }
+    }
+  } catch (e) { return json({ ok: false, error: /^(The Hub holds|Push too large|Refused file|Invalid push)/.test(e.message) ? e.message : 'Request refused' }, 400); }
+  return json({ error: 'not_found' }, 404);
 }

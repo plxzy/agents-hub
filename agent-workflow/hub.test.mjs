@@ -1,0 +1,56 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { hubConfig, hubReceipt, sendReceipt, flushOutbox, hubMemory, refreshHubCache, cachedPending } from './hub.mjs';
+
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hub-'));
+const config = { endpoint: 'https://hub.example', token: 't'.repeat(32) };
+const reply = (status, body) => ({ ok: status < 300, status, json: async () => body });
+
+test('config needs https and a real token; AGENT_HUB=0 turns the link off', () => {
+  const dir = tmp(), file = path.join(dir, 'mac.json');
+  assert.equal(hubConfig(file, {}), null);
+  fs.writeFileSync(file, JSON.stringify({ endpoint: 'http://x', token: 't'.repeat(32) })); assert.equal(hubConfig(file, {}), null);
+  fs.writeFileSync(file, JSON.stringify({ endpoint: 'https://hub.example/', token: 'short' })); assert.equal(hubConfig(file, {}), null);
+  fs.writeFileSync(file, JSON.stringify(config)); assert.deepEqual(hubConfig(file, {}), config);
+  assert.equal(hubConfig(file, { AGENT_HUB: '0' }), null);
+});
+
+test('only whitelisted receipt fields leave the Mac; commands, paths and transcripts stay', () => {
+  const out = hubReceipt({ run_id: 'r-20261012T120000Z-abcdef', agent: 'helper', kind: 'task', status: 'unknown', task: 't', started: 's', output: 'o',
+    commands: ['rm x'], workspace: '/Users/x', raw_events: '/x', transcript: 'secret', session_file: '/y', blocked: ['a'], memory_source: 'hub', memory_hash: 'h' },
+  [{ scope: 'shared', body: 'note' }]);
+  assert.deepEqual(Object.keys(out).sort(), ['agent', 'blocked', 'kind', 'memory_hash', 'memory_proposals', 'memory_proposed', 'memory_source', 'output', 'run_id', 'started', 'status', 'task']);
+  assert.equal(out.status, 'interrupted'); assert.equal(out.memory_proposed, 1);
+});
+
+test('a receipt that cannot be sent waits in the outbox and goes out later', async () => {
+  const state = tmp(), receipt = { run_id: 'r-20261012T120000Z-abcdef', agent: 'helper', status: 'completed', task: 't', started: 's' };
+  assert.equal(await sendReceipt(receipt, { state, config, fetchImpl: async () => { throw new Error('offline'); } }), 'queued');
+  assert.deepEqual(fs.readdirSync(path.join(state, 'hub-outbox')), [`${receipt.run_id}.json`]);
+  const calls = [];
+  assert.equal(await flushOutbox({ state, config, fetchImpl: async (url, init) => { calls.push([url, init.method, init.headers.authorization]); return reply(200, { ok: true }); } }), 1);
+  assert.deepEqual(calls, [['https://hub.example/relay/mac/runs', 'POST', `Bearer ${config.token}`]]);
+  assert.deepEqual(fs.readdirSync(path.join(state, 'hub-outbox')), []);
+  assert.equal(await sendReceipt(receipt, { state, config: null }), 'unlinked');
+});
+
+test('accepted notes come from the bundle; an unreachable Hub returns null so the caller falls back', async () => {
+  const got = await hubMemory(['shared', 'agent:helper'], { config, fetchImpl: async (url) => {
+    assert.match(url, /bundle\?scopes=shared%2Cagent%3Ahelper$/);
+    return reply(200, { memory: [{ id: 'm-1', scope: 'shared', body: 'x' }], hash: 'abc' }); } });
+  assert.deepEqual(got, { items: [{ meta: { id: 'm-1', scope: 'shared', status: 'accepted' }, body: 'x' }], hash: 'abc' });
+  assert.equal(await hubMemory(['shared'], { config, fetchImpl: async () => reply(503, {}) }), null);
+  assert.equal(await hubMemory(['shared'], { config: null }), null);
+});
+
+test('the review queue is cached for synchronous views and marked as Hub-held', async () => {
+  const state = tmp();
+  assert.deepEqual(cachedPending(state), []);
+  assert.equal(await refreshHubCache({ state, config, fetchImpl: async () => reply(200, { pending: [{ id: 'm-1', kind: 'memory', body: 'b' }] }) }), true);
+  assert.deepEqual(cachedPending(state), [{ id: 'm-1', kind: 'memory', body: 'b', hub: true }]);
+  assert.equal(await refreshHubCache({ state, config, fetchImpl: async () => { throw new Error('x'); } }), false);
+  assert.equal(cachedPending(state).length, 1); // the last good copy stays
+});

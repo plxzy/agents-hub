@@ -7,11 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { serveSocket } from './link-socket.mjs';
 import { acquireLinkLock } from './link-lock.mjs';
 import { callOp, defaultContext, dashboardData } from './ops.mjs';
-import { getAgent } from './agent.mjs';
+import { getAgent, STATE } from './agent.mjs';
 import { RELAY_OPS, validateRelay } from './relay-contract.mjs';
 import { containsSecret } from '../agent-readonly-service/src/snapshot.mjs';
 import { fingerprintText, encode, WIRE } from './relay-wire.mjs';
-import { publish } from '../agent-readonly-service/publisher.mjs';
+import { flushOutbox } from './hub.mjs';
 import { doctorHealth, doctorInput } from './doctor.mjs';
 import { healthLabels } from './health.mjs';
 
@@ -126,7 +126,8 @@ export async function executeJob(job, { config, ctx = defaultContext(), journal 
 export async function serveLink({ configFile = LINK_CONFIG, signal, serve = serveSocket } = {}) {
   const release = acquireLinkLock(path.join(path.dirname(configFile), 'link.lock'));
   try {
-    await serve({ readConfig: () => readLink(configFile), signal, publish,
+    // The once-a-minute hook now only sends receipts that were waiting in the Hub outbox (snapshots are retired).
+    await serve({ readConfig: () => readLink(configFile), signal, publish: () => flushOutbox({ state: STATE }),
       execute: async (job, config) => {
         try { return { ok: true, value: await executeJob(job, { config }) }; }
         catch (e) {

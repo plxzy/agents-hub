@@ -2,6 +2,7 @@
 // turns evidence into proposals, and one review queue. Nothing changes an agent until you accept it,
 // and every accepted change is committed in AGENT_HOME, so each agent version can be diffed and reverted.
 import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
+import { linkedHub, cachedPending, DECIDE_IN_HUB } from './hub.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
@@ -14,6 +15,7 @@ import {
 
 export function recordFeedback(ref, rating, comment, { state = STATE } = {}) {
   if (!['good', 'bad'].includes(rating)) throw new Error('rating must be good or bad');
+  if (state === STATE && linkedHub()) throw new Error(DECIDE_IN_HUB);
   const runs = listRuns(state).filter((r) => ['task', 'chat'].includes(r.kind ?? 'task'));
   const run = ref === 'last' ? runs.at(-1) : runs.find((r) => r.run_id === ref);
   if (!run) throw new Error(`no run ${ref}`);
@@ -229,9 +231,12 @@ function listProposals(root) {
   return fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort().map((f) => ({ file: path.join(dir, f), ...parseFrontmatter(fs.readFileSync(path.join(dir, f), 'utf8')) }));
 }
 
-export function pending(root = ROOT) {
+export function pending(root = ROOT, { state = STATE } = {}) {
+  // Linked to the Hub: memory notes live there; the cached list is shown here for viewing only.
+  const memory = linkedHub() && root === ROOT ? cachedPending(state)
+    : listCandidates(root).map((c) => ({ id: c.meta.id, kind: 'memory', agent: c.meta.proposed_by, why: c.meta.scope, body: c.body }));
   return [
-    ...listCandidates(root).map((c) => ({ id: c.meta.id, kind: 'memory', agent: c.meta.proposed_by, why: c.meta.scope, body: c.body })),
+    ...memory,
     ...listProposals(root).map((p) => ({ id: p.meta.id, kind: p.meta.kind, agent: p.meta.agent, why: p.meta.why, body: p.body, meta: p.meta, file: p.file })),
   ];
 }
@@ -243,6 +248,7 @@ export function replaceInstructions(text, body) {
 }
 
 export function acceptProposal(id, { root = ROOT } = {}) {
+  if (id.startsWith('m-') && linkedHub() && root === ROOT) throw new Error(DECIDE_IN_HUB);
   if (id.startsWith('m-')) {
     const dest = acceptCandidate(id, { root });
     commitHome(`Accept memory ${id}`, root);
@@ -268,6 +274,7 @@ export function acceptProposal(id, { root = ROOT } = {}) {
 }
 
 export function rejectProposal(id, reason, { root = ROOT } = {}) {
+  if (id.startsWith('m-') && linkedHub() && root === ROOT) throw new Error(DECIDE_IN_HUB);
   if (id.startsWith('m-')) { const d = rejectCandidate(id, { root, reason }); commitHome(`Reject memory ${id}`, root); return d; }
   const p = pending(root).find((x) => x.id === id);
   if (!p) throw new Error(`no proposal ${id}`);

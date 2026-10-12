@@ -49,3 +49,11 @@ export async function ratingsFor(env, ids) {
     return new Map(results.map((r) => [r.run_id, { rating: r.rating, ...(r.comment ? { comment: r.comment } : {}) }]));
   } catch { return new Map(); }
 }
+
+/** Decisions made in the panel since a time, for the Mac to mirror into its git copy (one-way: Hub to Mac). */
+export async function decisionsSince(env, since) {
+  const t = typeof since === 'string' && !Number.isNaN(Date.parse(since)) ? new Date(since).toISOString() : '1970-01-01T00:00:00.000Z';
+  const notes = (await env.DB.prepare("SELECT id, scope, status, body, proposed_by, source_run, created, decided, reason, supersedes FROM memory WHERE status IN ('accepted','rejected') AND decided > ? ORDER BY decided LIMIT 200").bind(t).all()).results;
+  const ratings = (await env.DB.prepare('SELECT run_id, rating, comment, rated_at FROM ratings WHERE rated_at > ? ORDER BY rated_at LIMIT 500').bind(t).all()).results;
+  return { notes, ratings };
+}

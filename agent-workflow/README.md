@@ -146,6 +146,20 @@ each run loads the accepted notes for its scopes from `GET /relay/dok-dev/bundle
 `get_status` come from Hub runs. Not moved yet (4d): agent definitions, skills, evals, instruction proposals, the Mac CLI and
 the snapshot publisher. Evidence: `../evidence/2026-10-12-hub-state/`.
 
+**The Mac as a Hub client (2026-10-12, Step 4d).** With `~/.config/agent-readonly/mac.json` present (endpoint + its own token; hidden
+from agent sandboxes) `agent run`/`chat` post their receipts to the Hub (`/relay/mac/runs`; an outbox in the state folder holds
+them while the Hub is unreachable and `agent link serve` / `agent sync pull` flush it), load accepted memory from the Hub bundle
+(local files are the offline fallback; receipts say `memory_source`) and send ```remember proposals with the receipt instead of
+writing local candidates. Ratings and memory decisions are the Hub panel's: `agent feedback`, `agent memory accept|reject|add`,
+`review_decide` and `rate_run` refuse on a linked Mac, and the review queue in `agent ui`/the Claude Code pane is a cached,
+view-only copy. One writer per kind of data, one direction each: `agent sync pull` mirrors the Hub's decisions into `~/.agents`
+git and local receipts; `agent sync push` publishes the committed agent definitions, skills and evals (HEAD of `~/.agents`) to the
+Hub, refused if the Hub holds a revision this checkout did not publish. dok runs load the definition, skills and accepted memory for
+the agent from the Hub per run (receipt: `memory_source: hub`, `memory_hash` = bundle hash; frozen release only as a fallback;
+development sessions still use the frozen release because their grants pin it). Adding or changing an agent = commit in `~/.agents`,
+`agent sync push`, restart the dok runner only if a new agent must appear in its runnable list. `agent link serve` still exists
+for Mac-run remote starts (retired in Step 5); snapshots are no longer published. Tools: `tools/hub-import/{memory,runs}.mjs`.
+
 The Mac relay remains a fallback for agents dok does not offer. Code: `dev-sessions.mjs` (runs lane),
 `dev-session-worker.mjs` (`executeRun`), Hub `src/runs.mjs`, `src/accounts.mjs`. Evidence:
 `../evidence/2026-10-12-dok-runner-step0-1b/`.
