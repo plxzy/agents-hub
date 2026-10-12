@@ -47,6 +47,15 @@ Claude Code only: Codex and ChatGPT panels need their own extension format, usin
 Check: `claude plugin validate plugins/agents-panel` and `claude plugin test plugins/agents-panel`.
 Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin marketplace update dev-workflow`).
 
+**Applying an update in Claude Desktop Code (verified 13 October 2026):** refreshing the hosted connector's
+tool list does not update this local mod. Run `claude plugin update agents-panel@dev-workflow --scope user`
+(and `claude plugin update agents@dev-workflow --scope user` for its companion), then open a fresh Code
+session and run `/agents-panel`. In the tested desktop, `/reload-plugins --force` reported success but an
+existing session kept the old renderer. `claude plugin list` displayed the current source version even
+while the installation record still pointed to the old cached version; the update command's result and
+visible **Source: Agents Hub** / **Agents** tab establish that the new panel loaded. Evidence:
+`../evidence/2026-10-13-claude-panel-activation/README.md`.
+
 ## Hosted Agents Hub (account App)
 
 ChatGPT, Dots and claude.ai connect to `https://YOUR-HUB.workers.dev/mcp` as an account App /
