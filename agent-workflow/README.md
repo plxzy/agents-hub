@@ -137,6 +137,15 @@ retried). A failover to another account is refused once a write/edit/bash call h
 Verified 2026-10-12: write run `r-20261012T184738Z-c29271` produced a one-line review ref in 30 s; isolation probes in the
 container (no network, no Pi auth, no `dok.json`, no repos, sibling runs invisible) all blocked.
 
+**Hub as home for decisions and memory (2026-10-12, Step 4a-4c).** With the Mac off, the panel is served by the Worker from D1:
+`panel_data`/`panel_run`/`rate_run`/`review_decide` handle Hub-held runs and notes. The user's decisions need a one-time code
+(table `confirmations`, 30 min) that only the panel receives (`_meta`, never model-visible text). Ratings live in `ratings`;
+memory in `memory` (candidate → accepted/rejected). A dok run's ```remember blocks ride in its receipt and become candidates;
+each run loads the accepted notes for its scopes from `GET /relay/dok-dev/bundle` and records `memory_source`/`memory_hash`
+(frozen release only as a fallback). One-time import of `~/.agents/memory`: `tools/hub-import/memory.mjs`. Counts in
+`get_status` come from Hub runs. Not moved yet (4d): agent definitions, skills, evals, instruction proposals, the Mac CLI and
+the snapshot publisher. Evidence: `../evidence/2026-10-12-hub-state/`.
+
 The Mac relay remains a fallback for agents dok does not offer. Code: `dev-sessions.mjs` (runs lane),
 `dev-session-worker.mjs` (`executeRun`), Hub `src/runs.mjs`, `src/accounts.mjs`. Evidence:
 `../evidence/2026-10-12-dok-runner-step0-1b/`.
