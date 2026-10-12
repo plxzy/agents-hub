@@ -1,5 +1,5 @@
 export type Run = { run_id: string; agent: string; status: string; task: string; started: string; ended?: string; tool_calls?: number }
-export type Pending = { id: string; kind: string; agent?: string; why?: string; body: string }
+export type Pending = { id: string; kind: string; agent?: string; why?: string; body: string; hub?: boolean }
 export type AgentInfo = { name: string; description: string; here: boolean }
 export type Snapshot = {
   at: string
@@ -7,6 +7,9 @@ export type Snapshot = {
   running: Run[]
   recent: Run[]
   pending: Pending[]
+  source: string
+  decisionMessage: string
+  counts: { running: number; review: number }
 }
 export type Detail = { run_id: string; agent: string; status: string; task: string; text: string; meta: string }
 export type Tab = 'runs' | 'review' | 'start'

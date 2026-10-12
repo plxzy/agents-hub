@@ -133,7 +133,7 @@ export const OPS = [
     description: 'Proposals waiting for the user: memory notes, test cases, instruction edits (from agents or the coach).',
     input: { type: 'object', additionalProperties: false, properties: {} },
     annotations: { readOnlyHint: true },
-    run: (_, { root }) => pending(root).map(({ id, kind, agent, why, body }) => ({ id, kind, agent, why, body })),
+    run: (_, { root }) => pending(root).map(({ id, kind, agent, why, body, hub }) => ({ id, kind, agent, why, body, ...(hub ? { hub: true } : {}) })),
   },
   {
     name: 'rate_run', access: 'decide', title: 'Rate a run',
@@ -192,7 +192,8 @@ export function dashboardData(ctx) {
     status: currentStatus,
     agents: loadAgents(ctx.root).map((a) => agentSummary(a, runs)),
     runs: runs.slice(-50).map(brief),
-    pending: pending(ctx.root).map(({ id, kind, agent, why, body }) => ({ id, kind, agent, why, body })),
+    pending: pending(ctx.root).map(({ id, kind, agent, why, body, hub }) => ({ id, kind, agent, why, body, ...(hub ? { hub: true } : {}) })),
+    decision_message: DECIDE_IN_HUB,
   };
 }
 

@@ -11,6 +11,32 @@ const DASHBOARD = {
   pending: [{ id: 'm-1', kind: 'memory', agent: 'claude-code', body: 'Prefer small real examples.' }],
 }
 
+for (const source of ['hub', 'local (Hub unreachable)']) {
+  test(`Hub review items stay read-only, including cached fallback (${source})`, async ($, on) => {
+    const calls: string[] = []
+    const message = 'Decide this in the Agents Hub panel (the Hub keeps ratings and memory notes; the Mac cannot decide them).'
+    on('process.run', async (_$, e) => {
+      calls.push(e.argv[3] ?? '')
+      const data = { ...DASHBOARD, source, decision_message: message,
+        runs: [{ ...DASHBOARD.runs[0], task: undefined, title: 'A dok receipt', runner: 'dok' }],
+        pending: [{ ...DASHBOARD.pending[0], hub: true }] }
+      return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+    })
+    on('clock.after', async () => ({ deny: 'no timers in this test' }) as never)
+    on('ui.status', async () => ({ value: undefined }) as never)
+    const ui = await $.ui.mount({ plugin: 'agents-panel', surface: 'terminal', component: 'Pane', requestId: 'agents', props: PROPS as never })
+    await ui.press({ key: 'refresh' })
+    expect(await ui.find({ text: source === 'hub' ? 'Source: Agents Hub' : `Source: ${source}` })).toBeDefined()
+    expect(await ui.find({ text: '1 running' })).toBeDefined() // use the Hub's count, even outside the recent window
+    expect(await ui.find({ text: 'A dok receipt' })).toBeDefined()
+    await ui.press({ key: 'tab-review' })
+    expect(await ui.find({ text: message })).toBeDefined()
+    expect(await ui.find({ key: 'accept-m-1' })).toBeUndefined()
+    expect(await ui.find({ key: 'reject-m-1' })).toBeUndefined()
+    expect(calls.includes('review_decide')).toBe(false)
+  })
+}
+
 const PROPS = { title: 'Agents', isFocused: true, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
 
 for (const surface of ['terminal', 'desktop'] as const) {

@@ -12,7 +12,7 @@ import type { AgentInfo, Detail, Form, Pending, Run, Snapshot, Tab } from '../ty
 const NODE = '/Users/you/.local/bin/node'
 const AGENT = '/Users/you/Development/dev-workflow/agent-workflow/agent.mjs'
 const PANE = 'agents'
-const RECENT = 10
+const RECENT = 50
 const FAST_MS = 4000 // while something runs
 const SLOW_MS = 30000
 
@@ -57,22 +57,26 @@ async function refresh($: Engine): Promise<Snapshot | null> {
   try {
     const d = await call($, 'open_dashboard')
     const runs: Run[] = (d.runs ?? []).map((r: Run) => ({
-      run_id: r.run_id, agent: r.agent, status: r.status, task: firstLine(r.task, 200), started: r.started, ended: r.ended, tool_calls: r.tool_calls,
+      run_id: r.run_id, agent: r.agent, status: r.status, task: firstLine(r.task ?? (r as Run & { title?: string }).title, 200), started: r.started, ended: r.ended, tool_calls: r.tool_calls,
     }))
     const snap: Snapshot = {
       at: d.generated_at,
+      source: d.source ?? 'local',
+      decisionMessage: d.decision_message ?? '',
+      counts: { running: d.status?.running ?? runs.filter(r => r.status === 'running').length,
+        review: d.status?.pending ? d.status.pending.memory + d.status.pending.proposals : (d.pending ?? []).length },
       agents: (d.agents ?? []).map((a: { name: string; description?: string; workspace?: string }) => ({
         name: a.name, description: firstLine(a.description, 120), here: a.workspace === 'here',
       })),
       running: runs.filter(r => r.status === 'running'),
       recent: runs.filter(r => r.status !== 'running').slice(-RECENT).reverse(),
-      pending: (d.pending ?? []).map((p: Pending) => ({ id: p.id, kind: p.kind, agent: p.agent, why: p.why, body: String(p.body ?? '').slice(0, 2000) })),
+      pending: (d.pending ?? []).map((p: Pending) => ({ id: p.id, kind: p.kind, agent: p.agent, why: p.why, body: String(p.body ?? '').slice(0, 2000), hub: p.hub === true || d.source === 'hub' })),
     }
     await update($, snapshot, () => snap)
     await update($, error, () => null)
-    const review = snap.pending.length
-    $.ui.status(snap.running.length || review
-      ? `agents: ${[snap.running.length && `${snap.running.length} running`, review && `${review} to review`].filter(Boolean).join(' · ')}`
+    const { running, review } = snap.counts
+    $.ui.status(running || review
+      ? `agents: ${[running && `${running} running`, review && `${review} to review`].filter(Boolean).join(' · ')}`
       : undefined)
     return snap
   } catch (err) {
@@ -98,7 +102,7 @@ async function openRun($: Engine, runId: string) {
     const tokens = r.usage?.total_tokens ?? r.usage?.totalTokens
     const meta = [String(r.model ?? '').split('/').pop(), took, r.tool_calls != null && `${r.tool_calls} tool calls`, tokens && `${tokens} tokens`]
       .filter(Boolean).join(' · ')
-    await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, task: String(r.task ?? ''), text: text.slice(0, 20000), meta }))
+    await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, task: String(r.task ?? r.title ?? ''), text: text.slice(0, 20000), meta }))
   } catch (err) {
     await fail($)(err)
   }
@@ -106,6 +110,8 @@ async function openRun($: Engine, runId: string) {
 
 async function decide($: Engine, id: string, decision: 'accept' | 'reject', reason?: string) {
   try {
+    const snap = await read($, snapshot)
+    if (snap?.pending.find(p => p.id === id)?.hub) throw new Error(snap.decisionMessage)
     await call($, 'review_decide', reason ? { id, decision, reason } : { id, decision })
     await update($, rejecting, () => null)
     await refresh($)
@@ -169,8 +175,8 @@ export const register: Register = on => {
     const header = (
       <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
         {snap && chip('c-agents', `${snap.agents.length} agents`, 'text')}
-        {snap && chip('c-running', `${snap.running.length} running`, snap.running.length ? 'warning' : 'subtle')}
-        {snap && chip('c-review', `${snap.pending.length} to review`, snap.pending.length ? 'warning' : 'subtle')}
+        {snap && chip('c-running', `${snap.counts.running} running`, snap.counts.running ? 'warning' : 'subtle')}
+        {snap && chip('c-review', `${snap.counts.review} to review`, snap.counts.review ? 'warning' : 'subtle')}
         <Button key="refresh" plain dimColor hotkey="r" onPress={() => void tick($)}>Refresh</Button>
       </Box>
     )
@@ -245,7 +251,7 @@ export const register: Register = on => {
       <Box key={`card-${p.id}`} flexDirection="column" borderStyle="round" borderDimColor paddingX={1} gap={1}>
         <Text color="suggestion">{`${p.kind}${p.agent ? ` · from ${p.agent}` : ''}${p.why ? ` · ${p.why}` : ''}`}</Text>
         <Markdown key={`body-${p.id}`} text={p.body} />
-        {rejectId === p.id && Input ? (
+        {p.hub ? <Text dimColor wrap="wrap">{snap?.decisionMessage}</Text> : rejectId === p.id && Input ? (
           <Box flexDirection="column" gap={1}>
             <Input key={`reason-${p.id}`} label="Why reject? (optional)" placeholder="Reason" submitLabel="Reject" autoFocus
               onSubmit={(value: string) => void decide($, p.id, 'reject', value.trim() || undefined)} />
@@ -284,6 +290,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column" gap={1}>
         {header}
+        {snap && <Text dimColor>{snap.source === 'hub' ? 'Source: Agents Hub' : `Source: ${snap.source}`}</Text>}
         {tabs}
         {errorLine}
         {!snap && !err && <Text dimColor>Loading…</Text>}
