@@ -128,8 +128,8 @@ const list = (v, sep, unit) => (Array.isArray(v) ? (v.length ? v.join(sep) : nul
 // ---------- server calls ----------
 function showError(msg) { const e = document.getElementById('error'); e.textContent = msg ?? ''; e.hidden = !msg; }
 async function call(name, args = {}) {
-  if (S.data?.relay && ['start_run', 'rate_run', 'review_decide'].includes(name)) args = { ...args, request_id: crypto.randomUUID() };
-  if (S.data?.relay && ['rate_run', 'review_decide'].includes(name) && !args.confirm) {
+  if (S.data?.transport !== 'mac' && S.data?.relay && ['start_run', 'rate_run', 'review_decide'].includes(name)) args = { ...args, request_id: crypto.randomUUID() };
+  if (S.data?.transport !== 'mac' && S.data?.relay && ['rate_run', 'review_decide'].includes(name) && !args.confirm) {
     throw new Error('This panel has no confirmation code for that item yet. Press Refresh and try again.');
   }
   const r = await app.callServerTool({ name, arguments: args });
@@ -157,7 +157,7 @@ async function refresh() {
     let data = await call('open_dashboard');
     const developmentAvailable = data.development_available;
     // panel_data is live data from the Mac relay when it is online, otherwise from the Hub (runs held in D1).
-    if (data.relay?.online === true || data.hub_panel === true) {
+    if (data.transport !== 'mac' && (data.relay?.online === true || data.hub_panel === true)) {
       try { const live = await call('panel_data'); data = { ...live, health: dashboardHealth(data, live) }; }
       catch (e) { data.relay.error = e.message; }
     }
@@ -190,7 +190,7 @@ function setData(data) {
   render({ passive: true });
 }
 async function loadDetail(id) {
-  try { S.detail = await call(S.data?.relay?.online && !S.data?.snapshot ? 'panel_run' : 'get_run', { run_id: id }); render({ passive: true }); } catch (e) { showError(e.message); }
+  try { S.detail = await call(S.data?.transport !== 'mac' && S.data?.relay?.online && !S.data?.snapshot ? 'panel_run' : 'get_run', { run_id: id }); render({ passive: true }); } catch (e) { showError(e.message); }
 }
 
 // ---------- views ----------

@@ -14,7 +14,7 @@ import {
 } from './agent.mjs';
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
 import { DASHBOARD_URI, READ_OPS, lastRunOf, runBrief } from './contract.mjs';
-import { linkedHub, refreshHubCache, flushOutbox } from './hub.mjs';
+import { linkedHub, refreshHubCache, flushOutbox, hubPanel, hubRun, DECIDE_IN_HUB } from './hub.mjs';
 
 export { DASHBOARD_URI };
 const AGENT_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent.mjs');
@@ -71,7 +71,7 @@ const AGENT_ARGS = {
 
 export const OPS = [
   // Read operations: names, descriptions, schemas and result shapes are shared with the hosted hub (contract.mjs).
-  { name: 'open_dashboard', access: 'read', ...READ_OPS.open_dashboard, run: (_, ctx) => dashboardData(ctx) },
+  { name: 'open_dashboard', access: 'read', ...READ_OPS.open_dashboard, run: (_, ctx) => openDashboard(ctx) },
   { name: 'get_status', access: 'read', ...READ_OPS.get_status, run: (_, ctx) => status(ctx) },
   {
     name: 'list_agents', access: 'read', ...READ_OPS.list_agents,
@@ -116,8 +116,13 @@ export const OPS = [
     name: 'get_run', access: 'read', ...READ_OPS.get_run,
     description: 'Full record of one run: task, answer, tools and commands used, blocked attempts, memory used and proposed. '
       + 'A run still in progress has status running.',
-    run: ({ run_id }, { state }) => {
-      const r = listRuns(state, { running: true }).find((x) => x.run_id === run_id);
+    run: async ({ run_id }, ctx) => {
+      const options = hubOptions(ctx);
+      if (options.config) {
+        try { return await hubRun(run_id, options); }
+        catch { /* Local output remains available during an outage or before its receipt is posted. */ }
+      }
+      const r = listRuns(ctx.state, { running: true }).find((x) => x.run_id === run_id);
       if (!r) throw new Error(`no run ${run_id}`);
       const { raw_events, transcript, ...rest } = r;
       return rest;
@@ -191,6 +196,19 @@ export function dashboardData(ctx) {
   };
 }
 
+// Context overrides are internal test dependencies, never tool arguments.
+const hubOptions = (ctx) => ({ config: ctx.hub === undefined ? (ctx.state === STATE ? linkedHub(ctx.root) : null) : ctx.hub,
+  fetchImpl: ctx.fetchImpl ?? fetch });
+
+export async function openDashboard(ctx) {
+  const options = hubOptions(ctx);
+  if (options.config) {
+    try { return { ...await hubPanel(options), transport: 'mac', decision_message: DECIDE_IN_HUB }; }
+    catch { return { ...dashboardData(ctx), source: 'local (Hub unreachable)', transport: 'mac' }; }
+  }
+  return { ...dashboardData(ctx), source: 'local', transport: 'mac' };
+}
+
 export const defaultContext = () => ({ root: ROOT, state: STATE, spawn: nodeSpawn });
 
 /** Runs one operation by name. `allow` limits the access levels a surface may use. */
@@ -199,7 +217,7 @@ export async function callOp(name, args = {}, { ctx = defaultContext(), allow = 
   if (!op) throw new Error(`unknown operation ${name}`);
   if (!allow.includes(op.access)) throw new Error(`${name} is not available here (${op.access})`);
   // Linked to the Hub: bring the review queue up to date (and send any receipts that were waiting) before showing it.
-  if (['open_dashboard', 'get_status', 'list_pending'].includes(name) && ctx.state === STATE && linkedHub()) {
+  if (['get_status', 'list_pending'].includes(name) && ctx.state === STATE && linkedHub(ctx.root)) {
     await refreshHubCache({ state: ctx.state }); await flushOutbox({ state: ctx.state });
   }
   return op.run(args ?? {}, ctx);

@@ -95,3 +95,33 @@ test('dashboard data and MCP App wiring', async () => {
   assert.deepEqual(read.result.contents[0]._meta['openai/ui'].availableDisplayModes, ['inline', 'fullscreen']);
   assert.equal((await handle({ method: 'notifications/initialized' })), null);
 });
+
+test('linked open_dashboard uses exactly the Hub lists and falls back explicitly on failure', async () => {
+  const ctx = { ...fixture(), hub: { endpoint: 'https://hub.example', token: 't'.repeat(32) } };
+  const remote = { source: 'hub', agents: [{ name: 'remote-only' }], runs: [{ run_id: 'r-dok', runner: 'dok' }],
+    pending: [{ id: 'm-hub', kind: 'memory', body: 'Hub note' }], status: { agents: 1, running: 0, pending: { memory: 1, proposals: 0 } },
+    capabilities: { run: false, mutate: false } };
+  const calls = [];
+  ctx.fetchImpl = async (url, init) => { calls.push(url); assert.equal(init.method, 'GET'); return Response.json(remote); };
+  const data = await callOp('open_dashboard', {}, { ctx });
+  assert.deepEqual(data.agents, remote.agents); assert.deepEqual(data.runs, remote.runs); assert.deepEqual(data.pending, remote.pending);
+  assert.deepEqual(data.status, remote.status); assert.equal(data.source, 'hub'); assert.equal(data.transport, 'mac');
+  assert.match(data.decision_message, /Decide this in the Agents Hub panel/);
+  assert.deepEqual(calls, ['https://hub.example/relay/mac/panel'], 'no local merge, cache refresh or outbox flush on this read');
+  ctx.fetchImpl = async () => { throw new Error('unreachable'); };
+  const fallback = await callOp('open_dashboard', {}, { ctx });
+  assert.equal(fallback.source, 'local (Hub unreachable)'); assert.equal(fallback.agents[0].name, 'demo');
+  assert.equal(fallback.pending[0].id, 'm-20261009T000000Z-abcdef');
+  assert.equal((await callOp('open_dashboard', {}, { ctx: { ...ctx, hub: null } })).source, 'local');
+});
+
+test('get_run reads Hub output including dok runs and retains local fallback', async () => {
+  const ctx = { ...fixture(), hub: { endpoint: 'https://hub.example', token: 't'.repeat(32) },
+    fetchImpl: async (url) => { assert.ok(url.endsWith('/relay/mac/runs/r-dok')); return Response.json({ run_id: 'r-dok', runner: 'dok', output: 'done' }); } };
+  assert.equal((await callOp('get_run', { run_id: 'r-dok' }, { ctx })).output, 'done');
+  fs.mkdirSync(path.join(ctx.state, 'runs'), { recursive: true });
+  fs.writeFileSync(path.join(ctx.state, 'runs/r-local.json'), JSON.stringify({ run_id: 'r-local', agent: 'demo', status: 'completed', raw_events: '/private', output: 'local' }));
+  ctx.fetchImpl = async () => { throw new Error('offline'); };
+  const local = await callOp('get_run', { run_id: 'r-local' }, { ctx });
+  assert.equal(local.output, 'local'); assert.equal(local.raw_events, undefined);
+});
