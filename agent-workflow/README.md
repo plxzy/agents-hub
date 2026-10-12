@@ -121,14 +121,29 @@ them with the Mac off). ChatGPT accounts `openai`, `openai-2`, `openai-3` form a
 cooldown in the Hub's `accounts` table (shared by every runner) and the read-only run restarts on the next account.
 Verified: a run skips an account the Hub marks as cooling down and runs on `openai-2` (2026-10-12). An in-run
 usage-limit restart has only unit-test coverage so far.
+
+**Write runs (2026-10-12, Step 3).** Agents with write tools (`workflow`; `videotor` once its bare repo is on dok) run
+the same way, but in a *writable* clone inside the development-session sandbox (no network, no credentials, other runs
+invisible), with a 30-minute limit and a 4 GiB disk watchdog; one write run and one read run may run at a time.
+`workflow` takes an optional `repo` (default `dev-workflow`); fixed-workspace agents use the repo named like their
+workspace, from `repositories` in `dok.json`. When the agent stops, the harness commits any changes and builds the bundle
+*inside the sandbox* (the checkout's git config is agent-controlled), then the supervisor imports it into the bare repo as
+the append-only ref `refs/heads/review/runs/<run_id>`; nothing is merged. The receipt carries `review_ref`, `commit`,
+`base_commit`, `changed_files`, `repo`; fetch with `git fetch dok 'refs/heads/review/runs/*:refs/remotes/dok-review/runs/*'`.
+`continue_from: <run_id>` continues the conversation on the *latest* run of a chain: fresh clone of its review ref and its Pi
+session on the same account (reasoning history is account-bound; if that account is limited the run fails and can be
+retried). A failover to another account is refused once a write/edit/bash call has happened. Conversations are kept 7 days
+(20 newest). The older approval-card route (`request_development`) still exists for interactive sessions.
+Verified 2026-10-12: write run `r-20261012T184738Z-c29271` produced a one-line review ref in 30 s; isolation probes in the
+container (no network, no Pi auth, no `dok.json`, no repos, sibling runs invisible) all blocked.
+
 The Mac relay remains a fallback for agents dok does not offer. Code: `dev-sessions.mjs` (runs lane),
 `dev-session-worker.mjs` (`executeRun`), Hub `src/runs.mjs`, `src/accounts.mjs`. Evidence:
 `../evidence/2026-10-12-dok-runner-step0-1b/`.
 
 ## Not here yet
 
-Memory retrieval once notes outgrow the prompt, a writer/reviewer pair, write runs on dok (`workflow` one-shot with
-review branches), and the Hub as home for memory/reviews (today reviews and ratings still need the Mac).
+Memory retrieval once notes outgrow the prompt, a writer/reviewer pair, and the Hub as home for memory/reviews (today reviews and ratings still need the Mac).
 
 ## Guards (enforced, not instructed)
 
