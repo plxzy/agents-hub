@@ -18,4 +18,6 @@ services:
       - seccomp=${AGENTS_SECCOMP_PROFILE:-${HOME}/.config/dok-dev/seccomp.json}
 volumes:
   home:
+    # Created once with `docker volume create agents-home`; holds login, config, repos and state.
     name: agents-home
+    external: true
