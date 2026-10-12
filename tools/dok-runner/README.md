@@ -2,8 +2,14 @@
 
 The always-on runner for Agents Hub: one small container (`agents`, user `agent`) whose main process is the
 agent-workflow supervisor (`dev-supervisor.mjs`). Docker restarts it; there is no systemd unit and no `docker exec`
-wrapper. It replaces the supervisor that runs inside the vm project's `dok-dev` devcontainer (user `vscode`); the
-cutover happened on 2026-10-12 17:01 UTC (old `dok-agent` unit disabled, kept for rollback). `dok-dev` itself is left untouched.
+wrapper. It replaces the supervisor that ran inside the vm project's `dok-dev` devcontainer (user `vscode`); the
+cutover happened on 2026-10-12 17:01 UTC. The old `dok-agent` unit is disabled and retained only for rollback;
+the old `dok-dev` container and Codex image were removed on 2026-10-12. Its named volumes remain preserved.
+
+The active image is `agents-runner:pi-1.1.0`, based on the digest-pinned Node 26.10.0 Debian 12 Bookworm slim
+image. It contains Pi 1.1.0 (from the lockfile), `pi-openai-accounts`, bubblewrap, Git, Python 3, CA certificates
+and tini. It has no standalone `codex` executable, SSH daemon or editor. Pi's bundled provider library still has
+OpenAI/Codex provider support for account authentication; that is library support, not the Codex CLI/app-server.
 
 | What | Where (inside the `agents-home` volume) |
 |---|---|
