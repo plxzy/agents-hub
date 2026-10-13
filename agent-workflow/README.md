@@ -181,6 +181,12 @@ Git checkout is consulted and no historical metadata is backfilled or inferred f
 Run output remains visible separately from raw logs. Dashboard and plugin renderers consume the same
 receipt fields.
 
+**Bounded dok concurrency (13 October 2026):** dok permits up to two read-only and two writable
+one-shot runs concurrently, provided they target different repositories. A per-repository lock keeps
+same-project runs serialized, and capacity or lock conflicts return an explicit reason before any
+receipt or task is started. The existing isolated-clone, disk watermark, account-pool and review-branch
+boundaries remain in force. This does not add automatic local fallback or a second executor.
+
 **Partial failure telemetry (13 October 2026, plugins 0.4.2 / dashboard v8):** new failed one-shot
 Mac and dok receipts retain bounded assistant text from before the failure, including streamed text
 when Pi supplies it. `output_partial` labels that answer as incomplete. `failure_context` records the

@@ -50,7 +50,9 @@ export class DevelopmentSessions {
       const file = fs.realpathSync(path.join(this.knowledge, name));
       if (!file.startsWith(this.knowledge + path.sep) || createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== expected) throw new Error('Reviewed knowledge integrity check failed');
     }
-    this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 1, runMs: 15 * 60000, writeRuns: 1, writeMs: 30 * 60000, keepConversations: 20, keepMs: 7 * 24 * 3600000,
+    // Two independent clones may run at once. A repository lock below still serializes work aimed at
+    // the same project; these limits bound model, disk and account pressure.
+    this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 2, runMs: 15 * 60000, writeRuns: 2, writeMs: 30 * 60000, keepConversations: 20, keepMs: 7 * 24 * 3600000,
       slots: ['openai', 'openai-2', 'openai-3'], cooldownMs: 60 * 60000, disableMs: 24 * 60 * 60000, ...limits };
     this.active = null;
     this.runs = new Map();
@@ -255,7 +257,9 @@ export class DevelopmentSessions {
       let repo, reason;
       try { repo = this.repoFor(agent); } catch { reason = 'Choose a repository through the existing hosted tools; this form uses agent defaults only.'; }
       const write = this.isWrite(agent);
-      if (!reason && [...this.runs.values()].filter(r => r.write === write).length >= (write ? this.limits.writeRuns : this.limits.runs)) reason = 'dok is busy; wait for the current run to finish.';
+      const active = [...this.runs.values()];
+      if (!reason && repo && active.some(r => r.repo === repo)) reason = `repository ${repo} is busy; wait for its current run to finish.`;
+      if (!reason && active.filter(r => r.write === write).length >= (write ? this.limits.writeRuns : this.limits.runs)) reason = `dok ${write ? 'write' : 'read-only'} capacity is full; wait for a slot.`;
       return { name: agent.name, model: agent.model, ...(repo ? { repo } : {}), ...(reason ? { reason } : {}) };
     }) };
   }
@@ -280,8 +284,9 @@ export class DevelopmentSessions {
     if (!agent) throw new Error('Agent is not runnable on dok');
     const write = this.isWrite(agent), project = this.repoFor(agent, repo);
     if (continue_from && !write) throw new Error('continue_from applies to runs that change files');
-    const busy = [...this.runs.values()].filter(r => r.write === write).length >= (write ? this.limits.writeRuns : this.limits.runs);
-    if (busy) throw new Error(`dok runner is busy with another ${write ? 'write ' : ''}run; retry when idle`);
+    const active = [...this.runs.values()];
+    if (active.some(r => r.repo === project)) throw new Error(`repository ${project} is busy; wait for its current run to finish`);
+    if (active.filter(r => r.write === write).length >= (write ? this.limits.writeRuns : this.limits.runs)) throw new Error(`dok ${write ? 'write' : 'read-only'} capacity is full; wait for a slot`);
     this.room();
     let root, previous;
     if (continue_from) {
@@ -302,7 +307,7 @@ export class DevelopmentSessions {
       progress: runProgressTelemetry().snapshot(), ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
     save(requestFile, { fingerprint, run_id });
-    this.runs.set(run_id, { write });
+    this.runs.set(run_id, { write, repo: project });
     void this.report(run_id);
     // Clone and execution continue after the start acknowledgement; the transport attempt is short.
     void this.executeRun(agent, runtime, receipt, previous).catch(() => {});

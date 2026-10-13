@@ -76,6 +76,21 @@ test('runner observations distinguish missing protocol, disabled and offline', (
   assert.match(dokTarget({ online: true, enabled: false, agents: [] }).reason, /disabled/);
   assert.match(dokTarget({ online: false }).reason, /offline/);
 });
+
+test('dok admission allows independent repositories but explains capacity and same-repository locks', () => {
+  const agents = [
+    { name: 'vm', model: 'm', workspace: '/repos/vm', tools: ['write'] },
+    { name: 'tikkytracker', model: 'm', workspace: '/repos/tikkytracker', tools: ['write'] },
+    { name: 'helper', model: 'm', workspace: '/repos/dev-workflow', tools: ['read'] },
+  ];
+  const base = { runnable: () => agents, repoFor: a => path.basename(a.workspace), isWrite: a => a.tools.includes('write'), limits: { runs: 2, writeRuns: 2 } };
+  assert.deepEqual(DevelopmentSessions.prototype.runSelection.call({ ...base, runs: new Map([['r1', { repo: 'vm', write: true }]]) }).agents
+    .map(a => [a.name, a.reason]), [['vm', 'repository vm is busy; wait for its current run to finish.'], ['tikkytracker', undefined], ['helper', undefined]]);
+  assert.equal(DevelopmentSessions.prototype.runSelection.call({ ...base, runs: new Map([['r1', { repo: 'vm', write: true }], ['r2', { repo: 'tikkytracker', write: true }]]) }).agents[1].reason,
+    'repository tikkytracker is busy; wait for its current run to finish.');
+  assert.equal(DevelopmentSessions.prototype.runSelection.call({ ...base, runs: new Map([['r1', { repo: 'vm', write: false }], ['r2', { repo: 'tikkytracker', write: false }]]) }).agents[2].reason,
+    'dok read-only capacity is full; wait for a slot.');
+});
 test('dok journal lookup survives process reconstruction and drops private receipt fields', t => {
   const { state } = fixture(t);
   fs.mkdirSync(path.join(state, 'agent-requests'), { recursive: true });

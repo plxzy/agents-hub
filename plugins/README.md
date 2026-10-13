@@ -51,6 +51,10 @@ Hosted receipts intentionally omit private Mac workspace and log paths, which ar
 A review ref is not presented as the execution branch, and the renderer never looks up current Git
 state or exposes hosted runner logs.
 
+**Dok concurrency:** independent repositories can use the bounded runner in parallel (two read-only
+and two writable slots). Same-repository starts remain serialized and a full capacity or repository
+lock is reported before dispatch; no local fallback is automatic.
+
 **Failure details (0.4.2):** the error remains visible alongside labelled partial output. New failure
 receipts also display last observed phase/tool, provider/model and a bounded redacted diagnostic via
 the shared operations formatter. Older receipts show their original error without invented telemetry.
