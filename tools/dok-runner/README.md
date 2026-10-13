@@ -97,6 +97,11 @@ before `start_run`. After a caller-side permission-review timeout, use `get_star
 An unknown result does not establish that no run exists. If the caller allows one retry, reuse the exact
 request and identity; changing the model is a different request. A second timeout requires user guidance.
 
+Completed write runs publish a private, immutable Git bundle to the Hub unless `runArtifacts` is set to `false` in `dok.json`.
+The receipt exposes bounded artifact identity metadata only. A linked Mac can import a bundle with
+`node tools/run-artifact/import.mjs RUN_ID REPO_NAME LOCAL_CHECKOUT`; the importer verifies the checksum, recorded
+base/head and ancestry before creating `refs/remotes/hub-review/runs/<run_id>`. It never checks out, merges or pushes.
+
 Historical pre-checkpoint runs can be reconciled with the operator-only script below. It reads the last
 assistant text within the run's recorded time window, checks the matching review ref and retained head, and
 requires ancestry from the original base. Recovered text is explicitly partial/unverified, and status stays

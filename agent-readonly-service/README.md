@@ -14,6 +14,8 @@ Live: `https://YOUR-HUB.workers.dev`
 | `GET /mcp/v1/agents[/:name]`, `/mcp/v1/runs[/:id]`, `/mcp/v1/context` | OAuth 2.1 bearer token | The same data as REST, beneath the `/mcp` resource |
 | `GET /relay/dok-dev/connect` (WebSocket upgrade) | dok machine token | Existing dok supervisor transport |
 | `GET /relay/mac/panel`, `/relay/mac/runs/:id` | Mac token | Shared Hub data without confirmation codes |
+| `GET /relay/mac/artifacts/:id` | Mac token | Download a completed dok review bundle after receipt/hash verification |
+| `PUT /relay/dok-dev/artifacts/:id` | dok machine token | Publish one immutable completed-run review bundle |
 | `POST /relay/mac/start` | Mac token | Existing allowed dok starts; only agent, task, request_id |
 | `GET /relay/mac/starts/:id` | Mac token | Read-only request reconciliation via receipts and dok journal |
 | `POST /v1/snapshots` | Bearer publish token | Retired with the publisher; closed by deleting `PUBLISH_TOKEN` |

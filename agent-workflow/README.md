@@ -134,6 +134,10 @@ the append-only ref `refs/heads/review/runs/<run_id>`; nothing is merged. The re
 session on the same account (reasoning history is account-bound; if that account is limited the run fails and can be
 retried). A failover to another account is refused once a write/edit/bash call has happened. Conversations are kept 7 days
 (20 newest). The older approval-card route (`request_development`) still exists for interactive sessions.
+
+Completed write runs also publish an immutable private Git bundle to the Hub. The receipt’s bounded `artifact` metadata can be
+imported on a linked Mac with `node tools/run-artifact/import.mjs RUN_ID REPO_NAME LOCAL_CHECKOUT`; import verifies the exact
+head/base, bundle checksum and ancestry before creating a remote-tracking review ref. It does not checkout, merge or push.
 Verified 2026-10-12: write run `r-20261012T184738Z-c29271` produced a one-line review ref in 30 s; isolation probes in the
 container (no network, no Pi auth, no `dok.json`, no repos, sibling runs invisible) all blocked.
 

@@ -12,6 +12,8 @@
 //   health      additive field on get_status/open_dashboard: health.mjs schema_version 1. Legacy fields and tool names
 //               remain unchanged. Snapshot capabilities describe the published surface, never live relay authority.
 //   get_run     the run itself (local: the full receipt; hosted: its brief), plus `snapshot` on the hosted hub.
+//               Hub completed review runs add `artifact` after private bundle publication, with version,
+//               run_id, repo, commit, base_commit, review_ref, bundle_ref, size and sha256.
 
 import { publicRecovery } from './recovery-contract.mjs';
 import { sanitizeProgress } from './run-progress.mjs';
@@ -102,7 +104,7 @@ export const READ_OPS = {
   },
   get_run: {
     title: 'Get a run', annotations: { readOnlyHint: true },
-    description: 'One run by id. A run still in progress has status running.',
+    description: 'One run by id. A run still in progress has status running. Completed review runs may include artifact metadata for authenticated Mac import through tools/run-artifact/import.mjs; no GitHub publication is implied.',
     input: { type: 'object', required: ['run_id'], additionalProperties: false, properties: { run_id: { type: 'string' } } },
   },
 };

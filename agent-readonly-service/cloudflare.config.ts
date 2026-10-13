@@ -21,6 +21,7 @@ export default defineConfig({
 				name: "agent-readonly",
 				id: "00000000-0000-0000-0000-000000000000",
 			}),
+			RUN_ARTIFACTS: bindings.r2({ name: "agents-hub-run-artifacts" }),
 		},
 	},
 });

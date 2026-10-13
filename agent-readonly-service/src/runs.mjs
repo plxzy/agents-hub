@@ -8,6 +8,7 @@ import { sanitizeFailureContext } from '../../agent-workflow/failure-telemetry.m
 import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
 import { withFailureGuidance, publicRunContext } from '../../agent-workflow/run-trace.mjs';
 import { runConfiguration, runtimeConfig } from '../../agent-workflow/run-config.mjs';
+import { readArtifact } from './run-artifacts.mjs';
 
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -94,6 +95,8 @@ export async function readRun(env, runId) {
   const row = await env.DB.prepare('SELECT receipt, updated_at FROM runs WHERE run_id = ?').bind(runId).first();
   if (!row) return null;
   const receipt = observedRun(row), rating = (await ratingsFor(env, [runId])).get(runId);
+  try { const artifact = await readArtifact(env, receipt); if (artifact) receipt.artifact = artifact; }
+  catch { /* Run receipts remain readable during artifact-store outages. */ }
   return withFailureGuidance(rating ? { ...receipt, feedback: rating } : receipt);
 }
 

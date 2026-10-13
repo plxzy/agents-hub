@@ -6,6 +6,8 @@ import { decisionsSince } from './decisions.mjs';
 import { publishKnowledge, knowledgeRevision, agentBundle, readFiles } from './knowledge.mjs';
 import { readAccounts, recordAccount } from './accounts.mjs';
 import { mcpConnection } from '../../agent-workflow/run-config.mjs';
+import { uploadArtifact, downloadArtifact } from './run-artifacts.mjs';
+import { ARTIFACT_RUN_ID } from '../../agent-workflow/run-artifact-contract.mjs';
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
 export async function relayFetch(request, env, readPanel) {
   const pathname = new URL(request.url).pathname;
@@ -16,6 +18,17 @@ export async function relayFetch(request, env, readPanel) {
   const digest = (s) => crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
   const [a, b] = await Promise.all([digest(request.headers.get('authorization') ?? ''), digest('Bearer ' + token)]);
   if (!crypto.subtle.timingSafeEqual(a, b)) return json({ error: 'unauthorized' }, 401);
+  const artifactPrefix = dok ? '/relay/dok-dev/artifacts/' : '/relay/mac/artifacts/';
+  if (pathname.startsWith(artifactPrefix)) {
+    const id = pathname.slice(artifactPrefix.length);
+    if (!ARTIFACT_RUN_ID.test(id)) return json({ error: 'Invalid run' }, 400);
+    if (request.method !== (dok ? 'PUT' : 'GET')) return json({ error: 'method_not_allowed' }, 405);
+    try {
+      const receipt = await readRun(env, id);
+      if (!receipt) return json({ error: 'Unknown run' }, 404);
+      return dok ? await uploadArtifact(request, env, receipt) : await downloadArtifact(env, receipt);
+    } catch { return json({ error: 'Artifact unavailable' }, 503); }
+  }
   const target = dok ? env.RELAY.getByName('owner-dok-dev') : null;
   if (dok && pathname === '/relay/dok-dev/lease' && request.method === 'POST') {
     try {

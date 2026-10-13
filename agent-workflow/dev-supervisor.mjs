@@ -7,6 +7,7 @@ import { DevelopmentSessions, save } from './dev-sessions.mjs';
 import { serveSocket } from './link-socket.mjs';
 import { validateDevelopment } from './dev-contract.mjs';
 import { fingerprintText } from './relay-wire.mjs';
+import { publishArtifact } from './run-artifact.mjs';
 
 const configFile = process.argv.at(-1);
 const config = JSON.parse(fs.readFileSync(configFile, 'utf8'));
@@ -63,6 +64,9 @@ const report = async receipt => {
     headers: { authorization: 'Bearer ' + config.token, 'content-type': 'application/json' },
     body: JSON.stringify(receipt), redirect: 'error', signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error('Receipt not accepted');
+  if (config.runArtifacts !== false && receipt.status === 'completed' && receipt.review_ref) {
+    await publishArtifact(receipt, { state: config.state, repository: sessions.repos[receipt.repo], config });
+  }
 };
 const hub = async (route, init = {}) => {
   const response = await fetch(new URL(route, endpoint), { ...init, headers: { authorization: 'Bearer ' + config.token, 'content-type': 'application/json' },
