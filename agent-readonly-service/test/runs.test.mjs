@@ -45,6 +45,16 @@ test('receipts keep useful fields, drop unknown ones and redact secret-looking l
   assert.throws(() => sanitizeReceipt({ run_id: 'x', agent: 'helper', status: 'completed', started: 'now' }, 'dok'), /Invalid/);
 });
 
+test('receipt configuration keeps model thinking and bounded MCP observations only', () => {
+  const r = sanitizeReceipt({ run_id: RUN, agent: 'helper', status: 'completed', started: '2026-10-12T12:00:00.000Z',
+    runtime: { provider: 'openai', model: 'gpt-6-luna', thinking: 'high', mcp: { status: 'disabled', source: 'pi-launcher --no-mcp' }, conversation_id: 'private' },
+    configuration: { mcp_connection: { protocol_version: '2026-07-28', capabilities: { elicitation: { form: {} }, tools: { listChanged: true } }, source: 'local-mcp-initialize', client: { name: 'fixture' } } } }, 'mac');
+  assert.equal(r.runtime.model, 'gpt-6-luna'); assert.equal(r.runtime.thinking, 'high');
+  assert.equal(r.runtime.conversation_id, undefined); assert.equal(r.runtime.mcp.status, 'disabled');
+  assert.equal(r.configuration.mcp_connection.protocol_version, '2026-07-28');
+  assert.equal(r.configuration.mcp_connection.capabilities.elicitation.form?.toString(), '[object Object]');
+});
+
 test('hosted receipts preserve the checkout branch but never publish private paths', () => {
   const r = sanitizeReceipt({ run_id: RUN, agent: 'helper', status: 'completed', started: '2026-10-12T12:00:00.000Z',
     repo: 'dev-workflow', checkout_branch: 'main', workspace: '/home/dok/run-work/private/workspace', log_path: '/home/dok/run.log' }, 'dok');

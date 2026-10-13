@@ -13,6 +13,7 @@ import { titleOf } from './contract.mjs';
 import { failedResult, sanitizeFailureContext } from './failure-telemetry.mjs';
 import { runProgressTelemetry, sanitizeProgress, progressPublisher } from './run-progress.mjs';
 import { captureRunContext, logObservation } from './run-context.mjs';
+import { runConfiguration } from './run-config.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
@@ -270,7 +271,7 @@ export class DevelopmentSessions {
     const { run_id } = read(file), r = this.runGet(run_id);
     return { state: 'started', run_id, status: r.status, runner: 'dok' };
   }
-  async runStart({ request_id, agent: name, task, model, thinking, repo, continue_from }) {
+  async runStart({ request_id, agent: name, task, model, thinking, repo, continue_from, mcp_connection }) {
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(request_id ?? '') || typeof task !== 'string' || !task.trim() || task.length > 16000) throw new Error('Invalid task');
     if (continue_from !== undefined && !RUN_ID.test(continue_from)) throw new Error('Invalid continue_from');
     const fingerprint = hash({ agent: name, task, model: model ?? null, thinking: thinking ?? null, repo: repo ?? null, continue_from: continue_from ?? null });
@@ -303,7 +304,7 @@ export class DevelopmentSessions {
     if (!(this.limits.providers ?? ['openai']).includes(runtime.provider)) throw new Error('Provider not available on dok');
     const receipt = { run_id, request_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
       started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version,
-      repo: project, write,
+      repo: project, write, ...(mcp_connection ? { mcp_connection } : {}),
       progress: runProgressTelemetry().snapshot(), ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
     save(requestFile, { fingerprint, run_id });
@@ -348,6 +349,7 @@ export class DevelopmentSessions {
         ...(done && harvested ? harvested : {}), ...(observed ? { runtime: observed } : {}),
         ...(failure || result.error ? { error: failure ?? result.error } : {}),
         output: safeOutput(result.output ?? ''), tool_calls: Array.isArray(result.tool_calls) ? result.tool_calls.slice(0, 500) : [],
+        ...(result.runtime || observed || mcp_connection ? { configuration: runConfiguration({ runtime: result.runtime ?? observed, mcp_connection }) } : {}),
         ...(!done ? { failure_context: result.failure_context, output_partial: result.output_partial } : {}),
         ...(result.usage ? { usage: result.usage } : {}), ...(Number.isInteger(result.model_calls) ? { model_calls: result.model_calls } : {}),
         ...(Array.isArray(result.slots_used) ? { accounts_used: result.slots_used.filter(s => /^openai(-[1-9]\d*)?$/.test(s)) } : {}) });

@@ -1,4 +1,5 @@
 // Operator-pinned runtime identity, separate from the editable project and agent defaults.
+import { mcpDisabled } from './run-config.mjs';
 export const DEVELOPMENT_RUNTIME = Object.freeze({ engine: 'pi-sdk', provider: 'openai', model: 'gpt-6.1-sol', thinking: 'high' });
 export function runtimeMatches(actual, expected = DEVELOPMENT_RUNTIME) {
   return actual && Object.entries(expected).every(([key, value]) => actual[key] === value);
@@ -15,7 +16,9 @@ export function agentRuntime(agent) {
 export function observedRuntime(session, piVersion, expected = DEVELOPMENT_RUNTIME) {
   const runtime = { engine: 'pi-sdk', provider: session.model?.provider, model: session.model?.id,
     thinking: session.thinkingLevel, pi_version: piVersion, conversation_id: session.sessionId,
-    source: 'trusted-pi-session', observed_at: new Date().toISOString() };
+    source: 'trusted-pi-session', observed_at: new Date().toISOString(),
+    // The trusted runner deliberately loads no MCP extensions or server connections.
+    mcp: mcpDisabled('trusted-pi-session') };
   if (!runtimeMatches(runtime, expected)) throw new Error('Pi runtime does not match approved model and thinking');
   return runtime;
 }

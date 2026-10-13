@@ -5,6 +5,7 @@ import { bundleFor, pendingMemory } from './memory.mjs';
 import { decisionsSince } from './decisions.mjs';
 import { publishKnowledge, knowledgeRevision, agentBundle, readFiles } from './knowledge.mjs';
 import { readAccounts, recordAccount } from './accounts.mjs';
+import { mcpConnection } from '../../agent-workflow/run-config.mjs';
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
 export async function relayFetch(request, env, readPanel) {
   const pathname = new URL(request.url).pathname;
@@ -69,13 +70,16 @@ const NEXT = 'Poll get_run with this run_id until status is no longer running (u
 /** Starts a run on dok, the always-on runner. */
 export async function startRun(env, args, { mac = false } = {}) {
   if (!mac && args?.request_id?.startsWith('mac-')) throw new Error('Reserved request namespace');
-  validateRelay('start_run', args);
+  const connection = mac ? mcpConnection(args?.mcp_connection) : undefined;
+  const publicArgs = { ...args }; delete publicArgs.mcp_connection;
+  validateRelay('start_run', publicArgs);
   const dok = await dokStatus(env);
   if (dok.online && dok.agents.includes(args.agent)) {
     if (args.continue) throw new Error('continue is not supported on dok yet; start a new run and include the needed context in the task. No action was queued.');
     const result = await env.RELAY.getByName('owner-dok-dev').dispatch('run_start', { request_id: args.request_id, agent: args.agent, task: args.task,
       ...(args.model ? { model: args.model } : {}), ...(args.thinking ? { thinking: args.thinking } : {}),
-      ...(args.repo ? { repo: args.repo } : {}), ...(args.continue_from ? { continue_from: args.continue_from } : {}) });
+      ...(args.repo ? { repo: args.repo } : {}), ...(args.continue_from ? { continue_from: args.continue_from } : {}),
+      ...(connection ? { mcp_connection: connection } : {}) });
     if (!result.ok) throw new Error(result.error);
     try { await storeRun(env, result.value, 'dok'); } catch { /* dok also posts its receipt */ }
     return { run_id: result.value.run_id, agent: args.agent, status: result.value.status, runner: 'dok', ...(result.value.repo ? { repo: result.value.repo } : {}), model: result.value.model, thinking: result.value.thinking, next_step: NEXT };
@@ -101,7 +105,7 @@ async function macRoute(request, env, pathname, readPanel) {
       const body = await request.text();
       if (body.length > 65536) return json({ error: 'Start request too large' }, 400);
       let args;
-      try { args = JSON.parse(body); validateSelectedStart(args, true); }
+      try { args = JSON.parse(body); const connection = mcpConnection(args.mcp_connection); delete args.mcp_connection; validateSelectedStart(args, true); if (connection) args.mcp_connection = connection; }
       catch (e) { return json({ error: e.message }, 400); }
       const target = dokTarget(await dokStatus(env));
       const agent = target.agents.find(a => a.name === args.agent);

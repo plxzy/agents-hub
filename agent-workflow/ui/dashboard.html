@@ -100,7 +100,7 @@
 <script type="module">/*__HEALTH_BUNDLE__*/</script>
 <script type="module">
 const { App, applyHostStyleVariables } = globalThis.ExtApps;
-const { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary } = globalThis.AgentsHealth;
+const { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary, configurationRows } = globalThis.AgentsHealth;
 
 // ---------- state ----------
 const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null, healthOpen: false };
@@ -316,6 +316,8 @@ function detailView() {
     progressRows(r).length ? h('section', {}, h('h3', {}, ['running', 'unknown'].includes(r.status) ? 'Run progress' : 'Recorded progress'),
       h('dl', {}, ...progressRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)]))) : null,
     failureRows(r).length ? h('dl', {}, ...failureRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, value)])) : null,
+    h('h3', {}, 'Configuration observed for this run'),
+    h('dl', {}, ...configurationRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)])),
     output ? h('h3', {}, r.output_partial ? 'Partial output' : 'Output') : null,
     output ? h('pre', {}, output) : null,
     h('dl', {}, ...[

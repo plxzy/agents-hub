@@ -119,3 +119,26 @@ export function progressSummary(r = {}, now = Date.now()) {
   if (!r.progress) return rows[0][1];
   return `${progressAction(r.progress.action, r.progress.last_tool)} · ${rows.at(-1)[1].split(' · ').at(-1)}`;
 }
+
+function capabilityNames(value, prefix = '') {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.entries(value).flatMap(([name, child]) => {
+    const full = prefix ? `${prefix}.${name}` : name;
+    return child && typeof child === 'object' && !Array.isArray(child) ? [full, ...capabilityNames(child, full)] : [full];
+  });
+}
+
+/** Configuration facts shown in both run-detail renderers. Missing observations stay explicit. */
+export function configurationRows(r = {}) {
+  const c = r.configuration ?? {}, runtime = c.runtime ?? r.runtime ?? {}, execution = runtime.mcp;
+  const connection = c.mcp_connection;
+  const model = runtime.provider && runtime.model ? `${runtime.provider}/${runtime.model}` : r.model;
+  return [
+    ['Effective model', model || 'Unavailable — not recorded'],
+    ['Thinking', runtime.thinking || r.thinking || 'Unavailable — not recorded'],
+    ['Pi MCP', execution ? `${execution.status}${execution.source ? ` · ${execution.source}` : ''}` : 'Unavailable — not recorded'],
+    ['Negotiated MCP protocol', connection?.protocol_version || 'Unavailable — connection metadata was not propagated'],
+    ['Advertised MCP capabilities', connection ? (capabilityNames(connection.capabilities).join(', ') || 'None advertised') : 'Unavailable — connection metadata was not propagated'],
+    ['MCP connection source', connection?.source || 'Unavailable — connection metadata was not propagated'],
+  ];
+}

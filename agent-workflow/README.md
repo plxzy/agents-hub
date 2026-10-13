@@ -187,6 +187,14 @@ same-project runs serialized, and capacity or lock conflicts return an explicit 
 receipt or task is started. The existing isolated-clone, disk watermark, account-pool and review-branch
 boundaries remain in force. This does not add automatic local fallback or a second executor.
 
+**Configuration visibility (13 October 2026):** run details record the effective provider/model and
+thinking level, plus the trusted runner's MCP policy. Pi launches explicitly disable MCP and say so in
+the receipt; the dok SDK uses the same no-extension boundary. When a run is started through the local
+MCP server, its receipt also carries a bounded observation of that connection's initialize protocol
+version, client name/version and advertised capability names. Hosted MCP requests cannot be correlated
+to a later run by this stateless relay, so those rows say that connection metadata was not propagated.
+Raw initialize parameters, schemas, prompts, credentials and tool arguments are never recorded.
+
 **Partial failure telemetry (13 October 2026, plugins 0.4.2 / dashboard v8):** new failed one-shot
 Mac and dok receipts retain bounded assistant text from before the failure, including streamed text
 when Pi supplies it. `output_partial` labels that answer as incomplete. `failure_context` records the

@@ -6,6 +6,7 @@ import { proposeMemory } from './memory.mjs';
 import { sanitizeFailureContext } from '../../agent-workflow/failure-telemetry.mjs';
 import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
 import { withFailureGuidance, publicRunContext } from '../../agent-workflow/run-trace.mjs';
+import { runConfiguration, runtimeConfig } from '../../agent-workflow/run-config.mjs';
 
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -26,8 +27,8 @@ export function redactLines(value, max) {
 export function sanitizeReceipt(r, runner) {
   if (!r || typeof r !== 'object' || !RUN_ID.test(r.run_id ?? '') || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(r.agent ?? '')
     || !STATUS.includes(r.status) || !iso(r.started)) throw new Error('Invalid run receipt');
-  const runtime = r.runtime && typeof r.runtime === 'object' ? Object.fromEntries(['provider', 'model', 'thinking', 'pi_version', 'observed_at']
-    .map((k) => [k, short(r.runtime[k], 80)]).filter(([, v]) => v !== undefined)) : undefined;
+  const runtime = runtimeConfig(r.runtime);
+  const configuration = runConfiguration({ runtime: r.runtime, mcp_connection: r.configuration?.mcp_connection ?? r.mcp_connection });
   const usage = r.usage && typeof r.usage === 'object' ? Object.fromEntries(['input', 'output', 'totalTokens', 'cost']
     .map((k) => [k, num(r.usage[k])]).filter(([, v]) => v !== undefined)) : undefined;
   const out = {
@@ -49,7 +50,7 @@ export function sanitizeReceipt(r, runner) {
     memory_proposed: Number.isInteger(r.memory_proposed) && r.memory_proposed >= 0 && r.memory_proposed <= 20 ? r.memory_proposed : undefined,
     memory_source: ['hub', 'frozen-release'].includes(r.memory_source) ? r.memory_source : undefined,
     memory_hash: /^[a-f0-9]{16}$/.test(r.memory_hash ?? '') ? r.memory_hash : undefined,
-    usage, runtime, progress: sanitizeProgress(r.progress), error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
+    usage, runtime, configuration, progress: sanitizeProgress(r.progress), error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
     ...(r.status !== 'completed' && r.status !== 'running' ? {
       failure_context: sanitizeFailureContext(r.failure_context), output_partial: r.output_partial === true,
     } : {}),

@@ -55,7 +55,8 @@ export const hubRun = (id, options = {}) => hubCall(`runs/${encodeURIComponent(i
 const SEND = ['run_id', 'agent', 'kind', 'agent_version', 'status', 'task', 'started', 'ended', 'model', 'thinking', 'output', 'error',
   'tool_calls', 'blocked', 'model_calls', 'usage', 'failure_context', 'output_partial', 'progress'];
 export function hubReceipt(receipt, proposals = []) {
-  const out = { ...Object.fromEntries(SEND.filter((k) => receipt[k] !== undefined && receipt[k] !== null).map((k) => [k, receipt[k]])), ...publicRunContext(receipt) };
+  const out = { ...Object.fromEntries(SEND.filter((k) => receipt[k] !== undefined && receipt[k] !== null).map((k) => [k, receipt[k]])),
+    ...(receipt.configuration ? { configuration: receipt.configuration } : {}), ...publicRunContext(receipt) };
   if (out.failure_context) out.failure_context = sanitizeFailureContext(out.failure_context);
   if (out.progress) out.progress = sanitizeProgress(out.progress);
   if (receipt.status === 'unknown') out.status = 'interrupted';

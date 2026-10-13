@@ -55,6 +55,12 @@ state or exposes hosted runner logs.
 and two writable slots). Same-repository starts remain serialized and a full capacity or repository
 lock is reported before dispatch; no local fallback is automatic.
 
+**Configuration visibility (0.4.5):** run details show the observed provider/model and thinking level,
+the Pi MCP policy, and—when a local MCP start supplied it—the negotiated initialize protocol and
+bounded advertised capability names. The trusted Pi launcher explicitly records MCP as disabled. A
+hosted relay cannot correlate its stateless MCP initialize request with a later run, so it labels that
+connection metadata unavailable instead of guessing.
+
 **Failure details (0.4.2):** the error remains visible alongside labelled partial output. New failure
 receipts also display last observed phase/tool, provider/model and a bounded redacted diagnostic via
 the shared operations formatter. Older receipts show their original error without invented telemetry.

@@ -41,5 +41,5 @@ export function dashboardHtml({ bridge } = {}) {
   const trace = fs.readFileSync(path.join(DIR, '../run-trace.mjs'), 'utf8').replace(/^export /gm, '');
   if (!page.includes('/*__HEALTH_BUNDLE__*/')) throw new Error('dashboard.html has no health placeholder');
   return page.replace(PLACEHOLDER, () => bridge ?? (cached ??= bridgeScript()))
-    .replace('/*__HEALTH_BUNDLE__*/', () => `${health}\n${trace}\nglobalThis.AgentsHealth = { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary };`);
+    .replace('/*__HEALTH_BUNDLE__*/', () => `${health}\n${trace}\nglobalThis.AgentsHealth = { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary, configurationRows };`);
 }

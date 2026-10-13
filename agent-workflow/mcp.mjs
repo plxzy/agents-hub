@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { DASHBOARD_URI, OPS, defaultContext } from './ops.mjs';
 import { DASHBOARD_RESOURCE_META, isDashboardUri } from './contract.mjs';
+import { mcpConnection } from './run-config.mjs';
 
 const MCP_APP_MIME = 'text/html;profile=mcp-app';
 const asText = (value) => (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
@@ -35,6 +36,10 @@ export function createServer({ ctx = defaultContext(), ops = OPS, html = () => i
   return async function handle({ id, method, params }) {
     const reply = (result) => ({ jsonrpc: '2.0', id, result });
     if (method === 'initialize') {
+      // Stdio is a single MCP connection. Keep only bounded, safe handshake metadata for
+      // runs started later through this connection; raw params never enter a receipt.
+      ctx.mcp_connection = mcpConnection({ protocolVersion: params?.protocolVersion, capabilities: params?.capabilities,
+        client: params?.clientInfo, source: 'local-mcp-initialize' });
       return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18',
         capabilities: { tools: {}, resources: {} }, serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.3.0' },
         instructions: "The user's own agents (Pi, local). Use run_agent to delegate to a matching agent; list_agents shows what exists; "

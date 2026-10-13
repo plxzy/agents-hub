@@ -72,7 +72,8 @@ export async function startSelected(args, options) {
   try { save(name, r, true); } catch (e) { if (e.code === 'EEXIST') return existing(); throw e; }
   try {
     const value = args.runner === 'dok'
-      ? await hubStart({ agent: args.agent, task: args.task, request_id: args.request_id }, options)
+      ? await hubStart({ agent: args.agent, task: args.task, request_id: args.request_id,
+        ...(options.mcpConnection ? { mcp_connection: options.mcpConnection } : {}) }, options)
       : options.startLocal(args, r.planned_run_id);
     if (!value?.run_id) throw new Error('Start response missing run identity');
     Object.assign(r, { state: 'started', run_id: value.run_id, status: value.status, message: undefined });

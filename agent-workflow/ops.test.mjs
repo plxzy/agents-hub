@@ -96,6 +96,20 @@ test('dashboard data and MCP App wiring', async () => {
   assert.equal((await handle({ method: 'notifications/initialized' })), null);
 });
 
+test('local MCP initialize metadata is bounded and attached to later operation context', async () => {
+  const ctx = fixture();
+  const handle = createServer({ ctx, ops: OPS.filter(o => o.name === 'get_status') });
+  const init = await handle({ id: 1, method: 'initialize', params: {
+    protocolVersion: '2026-07-28', capabilities: { tools: { listChanged: true }, elicitation: { form: {} }, raw: { token: 'secret' } },
+    clientInfo: { name: 'fixture-host', version: '1' },
+  }});
+  assert.equal(init.result.protocolVersion, '2026-07-28');
+  assert.equal(ctx.mcp_connection.protocol_version, '2026-07-28');
+  assert.equal(ctx.mcp_connection.capabilities.tools.listChanged, true);
+  assert.equal(ctx.mcp_connection.client.name, 'fixture-host');
+  assert.doesNotMatch(JSON.stringify(ctx.mcp_connection), /secret/);
+});
+
 test('linked open_dashboard uses exactly the Hub lists and falls back explicitly on failure', async () => {
   const ctx = { ...fixture(), hub: { endpoint: 'https://hub.example', token: 't'.repeat(32) } };
   const remote = { source: 'hub', agents: [{ name: 'remote-only' }], runs: [{ run_id: 'r-dok', runner: 'dok' }],

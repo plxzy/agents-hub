@@ -35,6 +35,9 @@ export function validateRelay(name, args) {
   for (const key of op.input.required ?? []) if (!(key in args)) throw new Error(`Missing ${key}`);
   for (const [key, value] of Object.entries(args)) {
     const rule = op.input.properties[key];
+    // The local Mac adapter may attach a bounded initialize observation to a dok start.
+    // It is internal metadata, never part of the public start_run tool schema.
+    if (name === 'start_run' && key === 'mcp_connection' && value && typeof value === 'object' && !Array.isArray(value)) continue;
     if (!rule || typeof value !== rule.type || (rule.enum && !rule.enum.includes(value))
       || (rule.minLength && value.trim().length < rule.minLength) || (rule.maxLength && value.length > rule.maxLength)
       || (rule.pattern && !new RegExp(rule.pattern).test(value))) throw new Error(`Invalid ${key}`);

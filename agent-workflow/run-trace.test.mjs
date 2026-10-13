@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runTrace, failureGuidance, failureRows, withFailureGuidance, publicRunContext } from './run-trace.mjs';
+import { runTrace, failureGuidance, failureRows, withFailureGuidance, publicRunContext, configurationRows } from './run-trace.mjs';
 
 test('failure guidance classifies recorded symptoms and offers a bounded concrete next step', () => {
   const cases = [
@@ -82,4 +82,17 @@ test('trace publishing strips private paths and arbitrary log payloads; detached
   assert.match(rows['Working tree at start'], /Uncommitted changes/);
   assert.equal(publicRunContext({ checkout_branch: 'Bearer fake-value', logs: { status: 'recorded' } }).checkout_branch, undefined);
   assert.equal(publicRunContext({ checkout_branch: 'main\nprivate' }).checkout_branch, undefined);
+});
+
+test('configuration rows distinguish trusted Pi MCP policy from an observed host handshake', () => {
+  const rows = Object.fromEntries(configurationRows({ model: 'openai/gpt-6-luna', configuration: {
+    runtime: { provider: 'openai', model: 'gpt-6-luna', thinking: 'high', mcp: { status: 'disabled', source: 'pi-launcher --no-mcp' } },
+    mcp_connection: { status: 'negotiated', protocol_version: '2026-07-28', capabilities: { tools: { listChanged: true }, elicitation: { form: {} } }, source: 'local-mcp-initialize' },
+  }}));
+  assert.equal(rows['Effective model'], 'openai/gpt-6-luna');
+  assert.equal(rows.Thinking, 'high');
+  assert.match(rows['Pi MCP'], /disabled/);
+  assert.equal(rows['Negotiated MCP protocol'], '2026-07-28');
+  assert.match(rows['Advertised MCP capabilities'], /tools\.listChanged/);
+  assert.match(rows['Advertised MCP capabilities'], /elicitation\.form/);
 });

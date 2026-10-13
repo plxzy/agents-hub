@@ -108,7 +108,7 @@ async function openRun($: Engine, runId: string) {
       .filter(Boolean).join(' · ')
     await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: String(r.task ?? r.title ?? ''), text: text.slice(0, 20000), meta,
       trace: r.trace ?? [['Run context', 'Unavailable — update local operations to view recorded context']],
-      error: r.error, partial: r.output_partial === true, failureRows: r.failure_rows ?? [], progressRows: r.progress_rows ?? [] }))
+      error: r.error, partial: r.output_partial === true, failureRows: r.failure_rows ?? [], progressRows: r.progress_rows ?? [], configurationRows: r.configuration_rows ?? [] }))
   } catch (err) {
     await fail($)(err)
   }
@@ -242,6 +242,8 @@ export const register: Register = on => {
           {(shown.progressRows ?? []).map(([label, value]) => <Text key={`progress-${label}`} wrap="wrap">{`${label}: ${value}`}</Text>)}
           {shown.error && <Text color="error" wrap="wrap">{`Error: ${shown.error}`}</Text>}
           {(shown.failureRows ?? []).map(([label, value]) => <Text key={`failure-${label}`} wrap="wrap">{`${label}: ${value}`}</Text>)}
+          <Text bold>Configuration observed for this run</Text>
+          {(shown.configurationRows ?? [['Configuration', 'Unavailable — reopen this run to load recorded configuration']]).map(([label, value]) => <Text key={`configuration-${label}`} wrap="wrap">{`${label}: ${value}`}</Text>)}
           {shown.partial && <Text bold>Partial output</Text>}
           <Markdown key="output" text={shown.text} />
           <Box flexDirection="column">

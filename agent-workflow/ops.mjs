@@ -16,7 +16,7 @@ import {
 } from './agent.mjs';
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
 import { DASHBOARD_URI, READ_OPS, lastRunOf, runBrief } from './contract.mjs';
-import { runTrace, failureRows, progressRows, progressSummary, withFailureGuidance } from './run-trace.mjs';
+import { runTrace, failureRows, progressRows, progressSummary, configurationRows, withFailureGuidance } from './run-trace.mjs';
 import { linkedHub, refreshHubCache, flushOutbox, hubPanel, hubRun, DECIDE_IN_HUB } from './hub.mjs';
 
 export { DASHBOARD_URI };
@@ -38,9 +38,9 @@ function validateCwd(definition, cwd) {
 // Runners execute an agent somewhere. Only `local` (Pi on this Mac, sandbox + guard) exists today.
 export const RUNNERS = {
   local: {
-    run: (name, task, { resume, cwd, root, state }) => runAgent(name, task, { resume, cwd, root, state }),
+    run: (name, task, { resume, cwd, root, state, mcpConnection }) => runAgent(name, task, { resume, cwd, root, state, mcpConnection }),
     /** Starts `agent run` in the background and returns its run id at once; the run writes its own receipt. */
-    start: (name, task, { resume, cwd, root, state, remote = false, spawn = nodeSpawn, runId = newId('r') }) => {
+    start: (name, task, { resume, cwd, root, state, remote = false, spawn = nodeSpawn, runId = newId('r'), mcpConnection }) => {
       const definition = getAgent(name, root);
       const agent = resolveWorkspace(definition, cwd ?? process.cwd());
       assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
@@ -48,7 +48,8 @@ export const RUNNERS = {
       const log = fs.openSync(path.join(state, 'runs', `${runId}.log`), 'a', 0o600);
       const child = spawn(process.execPath, [AGENT_CLI, 'run', '--run-id', runId, ...(resume ? ['--continue'] : []), name, task], {
         cwd: cwd ?? process.cwd(), detached: true, stdio: ['ignore', log, log],
-        env: { ...process.env, AGENT_HOME: root, AGENT_WORKFLOW_STATE: state, ...(remote ? { AGENT_REMOTE_RUN: '1' } : {}) },
+        env: { ...process.env, AGENT_HOME: root, AGENT_WORKFLOW_STATE: state,
+          ...(mcpConnection ? { AGENT_MCP_CONNECTION: JSON.stringify(mcpConnection) } : {}), ...(remote ? { AGENT_REMOTE_RUN: '1' } : {}) },
       });
       child.unref();
       // Written here too, so the run is visible before the child gets going.
@@ -87,10 +88,10 @@ export const OPS = [
       + 'cwd is an error for other agents. Use continue=true to follow up in the same agent conversation in that folder. Takes seconds to a few minutes.',
     input: { type: 'object', required: ['agent', 'task'], additionalProperties: false, properties: AGENT_ARGS },
     annotations: { readOnlyHint: false, openWorldHint: true },
-    run: async ({ agent, task, cwd, continue: resume = false }, { root, state }) => {
+    run: async ({ agent, task, cwd, continue: resume = false }, { root, state, mcp_connection }) => {
       const definition = getAgent(agent, root);
       validateCwd(definition, cwd);
-      const r = await runnerFor(definition).run(agent, task, { resume, cwd, root, state });
+      const r = await runnerFor(definition).run(agent, task, { resume, cwd, root, state, mcpConnection: mcp_connection });
       const answer = (r.output ?? r.error ?? '(no output)').replace(/```remember\n[\s\S]*?```/g, '').trim();
       return `${answer}\n\n— run ${r.run_id} · ${r.status} · ${r.model} · ${r.tool_calls.length} tool call(s)`
         + `${r.blocked?.length ? ` · ${r.blocked.length} blocked by guard` : ''} · $${r.usage.cost.toFixed(4)}`
@@ -103,10 +104,10 @@ export const OPS = [
       + 'Same arguments as run_agent. Use for long tasks or when you should not wait.',
     input: { type: 'object', required: ['agent', 'task'], additionalProperties: false, properties: AGENT_ARGS },
     annotations: { readOnlyHint: false, openWorldHint: true },
-    run: ({ agent, task, cwd, continue: resume = false }, { root, state, spawn, remote }) => {
+    run: ({ agent, task, cwd, continue: resume = false }, { root, state, spawn, remote, mcp_connection }) => {
       const definition = getAgent(agent, root);
       validateCwd(definition, cwd);
-      const run_id = runnerFor(definition).start(agent, task, { resume, cwd, root, state, spawn, remote });
+      const run_id = runnerFor(definition).start(agent, task, { resume, cwd, root, state, spawn, remote, mcpConnection: mcp_connection });
       return { run_id, status: 'running' };
     },
   },
@@ -134,13 +135,13 @@ export const OPS = [
     run: async ({ run_id }, ctx) => {
       const options = hubOptions(ctx);
       if (options.config) {
-        try { const r = await hubRun(run_id, options); return { ...withFailureGuidance(r), trace: runTrace(r), failure_rows: failureRows(r), progress_rows: progressRows(r) }; }
+        try { const r = await hubRun(run_id, options); return { ...withFailureGuidance(r), trace: runTrace(r), failure_rows: failureRows(r), progress_rows: progressRows(r), configuration_rows: configurationRows(r) }; }
         catch { /* Local output remains available during an outage or before its receipt is posted. */ }
       }
       const r = listRuns(ctx.state, { running: true }).find((x) => x.run_id === run_id);
       if (!r) throw new Error(`no run ${run_id}`);
       const { raw_events, transcript, ...rest } = r;
-      return { ...withFailureGuidance(rest), trace: runTrace(rest), failure_rows: failureRows(rest), progress_rows: progressRows(rest) };
+      return { ...withFailureGuidance(rest), trace: runTrace(rest), failure_rows: failureRows(rest), progress_rows: progressRows(rest), configuration_rows: configurationRows(rest) };
     },
   },
   {
@@ -223,10 +224,10 @@ function selectedOptions(ctx) {
     assertSandboxAllowed(resolveWorkspace(definition, args.cwd ?? process.cwd()), 'agent run');
     runnerFor(definition);
   };
-  return { ...hubOptions(ctx), state: ctx.state, validateLocal, newRunId: () => newId('r'),
+  return { ...hubOptions(ctx), state: ctx.state, mcpConnection: ctx.mcp_connection, validateLocal, newRunId: () => newId('r'),
     findLocal: id => listRuns(ctx.state, { running: true }).find(r => r.run_id === id),
     startLocal: (args, runId) => ({ run_id: runnerFor(getAgent(args.agent, ctx.root)).start(args.agent, args.task,
-      { root: ctx.root, state: ctx.state, spawn: ctx.spawn, remote: ctx.remote, cwd: args.cwd, resume: args.continue, runId }), status: 'running' }),
+      { root: ctx.root, state: ctx.state, spawn: ctx.spawn, remote: ctx.remote, cwd: args.cwd, resume: args.continue, runId, mcpConnection: ctx.mcp_connection }), status: 'running' }),
   };
 }
 export async function openDashboard(ctx) {

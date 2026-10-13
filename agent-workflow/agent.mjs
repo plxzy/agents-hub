@@ -12,6 +12,7 @@ import { modelGateway } from './model gateway.mjs';
 import { captureRunContext, logObservation } from './run-context.mjs';
 import { failureFromEvents } from './failure-telemetry.mjs';
 import { runProgressTelemetry } from './run-progress.mjs';
+import { mcpDisabled, runConfiguration } from './run-config.mjs';
 import { linuxPolicy } from './linux-sandbox.mjs';
 import { linkedHub, sendReceipt, flushOutbox, hubMemory, trackHubRun, DECIDE_IN_HUB } from './hub.mjs';
 
@@ -361,7 +362,7 @@ function bashCalls(events) {
 }
 
 /** Folds Pi's JSONL events into a receipt summary. */
-export function summarize(events) {
+export function summarize(events, { agent, mcpConnection } = {}) {
   const assistant = events.filter((e) => e.type === 'message_end' && e.message?.role === 'assistant');
   const final = assistant.at(-1)?.message;
   const usage = { input: 0, output: 0, totalTokens: 0, cost: 0 };
@@ -371,6 +372,10 @@ export function summarize(events) {
     usage.totalTokens += m.usage?.totalTokens ?? 0;
     usage.cost += m.usage?.cost?.total ?? 0;
   }
+  const runtime = { engine: 'pi-cli', provider: final?.provider, model: final?.model,
+    thinking: agent?.thinking ?? 'medium', source: 'pi-jsonl', observed_at: new Date().toISOString(),
+    // piCommand passes --no-mcp for Linux trusted runs; local Pi uses the same explicit boundary.
+    mcp: mcpDisabled('pi-launcher --no-mcp') };
   return {
     session_id: events.find((e) => e.type === 'session')?.id ?? null,
     model: final ? `${final.provider}/${final.model}` : null,
@@ -382,6 +387,8 @@ export function summarize(events) {
     blocked: bashCalls(events).filter((c) => c.blocked).map((c) => c.command),
     model_calls: assistant.length,
     usage,
+    runtime,
+    configuration: runConfiguration({ runtime, mcp_connection: mcpConnection }),
   };
 }
 
@@ -394,7 +401,7 @@ export function writeRunningMarker(state, { run_id, agent, kind = 'task', task, 
   return marker;
 }
 
-export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd(), runId = newId('r'), hubConfig, fetchImpl = fetch } = {}) {
+export async function runAgent(name, task, { root = ROOT, state = STATE, resume = false, useMemory = true, kind = 'task', proposeMemory = true, spawn = nodeSpawn, timeoutMs = 600_000, cwd = process.cwd(), runId = newId('r'), hubConfig, fetchImpl = fetch, mcpConnection } = {}) {
   if (fs.existsSync(path.join(root, 'RELEASE.json'))) proposeMemory = false;
   const agent = remoteSandbox(resolveWorkspace(getAgent(name, root), cwd));
   assertSandboxAllowed(agent, `agent run ${name} ${JSON.stringify(task)}`);
@@ -419,7 +426,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   fs.writeFileSync(marker, JSON.stringify({ ...runningMarker, progress: progress.snapshot() }) + '\n', { mode: 0o600 });
 
   const stopHeartbeat = await trackHubRun({ run_id: runId, agent: agent.name, kind, task, started, model: agent.model,
-    agent_version: agent.version, ...trace, progress: progress.snapshot() }, hubOptions);
+    agent_version: agent.version, configuration: runConfiguration({ mcp_connection: mcpConnection }), ...trace, progress: progress.snapshot() }, hubOptions);
   let progressSavedAt = 0;
   const observe = event => {
     if (!progress.observe(event)) return;
@@ -464,7 +471,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   }
   const { events, exitCode, timedOut } = result;
 
-  const summary = summarize(events);
+  const summary = summarize(events, { agent, mcpConnection });
   if (launchError) summary.error = launchError.message;
   const status = timedOut ? 'unknown' : exitCode === 0 && !summary.error ? 'completed' : 'failed';
   if (status !== 'completed') {
@@ -505,7 +512,7 @@ export function chatArgs(agent, { prompt, sessionDir, resume }) {
 
 /** One interactive invocation has a stable running id, even before Pi has written a conversation file. */
 export async function runChat(name, { root = ROOT, state = STATE, resume = false, cwd = process.cwd(), spawn = nodeSpawn,
-  hubConfig, fetchImpl = fetch, log = console.log } = {}) {
+  hubConfig, fetchImpl = fetch, log = console.log, mcpConnection } = {}) {
   const agent = resolveWorkspace(getAgent(name, root), cwd);
   assertSandboxAllowed(agent, `agent chat ${name}${resume ? ' --continue' : ''}`);
   if (process.platform === 'linux' && agent.writePaths && spawn === nodeSpawn) agent.linuxPolicy = linuxPolicy(agent, state);
@@ -524,7 +531,8 @@ export async function runChat(name, { root = ROOT, state = STATE, resume = false
     task: `Interactive chat with ${agent.name}`, workspace: agent.workspace, pid: process.pid });
   Object.assign(marker, trace);
   fs.writeFileSync(path.join(runsDir, `${marker.run_id}.running`), JSON.stringify(marker) + '\n', { mode: 0o600 });
-  const stopHeartbeat = await trackHubRun({ ...marker, model: agent.model, agent_version: agent.version }, hubOptions);
+  const stopHeartbeat = await trackHubRun({ ...marker, model: agent.model, agent_version: agent.version,
+    configuration: runConfiguration({ mcp_connection: mcpConnection }) }, hubOptions);
   let gateway, launchError, exitCode;
   try {
     gateway = await modelGateway(agent);
@@ -542,13 +550,14 @@ export async function runChat(name, { root = ROOT, state = STATE, resume = false
     const r = receiptFromSession(fs.readFileSync(file, 'utf8'), { agent, memories, file });
     return r ? [r] : [];
   });
-  if (!receipts.length) receipts.push({ ...marker, ...summarize([]), memory_supplied: memories.map(m => m.meta.id),
+  if (!receipts.length) receipts.push({ ...marker, ...summarize([], { agent, mcpConnection }), memory_supplied: memories.map(m => m.meta.id),
     memory_proposed: [], turns: 0, status: 'interrupted', error: 'Chat closed without a saved conversation.' });
   // Replace the live row, including when an empty chat closes. Additional Pi sessions keep distinct receipts.
   receipts[0].run_id = marker.run_id;
   receipts[0].started = marker.started;
   for (const receipt of receipts) {
     Object.assign(receipt, trace, { commit: captureRunContext(agent.workspace).base_commit, logs: logObservation(receipt.session_file, 'session') });
+    receipt.configuration ??= runConfiguration({ runtime: receipt.runtime, mcp_connection: mcpConnection });
     receipt.ended ??= new Date().toISOString();
     if (launchError || exitCode !== 0) {
       receipt.status = 'failed'; receipt.error = launchError?.message ?? `Chat process exited with code ${exitCode}`;
@@ -587,6 +596,8 @@ export function receiptFromSession(text, { agent, memories = [], file } = {}) {
   const last = assistants.filter((m) => textOf(m).trim()).at(-1);
   const transcript = msgs.filter((m) => (m.role === 'user' || m.role === 'assistant') && textOf(m).trim())
     .map((m) => `${m.role === 'user' ? 'User' : 'Agent'}: ${textOf(m).slice(0, 800)}`).join('\n\n');
+  const runtime = { engine: 'pi-cli', provider: last?.provider, model: last?.model, thinking: agent.thinking ?? 'medium',
+    source: 'pi-session-jsonl', observed_at: new Date().toISOString(), mcp: mcpDisabled('pi-launcher --no-mcp') };
   return {
     run_id: newId('c'), agent: agent.name, kind: 'chat', agent_version: agent.version, status: 'completed',
     task: textOf(users[0]).slice(0, 500), turns: users.length, workspace: agent.workspace, tools: agent.tools,
@@ -599,7 +610,8 @@ export function receiptFromSession(text, { agent, memories = [], file } = {}) {
     tool_calls: calls.map((c) => c.name),
     commands: calls.filter((c) => c.name === 'bash' && !blockedIds.has(c.id)).map((c) => c.arguments?.command ?? ''),
     blocked: calls.filter((c) => c.name === 'bash' && blockedIds.has(c.id)).map((c) => c.arguments?.command ?? ''),
-    model_calls: assistants.length, usage, session_file: file,
+    model_calls: assistants.length, usage, session_file: file, runtime,
+    configuration: runConfiguration({ runtime }),
   };
 }
 
@@ -669,7 +681,9 @@ async function main(argv) {
     const useMemory = !args.includes('--no-memory');
     const [name, ...rest] = args.filter((a) => a !== '--continue' && a !== '--no-memory');
     if (!name || !rest.length) throw new Error(USAGE);
-    const r = await runAgent(name, rest.join(' '), { resume, useMemory, ...(runId ? { runId } : {}) });
+    let mcpConnection;
+    try { mcpConnection = process.env.AGENT_MCP_CONNECTION ? JSON.parse(process.env.AGENT_MCP_CONNECTION) : undefined; } catch { /* ignore malformed metadata */ }
+    const r = await runAgent(name, rest.join(' '), { resume, useMemory, ...(runId ? { runId } : {}), mcpConnection });
     console.log((r.output ?? r.error ?? '(no output)').replace(/```remember\n[\s\S]*?```/g, '').trim());
     console.log(`\n— ${r.status} · ${r.run_id} · ${r.model} · ${r.model_calls} model call(s) · tools: ${r.tool_calls.join(',') || 'none'} · ${r.usage.totalTokens} tok · $${r.usage.cost.toFixed(4)}`);
     console.log(`— memory supplied: ${r.memory_enabled ? r.memory_supplied.length : 'off'}${r.memory_proposed.length ? ` · proposed: ${r.memory_proposed.join(', ')} (review: agent memory)` : ''}`);
