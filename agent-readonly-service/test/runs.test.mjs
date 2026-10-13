@@ -86,6 +86,17 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.equal(start.run_id, RUN); assert.equal(start.runner, 'dok'); assert.match(start.next_step, /get_run/);
   assert.equal(JSON.parse((await tool('get_run', { run_id: RUN })).content[0].text).status, 'running');
 
+  const progress = { phase: 'tool', action: 'tool_started', last_tool: 'read', observed_at: '2026-10-12T12:00:05.000Z' };
+  assert.equal((await post({ ...running, progress: { ...progress, args: 'private', output: 'private' } })).status, 200);
+  const live = JSON.parse((await tool('get_run', { run_id: RUN })).content[0].text);
+  assert.deepEqual(live.progress, progress);
+  assert.deepEqual(JSON.parse((await tool('panel_data')).content[0].text).runs.at(-1).progress, progress);
+  const macView = await mf.dispatchFetch(`https://test/relay/mac/runs/${RUN}`, { headers: { authorization: 'Bearer mac-secret-token' } });
+  assert.deepEqual((await macView.json()).progress, progress);
+  await post({ ...running, progress: { ...progress, observed_at: '2026-10-12T12:00:01Z', last_tool: 'ls' } });
+  await post(running); // initial acknowledgement arriving after telemetry cannot erase progress
+  assert.deepEqual(JSON.parse((await tool('get_run', { run_id: RUN })).content[0].text).progress, progress);
+
   assert.equal((await post({ ...running, status: 'completed' }, 'wrong-token')).status, 401);
   assert.equal((await post({ ...running, status: 'completed', ended: '2026-10-12T12:01:00.000Z', output: 'agent-readonly-service/src/access.mjs:9' })).status, 200);
   assert.equal((await post(running)).status, 200); // a late running receipt never replaces the final one

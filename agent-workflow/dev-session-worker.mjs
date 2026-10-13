@@ -5,6 +5,7 @@ import os from 'node:os';
 import { sandboxExecute } from './linux-sandbox.mjs';
 import { DEVELOPMENT_RUNTIME, observedRuntime, runtimeMatches } from './dev-runtime.mjs';
 import { failureTelemetry } from './failure-telemetry.mjs';
+import { runProgressTelemetry } from './run-progress.mjs';
 
 export function trustedLoader(sdk, prompt) {
   const extensions = { extensions: [], errors: [], runtime: sdk.createExtensionRuntime() };
@@ -152,6 +153,7 @@ export async function executeRun(config, task) {
   let output = '', calls = [], usage = { input: 0, output: 0, totalTokens: 0, cost: 0 }, models = 0, runtime;
   const telemetry = failureTelemetry();
   let checkpointAt = 0;
+  const progress = runProgressTelemetry();
   const used = [];
   try {
     for (const slot of slots) {
@@ -182,10 +184,11 @@ export async function executeRun(config, task) {
       let failed = null;
       const unsubscribe = session.subscribe(event => {
         telemetry.observe(event);
+        progress.observe(event);
         // Retain a bounded checkpoint in the supervisor for a process exit with no final JSON.
-        if (runtime && process.connected && (Date.now() - checkpointAt >= 1000 || event.type === 'message_end' || event.type === 'tool_execution_start')) {
+        if (runtime && process.connected && (Date.now() - checkpointAt >= 1000 || ['message_end', 'tool_execution_start', 'tool_execution_end'].includes(event.type))) {
           checkpointAt = Date.now();
-          process.send({ type: 'checkpoint', partial: telemetry.partial() }, () => {});
+          process.send({ type: 'checkpoint', partial: telemetry.partial(), progress: progress.snapshot() }, () => {});
         }
         if (event.type === 'tool_execution_start') calls.push(event.toolName);
         if (event.type === 'message_end' && event.message.role === 'assistant') {

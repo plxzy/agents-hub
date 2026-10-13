@@ -1,6 +1,6 @@
 {
   "name": "agents-panel",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "A side panel with your Pi agents: running and recent runs, run output, and what waits for your review",
   "types": "./types/index.d.ts"
 }

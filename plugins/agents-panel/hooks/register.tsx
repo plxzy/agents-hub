@@ -58,7 +58,7 @@ async function refresh($: Engine): Promise<Snapshot | null> {
   try {
     const d = await call($, 'open_dashboard')
     const runs: Run[] = (d.runs ?? []).map((r: Run) => ({
-      run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: firstLine(r.task ?? (r as Run & { title?: string }).title, 200), started: r.started, ended: r.ended, tool_calls: r.tool_calls,
+      run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: firstLine(r.task ?? (r as Run & { title?: string }).title, 200), started: r.started, ended: r.ended, tool_calls: r.tool_calls, progress_summary: r.progress_summary,
     }))
     const snap: Snapshot = {
       at: d.generated_at,
@@ -108,7 +108,7 @@ async function openRun($: Engine, runId: string) {
       .filter(Boolean).join(' · ')
     await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: String(r.task ?? r.title ?? ''), text: text.slice(0, 20000), meta,
       trace: r.trace ?? [['Run context', 'Unavailable — update local operations to view recorded context']],
-      error: r.error, partial: r.output_partial === true, failureRows: r.failure_rows ?? [] }))
+      error: r.error, partial: r.output_partial === true, failureRows: r.failure_rows ?? [], progressRows: r.progress_rows ?? [] }))
   } catch (err) {
     await fail($)(err)
   }
@@ -239,6 +239,7 @@ export const register: Register = on => {
             <Text wrap="wrap">{shown.task}</Text>
           </Box>
           {shown.meta && <Text dimColor>{shown.meta}</Text>}
+          {(shown.progressRows ?? []).map(([label, value]) => <Text key={`progress-${label}`} wrap="wrap">{`${label}: ${value}`}</Text>)}
           {shown.error && <Text color="error" wrap="wrap">{`Error: ${shown.error}`}</Text>}
           {(shown.failureRows ?? []).map(([label, value]) => <Text key={`failure-${label}`} wrap="wrap">{`${label}: ${value}`}</Text>)}
           {shown.partial && <Text bold>Partial output</Text>}
@@ -262,6 +263,7 @@ export const register: Register = on => {
           <Text dimColor>{r.status === 'running' ? `running ${ago(r.started, now)}` : `${ago(r.ended ?? r.started, now)} ago`}</Text>
         </Box>
         <Text dimColor wrap="truncate-end">{firstLine(r.task, width)}</Text>
+        {r.progress_summary && <Text wrap="wrap">{r.progress_summary}</Text>}
       </Box>
     )
 

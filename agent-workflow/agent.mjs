@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelGateway } from './model gateway.mjs';
 import { failureFromEvents } from './failure-telemetry.mjs';
+import { runProgressTelemetry } from './run-progress.mjs';
 import { linuxPolicy } from './linux-sandbox.mjs';
 import { linkedHub, sendReceipt, flushOutbox, hubMemory, trackHubRun, DECIDE_IN_HUB } from './hub.mjs';
 
@@ -408,12 +409,25 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   fs.mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
   const prompt = buildSystemPrompt(agent, memories);
-  const { started } = writeRunningMarker(state, { run_id: runId, agent: agent.name, kind, task, workspace: agent.workspace, pid: process.pid });
+  const runningMarker = writeRunningMarker(state, { run_id: runId, agent: agent.name, kind, task, workspace: agent.workspace, pid: process.pid });
+  const { started } = runningMarker, progress = runProgressTelemetry();
   const marker = path.join(runsDir, `${runId}.running`);
   const rawFile = path.join(runsDir, `${runId}.jsonl`);
+  fs.writeFileSync(marker, JSON.stringify({ ...runningMarker, progress: progress.snapshot() }) + '\n', { mode: 0o600 });
 
   const stopHeartbeat = await trackHubRun({ run_id: runId, agent: agent.name, kind, task, started, model: agent.model,
-    agent_version: agent.version }, hubOptions);
+    agent_version: agent.version, progress: progress.snapshot() }, hubOptions);
+  let progressSavedAt = 0;
+  const observe = event => {
+    if (!progress.observe(event)) return;
+    const update = progress.snapshot();
+    stopHeartbeat.update(update);
+    if (Date.now() - progressSavedAt < 1000 && !['tool_execution_start', 'tool_execution_end', 'message_end'].includes(event.type)) return;
+    progressSavedAt = Date.now();
+    const tmp = marker + '.next';
+    fs.writeFileSync(tmp, JSON.stringify({ ...runningMarker, progress: update }) + '\n', { mode: 0o600 });
+    fs.renameSync(tmp, marker);
+  };
   let result, gateway, launchError;
   try {
     gateway = await modelGateway(agent);
@@ -428,14 +442,14 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
         buf += chunk;
         const lines = buf.split('\n');
         buf = lines.pop();
-        for (const l of lines) if (l.trim()) { try { events.push(JSON.parse(l)); } catch { /* keep raw only */ } }
+        for (const l of lines) if (l.trim()) { try { const event = JSON.parse(l); events.push(event); observe(event); } catch { /* keep raw only */ } }
       });
       child.stderr.on('data', () => {});
       const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
       child.on('error', (e) => { clearTimeout(timer); raw.end(); reject(e); });
       child.on('close', (code) => {
         clearTimeout(timer); raw.end();
-        if (buf.trim()) { try { events.push(JSON.parse(buf)); } catch { /* incomplete event stays in raw log */ } }
+        if (buf.trim()) { try { const event = JSON.parse(buf); events.push(event); observe(event); } catch { /* incomplete event stays in raw log */ } }
         resolve({ events, exitCode: code, timedOut });
       });
     });
@@ -461,7 +475,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
     workspace: agent.workspace, tools: agent.tools, started, ended: new Date().toISOString(),
     memory_supplied: memories.map((m) => m.meta.id), memory_proposed: candidates,
     ...(hub && useMemory ? { memory_source: fetched ? 'hub' : 'local-fallback', ...(fetched ? { memory_hash: fetched.hash } : {}) } : {}),
-    exit_code: exitCode, ...summary, raw_events: rawFile,
+    exit_code: exitCode, ...summary, progress: progress.snapshot(), raw_events: rawFile,
   };
   fs.writeFileSync(path.join(runsDir, `${runId}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
   fs.rmSync(marker, { force: true });

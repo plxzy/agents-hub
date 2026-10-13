@@ -52,6 +52,12 @@ as the execution branch. This does not look up current Git state or expose priva
 receipts also display last observed phase/tool, provider/model and a bounded redacted diagnostic via
 the shared operations formatter. Older receipts show their original error without invented telemetry.
 
+**Live progress (0.4.3):** running rows show the latest observed action and update age. Opening a run
+shows phase, latest completed checkpoint, last action/tool and reported blocker, formatted by the shared
+operations catalog. Stale observations and missing telemetry are explicit; an elapsed timer never proves
+the agent is stuck. Completed-run observations are labelled historical. Use a fresh Claude Code session
+after updating the plugin; an already-mounted ChatGPT dashboard may retain an older renderer.
+
 Check: `claude plugin validate plugins/agents-panel` and `claude plugin test plugins/agents-panel`.
 Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin marketplace update dev-workflow`).
 

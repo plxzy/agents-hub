@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 import {
   agentEnv, assertSandboxAllowed, commitHome, piCommand, acceptCandidate, addMemory, chatArgs, receiptFromSession, buildSystemPrompt, extractRemember, listCandidates, loadAgents,
-  loadMemory, parseFrontmatter, formatFrontmatter, formatCandidateList, piArgs, rejectCandidate, runAgent, runChat, formatAgentListEntry, resolveWorkspace, sessionDirectory, sandboxProfile,
+  loadMemory, parseFrontmatter, formatFrontmatter, formatCandidateList, piArgs, rejectCandidate, runAgent, runChat, formatAgentListEntry, resolveWorkspace, sessionDirectory, sandboxProfile, listRuns,
 } from './agent.mjs';
 
 function fixture() {
@@ -53,6 +53,27 @@ test('local failed run keeps previous assistant output and publishes failure con
   assert.equal(r.output_partial, true); assert.equal(r.failure_context.last_tool, 'ls');
   assert.equal(r.failure_context.message, '503 service unavailable');
   assert.equal(r.memory_proposed.length, 0);
+});
+
+test('local running markers expose tool progress before completion and retain it in the final receipt', async t => {
+  const { root, state } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let signal, close, child;
+  const ready = new Promise(resolve => { signal = resolve; });
+  const running = runAgent('demo', 'fixture', { root, state, hubConfig: null, spawn: () => {
+    child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {};
+    setImmediate(() => {
+      child.stdout.write(JSON.stringify({ type: 'tool_execution_start', toolName: 'read', args: { path: '/private/file' } }) + '\n');
+      close = () => { child.stdout.end(JSON.stringify({ type: 'tool_execution_end', toolName: 'read', isError: false })); child.emit('close', 0); };
+      signal();
+    }); return child;
+  } });
+  await ready;
+  const live = listRuns(state, { running: true })[0];
+  assert.equal(live.status, 'running'); assert.equal(live.progress.action, 'tool_started');
+  assert.equal(live.progress.last_tool, 'read'); assert.doesNotMatch(JSON.stringify(live.progress), /private/);
+  close(); const final = await running;
+  assert.equal(final.progress.action, 'tool_completed');
+  assert.equal(listRuns(state, { running: true })[0].status, 'completed');
 });
 
 test('nested sandbox launches fail before spawning or writing run state', async (t) => {

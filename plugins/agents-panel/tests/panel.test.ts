@@ -61,6 +61,21 @@ test('failure diagnostics and partial output are both visible', async ($, on) =>
   }
 })
 
+test('active run shows catalog progress in its list and details', async ($, on) => {
+  on('process.run', async (_$, e) => {
+    const data = e.argv[3] === 'open_dashboard' ? { ...DASHBOARD, runs: [{ ...DASHBOARD.runs[1], progress_summary: 'read started · 5s ago' }] }
+      : { run_id: 'r-2', agent: 'network', status: 'running', trace: [], progress_rows: [['Current phase', 'Tool execution'], ['Last tool', 'read'], ['Blocker', 'None reported'], ['Latest checkpoint', 'Model message completed']] }
+    return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  on('clock.after', async () => ({ deny: 'no timers in this test' }) as never)
+  on('ui.status', async () => ({ value: undefined }) as never)
+  const ui = await $.ui.mount({ plugin: 'agents-panel', surface: 'desktop', component: 'Pane', requestId: 'agents', props: PROPS as never })
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ text: 'read started · 5s ago' })).toBeDefined()
+  await ui.press({ key: 'run-r-2' })
+  for (const text of ['Current phase: Tool execution', 'Last tool: read', 'Blocker: None reported', 'Latest checkpoint: Model message completed']) expect(await ui.find({ text })).toBeDefined()
+})
+
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`draws runs and review items, opens a run and decides on a click (${surface})`, async ($, on) => {
     const calls: string[][] = []

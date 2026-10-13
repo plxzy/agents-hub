@@ -82,6 +82,8 @@ export async function createAgentSession(options) {
   assert.equal(result.value.failure_context.last_tool, 'read');
   assert.equal(messages[0].type, 'runtime');
   assert.ok(messages.some(m => m.type === 'checkpoint' && m.partial.output.includes('Earlier useful output')));
+  assert.ok(messages.some(m => m.type === 'checkpoint' && m.progress?.last_tool === 'read'));
+  assert.ok(messages.filter(m => m.progress).every(m => !JSON.stringify(m.progress).includes('Earlier useful output')));
 });
 
 test('runtime evidence reads actual SDK state and rejects fallback before execution', () => {

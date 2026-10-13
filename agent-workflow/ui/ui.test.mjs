@@ -6,7 +6,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import http from 'node:http';
 import { healthOf, healthLabels } from '../health.mjs';
-import { runTrace, failureRows } from '../run-trace.mjs';
+import { runTrace, failureRows, progressRows, progressSummary } from '../run-trace.mjs';
 import { bridgeScript, dashboardHtml } from './dashboard.mjs';
 import { createUiServer } from './server.mjs';
 
@@ -88,7 +88,7 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
   const html = dashboardHtml(), refreshed = [];
   const context = vm.createContext({
     S: { detail: { run_id: 'mac-run', agent: 'helper', status: 'unknown', error: 'Mac heartbeat expired' }, busy: new Set() },
-    canDecide: () => true, list: () => null, runTrace, failureRows, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
+    canDecide: () => true, list: () => null, runTrace, failureRows, progressRows, progressSummary, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
     h: (tag, attrs, ...children) => ({ tag, attrs, children }),
   });
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
@@ -103,14 +103,14 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
 test('run details render shared historical context as text and label absent fields', () => {
   const html = dashboardHtml({ bridge: '' });
   const receipt = { run_id: 'r-demo', agent: 'demo', repo: '<script>not executable</script>', commit: 'a'.repeat(40), status: 'failed', error: 'model turn failed' };
-  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows,
+  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary,
     canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.detailView());
   for (const [label, value] of runTrace(receipt)) { assert.ok(result.includes(label)); assert.ok(result.includes(value)); }
   assert.match(result, /Recorded run context/);
   assert.doesNotMatch(result, /innerHTML/);
-  assert.ok(html.includes('globalThis.AgentsHealth = { healthOf, healthLabels, dashboardHealth, runTrace, failureRows };'));
+  assert.ok(html.includes('globalThis.AgentsHealth = { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary };'));
   const bundled = vm.createContext({});
   const module = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)].find((m) => m[1].includes('globalThis.AgentsHealth ='));
   vm.runInContext(module[1], bundled);
@@ -121,12 +121,26 @@ test('failed detail shows its error alongside labelled partial output and record
   const html = dashboardHtml();
   const receipt = { run_id: 'r-failed', agent: 'helper', status: 'failed', error: 'model turn failed', output: 'Useful partial answer', output_partial: true,
     failure_context: { phase: 'model', last_tool: 'read', provider: 'openai', model: 'gpt-6-luna', message: '503 upstream disconnected' } };
-  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows,
+  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary,
     canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.detailView());
   for (const text of ['Error: model turn failed', 'Partial output', 'Useful partial answer', 'Last tool', 'read', '503 upstream disconnected']) assert.ok(result.includes(text), text);
   assert.deepEqual(failureRows({ status: 'failed', error: 'old receipt' }), []);
+});
+
+test('run list and detail expose live progress, stale checkpoints and missing older telemetry', () => {
+  const html = dashboardHtml(), time = new Date(Date.now() - 60000).toISOString();
+  const receipt = { run_id: 'live', agent: 'helper', status: 'running', progress: { phase: 'tool', action: 'tool_started',
+    observed_at: time, last_tool: 'read', checkpoint: 'tool_error', checkpoint_tool: 'ls', checkpoint_at: time, blocker: 'tool_error' } };
+  const context = vm.createContext({ S: { detail: receipt, data: { runs: [receipt] }, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary,
+    canDecide: () => false, list: () => null, ago: () => '1m', firstLine: x => x, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  for (const name of ['detailView', 'runsView']) vm.runInContext(html.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0], context);
+  const detail = JSON.stringify(context.detailView());
+  for (const text of ['Run progress', 'Last reported phase', 'Latest checkpoint', 'ls reported an error', 'Last tool', 'read', 'Blocker', 'stale observation']) assert.ok(detail.includes(text), text);
+  assert.match(JSON.stringify(context.runsView()), /read started.*stale observation/);
+  delete receipt.progress;
+  assert.match(JSON.stringify(context.detailView()), /not published telemetry/);
 });
 
 test('development task shows error and diagnostics alongside partial output', () => {

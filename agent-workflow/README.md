@@ -192,8 +192,25 @@ checkpoints are throttled to one per second, with immediate terminal-message/too
 Thus the latest text can lag, and supervisor/host loss is not a durable progress log. Old receipts are
 not backfilled. Reasoning, tool arguments/results, raw logs, stacks and credentials are not new receipt
 fields; diagnostics redact credential-looking lines, URLs, host paths and addresses. The existing Hub
-receipt route and output redaction remain in use. Failure classification/recovery advice and a live
-phase UI are separate work. Interactive Mac chats retain their existing session-receipt behavior.
+receipt route and output redaction remain in use. Failure classification/recovery advice remain separate
+work; live progress is described below. Interactive Mac chats retain their existing session-receipt behavior.
+
+**Live run visibility (13 October 2026, plugins 0.4.3 / dashboard v9):** one-shot Mac/dok runs
+publish event metadata in `progress`: phase, last action/tool, latest completed checkpoint and its
+time, and a reported tool/model error while recovery has not been observed. A checkpoint describes
+a Pi event, not a durable workspace save or a model-authored plan. No reasoning, assistant text,
+tool arguments/results or raw provider errors enter this live field. Phase changes cover preparation,
+model response, tool execution and dok review export. Older runs and interactive chats explicitly
+say when telemetry is unavailable; no activity is inferred from their old successful receipts.
+
+Mac markers update locally at most once per second for streaming events (tool transitions immediately);
+the existing 15-second Hub heartbeat carries the newest observation. dok publishes every five seconds,
+serially, and drains in-flight publication before writing the final receipt. The Hub rejects older
+running observations that would erase newer progress and never lets a late running receipt replace a
+terminal one. Both run lists show a short progress line and both detail views show the shared fields.
+After 30 seconds without a new Pi event, the observation is labelled stale and current activity unknown;
+that is not proof of a stall. Final-run progress is explicitly historical. Polling/network delays add to
+these intervals. Active-run steering and thinking changes remain future work.
 
 The shared view has the agents list, matching agent count, running/to-review counts, and latest 50 runs.
 `open_dashboard` performs a single Hub read, without flushing the outbox. On failure it returns current local

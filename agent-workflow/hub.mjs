@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { sanitizeFailureContext } from './failure-telemetry.mjs';
+import { sanitizeProgress } from './run-progress.mjs';
 
 export const HUB_CONFIG = path.join(os.homedir(), '.config/agent-readonly/mac.json');
 export const DECIDE_IN_HUB = 'Decide this in the Agents Hub panel (the Hub keeps ratings and memory notes; the Mac cannot decide them).';
@@ -51,10 +52,11 @@ export const hubRun = (id, options = {}) => hubCall(`runs/${encodeURIComponent(i
 
 // Only these fields leave the Mac. Commands, workspace paths, raw events, transcripts and session files stay local.
 const SEND = ['run_id', 'agent', 'kind', 'agent_version', 'status', 'task', 'started', 'ended', 'model', 'thinking', 'output', 'error',
-  'tool_calls', 'blocked', 'model_calls', 'usage', 'failure_context', 'output_partial'];
+  'tool_calls', 'blocked', 'model_calls', 'usage', 'failure_context', 'output_partial', 'progress'];
 export function hubReceipt(receipt, proposals = []) {
   const out = Object.fromEntries(SEND.filter((k) => receipt[k] !== undefined && receipt[k] !== null).map((k) => [k, receipt[k]]));
   if (out.failure_context) out.failure_context = sanitizeFailureContext(out.failure_context);
+  if (out.progress) out.progress = sanitizeProgress(out.progress);
   if (receipt.status === 'unknown') out.status = 'interrupted';
   if (receipt.memory_source) out.memory_source = receipt.memory_source;
   if (receipt.memory_hash) out.memory_hash = receipt.memory_hash;
@@ -67,8 +69,8 @@ const outbox = (state) => path.join(state, 'hub-outbox');
 /** Running receipts are live observations, never queued for replay. Stop and drain before sending the final receipt. */
 export async function trackHubRun(receipt, { config = hubConfig(), fetchImpl = fetch, intervalMs = 15000,
   schedule = setTimeout, cancel = clearTimeout } = {}) {
-  if (!config) return async () => {};
-  const body = hubReceipt({ ...receipt, status: 'running' });
+  if (!config) return Object.assign(async () => {}, { update: () => {} });
+  let body = hubReceipt({ ...receipt, status: 'running' });
   let stopped = false, timer, inFlight;
   const publish = async () => {
     try { await hubCall('runs', { method: 'POST', body, config, fetchImpl, timeoutMs: 3000 }); }
@@ -82,7 +84,9 @@ export async function trackHubRun(receipt, { config = hubConfig(), fetchImpl = f
   };
   inFlight = publish();
   await inFlight;
-  return async () => { stopped = true; cancel(timer); await inFlight; };
+  return Object.assign(async () => { stopped = true; cancel(timer); await inFlight; }, {
+    update(progress) { if (!stopped) body = { ...body, progress: sanitizeProgress(progress) }; },
+  });
 }
 
 /** Posts one receipt; if the Hub is unreachable it waits in the outbox and goes out with the next run or `agent sync`. */

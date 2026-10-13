@@ -4,6 +4,7 @@ import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
 import { ratingsFor } from './decisions.mjs';
 import { proposeMemory } from './memory.mjs';
 import { sanitizeFailureContext } from '../../agent-workflow/failure-telemetry.mjs';
+import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
 
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -46,7 +47,7 @@ export function sanitizeReceipt(r, runner) {
     memory_proposed: Number.isInteger(r.memory_proposed) && r.memory_proposed >= 0 && r.memory_proposed <= 20 ? r.memory_proposed : undefined,
     memory_source: ['hub', 'frozen-release'].includes(r.memory_source) ? r.memory_source : undefined,
     memory_hash: /^[a-f0-9]{16}$/.test(r.memory_hash ?? '') ? r.memory_hash : undefined,
-    usage, runtime, error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
+    usage, runtime, progress: sanitizeProgress(r.progress), error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
     ...(r.status !== 'completed' && r.status !== 'running' ? {
       failure_context: sanitizeFailureContext(r.failure_context), output_partial: r.output_partial === true,
     } : {}),
@@ -60,7 +61,8 @@ export async function storeRun(env, receipt, runner) {
   const r = sanitizeReceipt(receipt, runner);
   await env.DB.prepare(`INSERT INTO runs (run_id, agent, runner, status, started, ended, updated_at, receipt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id) DO UPDATE SET status=excluded.status, ended=excluded.ended, updated_at=excluded.updated_at, receipt=excluded.receipt
-    WHERE runs.runner = excluded.runner AND (runs.status = 'running' OR excluded.status <> 'running')`)
+    WHERE runs.runner = excluded.runner AND (runs.status = 'running' OR excluded.status <> 'running')
+      AND (excluded.status <> 'running' OR COALESCE(json_extract(excluded.receipt, '$.progress.observed_at'), '') >= COALESCE(json_extract(runs.receipt, '$.progress.observed_at'), ''))`)
     .bind(r.run_id, r.agent, runner, r.status, r.started, r.ended ?? null, new Date().toISOString(), JSON.stringify(r)).run();
   await env.DB.prepare('DELETE FROM runs WHERE run_id NOT IN (SELECT run_id FROM runs ORDER BY started DESC LIMIT ?)').bind(KEEP).run();
   // Notes the agent asked to remember become candidates for the user's review (idempotent per run and content).

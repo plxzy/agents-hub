@@ -11,6 +11,7 @@ import { DEVELOPMENT, digest } from './dev-grants.mjs';
 import { DEVELOPMENT_RUNTIME, runtimeMatches, agentRuntime } from './dev-runtime.mjs';
 import { titleOf } from './contract.mjs';
 import { failedResult, sanitizeFailureContext } from './failure-telemetry.mjs';
+import { runProgressTelemetry, sanitizeProgress, progressPublisher } from './run-progress.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
@@ -296,7 +297,7 @@ export class DevelopmentSessions {
     if (!(this.limits.providers ?? ['openai']).includes(runtime.provider)) throw new Error('Provider not available on dok');
     const receipt = { run_id, request_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
       started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version,
-      repo: project, write, ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
+      repo: project, write, progress: runProgressTelemetry().snapshot(), ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
     save(requestFile, { fingerprint, run_id });
     this.runs.set(run_id, { write });
@@ -314,8 +315,14 @@ export class DevelopmentSessions {
     const entry = this.runs.get(receipt.run_id);
     const branch = receipt.continued_from ? 'review/runs/' + receipt.continued_from : 'main';
     let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer, checkpoint = {};
+    const progress = progressPublisher(async update => {
+      save(file, { ...receipt, ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}), progress: update });
+      await this.report(receipt.run_id);
+    });
+    progress.update(receipt.progress);
     const finish = async (code, result = {}) => {
       clearTimeout(timeout); clearTimeout(killTimer); clearInterval(diskTimer);
+      await progress.stop();
       const { provider: _p, ...pinnedRuntime } = runtime;
       if (code === 0 && !failure && !(runtimeMatches(result.runtime, pinnedRuntime) && (runtime.provider !== 'openai' ? result.runtime.provider === runtime.provider : this.limits.slots.includes(result.runtime.provider)))) failure = 'Missing verified Pi runtime';
       const done = !failure && !result.error && code === 0;
@@ -421,6 +428,8 @@ export class DevelopmentSessions {
         if (message?.type === 'checkpoint' && observed) {
           checkpoint = { output: safeOutput(typeof message.partial?.output === 'string' ? message.partial.output : ''),
             failure_context: sanitizeFailureContext(message.partial?.failure_context) };
+          const update = sanitizeProgress(message.progress);
+          if (update) { receipt.progress = update; progress.update(update); }
           return;
         }
         if (message?.type === 'account' && slots.includes(message.slot) && ['usage limit reached', 'account not eligible'].includes(message.kind)) {
@@ -440,6 +449,8 @@ export class DevelopmentSessions {
         let result = {};
         try { result = JSON.parse(output || '{}'); } catch { failure ??= 'Invalid Pi result'; }
         if (write && code === 0 && !failure && !result.error) {
+          receipt.progress = { ...receipt.progress, phase: 'export', action: 'export_started', observed_at: new Date().toISOString(), blocker: undefined };
+          progress.update(receipt.progress);
           try { harvested = await this.harvest(policy, receipt, baseCommit, repository); commit = harvested.commit; }
           catch (error) { failure = /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(error.message) ? error.message : 'Export failed'; }
         }

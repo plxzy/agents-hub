@@ -100,7 +100,7 @@
 <script type="module">/*__HEALTH_BUNDLE__*/</script>
 <script type="module">
 const { App, applyHostStyleVariables } = globalThis.ExtApps;
-const { healthOf, healthLabels, dashboardHealth, runTrace, failureRows } = globalThis.AgentsHealth;
+const { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary } = globalThis.AgentsHealth;
 
 // ---------- state ----------
 const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null, healthOpen: false };
@@ -291,6 +291,7 @@ function runsView() {
       h('span', { class: `pill ${r.status}` }, r.status === 'running' ? [h('span', { class: 'spin' }), ' running'] : r.status),
       h('span', { class: 'name' }, r.agent), h('span', { class: 'grow ell' }, r.title ?? firstLine(r.task)),
       r.feedback ? h('span', { class: 'small muted' }, r.feedback === 'good' ? '👍' : '👎') : null),
+    progressSummary(r) ? h('div', { class: 'small', role: 'status' }, progressSummary(r)) : null,
     h('div', { class: 'meta' }, [r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null), r.kind !== 'task' && r.kind, ago(r.started), r.status !== 'running' && `${r.tool_calls} tool call(s)`,
       r.blocked > 0 && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')))));
 }
@@ -312,6 +313,8 @@ function detailView() {
     h('div', { class: 'body' }, r.task ?? r.title ?? ''),
     r.status === 'running' ? h('div', { class: 'meta' }, h('span', { class: 'spin' }), ` started ${ago(r.started)}; this updates on its own`) : null,
     r.error ? h('p', { class: 'error' }, `Error: ${r.error}`) : null,
+    progressRows(r).length ? h('section', {}, h('h3', {}, ['running', 'unknown'].includes(r.status) ? 'Run progress' : 'Recorded progress'),
+      h('dl', {}, ...progressRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)]))) : null,
     failureRows(r).length ? h('dl', {}, ...failureRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, value)])) : null,
     output ? h('h3', {}, r.output_partial ? 'Partial output' : 'Output') : null,
     output ? h('pre', {}, output) : null,

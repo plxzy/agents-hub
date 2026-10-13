@@ -29,6 +29,7 @@ test('live receipts retry without an outbox and stop drains the heartbeat before
     } });
   assert.equal(calls[0].status, 'running'); assert.equal(calls[0].workspace, undefined); assert.equal(calls[0].pid, undefined);
   assert.equal(timers.length, 1);
+  stop.update({ phase: 'tool', action: 'tool_started', observed_at: '2026-10-13T00:00:01Z', last_tool: 'read', args: 'private' });
   timers[0]();
   let stopped = false;
   const draining = stop().then(() => { stopped = true; });
@@ -36,6 +37,7 @@ test('live receipts retry without an outbox and stop drains the heartbeat before
   finish(); await draining;
   assert.equal(stopped, true); assert.equal(canceled, 1); assert.equal(timers.length, 1);
   assert.equal(calls.length, 2);
+  assert.equal(calls[1].progress.last_tool, 'read'); assert.equal(calls[1].progress.args, undefined);
   const unlinked = await trackHubRun({}, { config: null, fetchImpl: () => assert.fail('unlinked') });
   await unlinked();
 });

@@ -16,7 +16,7 @@ import {
 } from './agent.mjs';
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
 import { DASHBOARD_URI, READ_OPS, lastRunOf, runBrief } from './contract.mjs';
-import { runTrace, failureRows } from './run-trace.mjs';
+import { runTrace, failureRows, progressRows, progressSummary } from './run-trace.mjs';
 import { linkedHub, refreshHubCache, flushOutbox, hubPanel, hubRun, DECIDE_IN_HUB } from './hub.mjs';
 
 export { DASHBOARD_URI };
@@ -134,13 +134,13 @@ export const OPS = [
     run: async ({ run_id }, ctx) => {
       const options = hubOptions(ctx);
       if (options.config) {
-        try { const r = await hubRun(run_id, options); return { ...r, trace: runTrace(r), failure_rows: failureRows(r) }; }
+        try { const r = await hubRun(run_id, options); return { ...r, trace: runTrace(r), failure_rows: failureRows(r), progress_rows: progressRows(r) }; }
         catch { /* Local output remains available during an outage or before its receipt is posted. */ }
       }
       const r = listRuns(ctx.state, { running: true }).find((x) => x.run_id === run_id);
       if (!r) throw new Error(`no run ${run_id}`);
       const { raw_events, transcript, ...rest } = r;
-      return { ...rest, trace: runTrace(rest), failure_rows: failureRows(rest) };
+      return { ...rest, trace: runTrace(rest), failure_rows: failureRows(rest), progress_rows: progressRows(rest) };
     },
   },
   {
@@ -243,6 +243,7 @@ export async function openDashboard(ctx) {
     remote = { id: 'dok', label: 'dok', available: false, reason: 'This Mac is not linked to the Hub.', agents: [] };
   }
   return { ...data, transport: 'mac', decision_message: DECIDE_IN_HUB,
+    runs: data.runs.map(r => progressSummary(r) ? { ...r, progress_summary: progressSummary(r) } : r),
     runner_selection: SELECTION_VERSION, run_targets: [remote, local], start_requests: selectedStarts(ctx.state),
     capabilities: { ...data.capabilities, run: true } };
 }
