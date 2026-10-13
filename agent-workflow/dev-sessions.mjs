@@ -12,6 +12,7 @@ import { DEVELOPMENT_RUNTIME, runtimeMatches, agentRuntime } from './dev-runtime
 import { titleOf } from './contract.mjs';
 import { failedResult, sanitizeFailureContext } from './failure-telemetry.mjs';
 import { runProgressTelemetry, sanitizeProgress, progressPublisher } from './run-progress.mjs';
+import { captureRunContext, logObservation } from './run-context.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
@@ -297,7 +298,8 @@ export class DevelopmentSessions {
     if (!(this.limits.providers ?? ['openai']).includes(runtime.provider)) throw new Error('Provider not available on dok');
     const receipt = { run_id, request_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
       started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version,
-      repo: project, write, progress: runProgressTelemetry().snapshot(), ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
+      repo: project, write,
+      progress: runProgressTelemetry().snapshot(), ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
     save(requestFile, { fingerprint, run_id });
     this.runs.set(run_id, { write });
@@ -331,6 +333,10 @@ export class DevelopmentSessions {
       // ```remember blocks become memory candidates (sent with the receipt); they are not part of the shown answer.
       const remembered = done ? extractRemember(result.output, agent).slice(0, 5) : [];
       if (typeof result.output === 'string') result.output = result.output.replace(/```remember\n[\s\S]*?```/g, '').trim();
+      receipt.logs = logObservation(path.join(base, 'pi-sessions'), 'session');
+      // Cleanup is part of this observation, before the final receipt is saved and reported.
+      fs.rmSync(write ? workspace : base, { recursive: true, force: true });
+      if (!write && receipt.logs.status === 'recorded') receipt.logs = { kind: 'session', status: 'removed', observed_at: new Date().toISOString() };
       save(file, { ...receipt, status: failure || result.error ? 'failed' : code === 0 ? 'completed' : 'interrupted',
         ...(remembered.length ? { memory_proposed: remembered.length, memory_proposals: remembered } : {}),
         ended: new Date().toISOString(), ...(commit ? { commit } : {}), ...(baseCommit ? { base_commit: baseCommit } : {}),
@@ -342,7 +348,6 @@ export class DevelopmentSessions {
         ...(Array.isArray(result.slots_used) ? { accounts_used: result.slots_used.filter(s => /^openai(-[1-9]\d*)?$/.test(s)) } : {}) });
       this.runs.delete(receipt.run_id);
       // Write conversations keep their Pi history (not the checkout) so a follow-up can continue; others are removed.
-      fs.rmSync(write ? workspace : base, { recursive: true, force: true });
       if (write) this.prune();
       await this.report(receipt.run_id);
     };
@@ -356,6 +361,9 @@ export class DevelopmentSessions {
       await sandboxExecute(checkout, 'bash', { command: write ? `git -c core.hooksPath=/dev/null checkout -q -b agent-run origin/${branch}` : 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
       // Read before the agent can touch the checkout; later git calls on it run only inside the sandbox.
       baseCommit = commit = execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
+      // Observe after checkout, before Pi can modify Git configuration or the tree.
+      Object.assign(receipt, captureRunContext(workspace), { repo, base_commit: baseCommit });
+      save(file, { ...receipt, commit });
       // The Hub holds the agent's definition, skills and accepted memory. Files go to a folder outside the workspace
       // (skills are mounted read-only from there); the frozen release is only the fallback when the Hub is unreachable.
       let memory, kb = null;

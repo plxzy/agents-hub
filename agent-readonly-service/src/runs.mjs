@@ -5,7 +5,7 @@ import { ratingsFor } from './decisions.mjs';
 import { proposeMemory } from './memory.mjs';
 import { sanitizeFailureContext } from '../../agent-workflow/failure-telemetry.mjs';
 import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
-import { withFailureGuidance } from '../../agent-workflow/run-trace.mjs';
+import { withFailureGuidance, publicRunContext } from '../../agent-workflow/run-trace.mjs';
 
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -41,6 +41,7 @@ export function sanitizeReceipt(r, runner) {
     model_calls: Number.isInteger(r.model_calls) && r.model_calls >= 0 ? r.model_calls : undefined,
     accounts_used: Array.isArray(r.accounts_used) ? r.accounts_used.filter((x) => /^openai(-[1-9]\d*)?$/.test(x)).slice(0, 10) : undefined,
     repo: /^[a-z0-9][a-z0-9_.-]{0,63}$/.test(r.repo ?? '') ? r.repo : undefined,
+    ...publicRunContext(r),
     base_commit: /^[a-f0-9]{40,64}$/.test(r.base_commit ?? '') ? r.base_commit : undefined,
     review_ref: new RegExp(`^refs/heads/review/runs/${r.run_id}$`).test(r.review_ref ?? '') ? r.review_ref : undefined,
     continued_from: RUN_ID.test(r.continued_from ?? '') ? r.continued_from : undefined,

@@ -45,6 +45,13 @@ test('receipts keep useful fields, drop unknown ones and redact secret-looking l
   assert.throws(() => sanitizeReceipt({ run_id: 'x', agent: 'helper', status: 'completed', started: 'now' }, 'dok'), /Invalid/);
 });
 
+test('hosted receipts preserve the checkout branch but never publish private paths', () => {
+  const r = sanitizeReceipt({ run_id: RUN, agent: 'helper', status: 'completed', started: '2026-10-12T12:00:00.000Z',
+    repo: 'dev-workflow', checkout_branch: 'main', workspace: '/home/dok/run-work/private/workspace', log_path: '/home/dok/run.log' }, 'dok');
+  assert.equal(r.checkout_branch, 'main');
+  assert.equal(r.workspace, undefined); assert.equal(r.log_path, undefined);
+});
+
 test('start_run goes to dok, receipts land in D1 and stay readable', async (t) => {
   const bundle = await build({ entryPoints: [new URL('./fixtures/hub-runtime.mjs', import.meta.url).pathname], bundle: true, write: false,
     format: 'esm', external: ['cloudflare:workers'], platform: 'browser', loader: { '.html': 'text' } });

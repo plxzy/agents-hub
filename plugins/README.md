@@ -43,10 +43,13 @@ remain read-only. An unavailable dok never falls back to Mac. Effective reposito
 receipt. After 90 seconds without contact the Hub shows unknown and stops counting the run as active. See `../agent-workflow/README.md` for the receipt evidence and read routes.
 Claude Code only: Codex and ChatGPT panels need their own extension format, using the same operations.
 
-**Recorded run context (0.4.1):** run details display the receipt's repository, workspace, review ref,
-base commit and recorded commit. The shared `run-trace.mjs` formatter also drives the HTML dashboard.
-Missing fields, checkout branch and raw logs are explicitly unavailable; a review ref is not presented
-as the execution branch. This does not look up current Git state or expose private runner logs.
+**Recorded run context:** run details display the receipt's repository, workspace, checkout branch,
+review ref, base commit, recorded commit and logs. Local receipts capture the starting Git branch and
+commit and the private JSONL event log path; dok receipts record the isolated checkout branch and
+source commit.
+Hosted receipts intentionally omit private Mac workspace and log paths, which are shown as unavailable.
+A review ref is not presented as the execution branch, and the renderer never looks up current Git
+state or exposes hosted runner logs.
 
 **Failure details (0.4.2):** the error remains visible alongside labelled partial output. New failure
 receipts also display last observed phase/tool, provider/model and a bounded redacted diagnostic via

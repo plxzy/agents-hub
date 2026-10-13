@@ -1,15 +1,40 @@
 // Presentation shared by local operations and the bundled HTML dashboard.
 // Only receipt facts: never resolve today's checkout or infer a branch from an agent default.
+export function publicRunContext(r = {}) {
+  const text = v => typeof v === 'string' && v.length <= 200 && !/[\x00-\x1f\x7f]|Bearer\s|\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}/i.test(v);
+  const sha = v => typeof v === 'string' && /^[a-f0-9]{40,64}$/.test(v);
+  const iso = v => typeof v === 'string' && v.length <= 40 && Number.isFinite(Date.parse(v));
+  const logs = r.logs;
+  return Object.fromEntries(Object.entries({
+    repo: text(r.repo) && /^[a-zA-Z0-9][a-zA-Z0-9_. -]{0,63}$/.test(r.repo) ? r.repo : undefined,
+    checkout_branch: text(r.checkout_branch) && !r.checkout_branch.startsWith('/') ? r.checkout_branch : undefined,
+    checkout_detached: r.checkout_detached === true ? true : undefined,
+    base_commit: sha(r.base_commit) ? r.base_commit : undefined,
+    commit: sha(r.commit) ? r.commit : undefined,
+    context_recorded_at: iso(r.context_recorded_at) ? r.context_recorded_at : undefined,
+    worktree_dirty: typeof r.worktree_dirty === 'boolean' ? r.worktree_dirty : undefined,
+    logs: logs && ['events', 'session'].includes(logs.kind) && ['recorded', 'removed', 'unavailable'].includes(logs.status) && iso(logs.observed_at)
+      ? { kind: logs.kind, status: logs.status, observed_at: logs.observed_at } : undefined,
+  }).filter(([, v]) => v !== undefined));
+}
+
 export function runTrace(r = {}) {
   const recorded = (value) => typeof value === 'string' && value.trim() ? value : 'Unavailable — not included in this receipt';
+  const logs = publicRunContext(r).logs;
+  const logText = !logs ? 'Unavailable in this view; run output is shown separately'
+    : logs.status === 'removed' ? `Unavailable — removed by runner cleanup (${logs.observed_at})`
+    : logs.status === 'unavailable' ? `Unavailable — no log observed (${logs.observed_at})`
+    : `${logs.kind === 'session' ? 'Pi session history' : 'Pi event log'} recorded at ${logs.observed_at}; current retention unverified. ${r.logs.location || 'Private location unavailable in this view'}`;
   return [
     ['Repository', recorded(r.repo)],
     ['Workspace', recorded(r.workspace)],
-    ['Checkout branch', 'Unavailable — not included in this receipt'],
+    ['Checkout branch', r.checkout_detached === true ? 'Detached HEAD (at start)' : recorded(r.checkout_branch)],
     ['Review branch', recorded(r.review_ref)],
     ['Base commit', recorded(r.base_commit)],
     ['Recorded commit', recorded(r.commit)],
-    ['Logs', 'Unavailable in this view; run output is shown separately'],
+    ['Logs', logText],
+    ...(r.context_recorded_at ? [['Context captured', `${r.context_recorded_at} (at start)`],
+      ['Working tree at start', typeof r.worktree_dirty === 'boolean' ? r.worktree_dirty ? 'Uncommitted changes present; commit alone does not identify the full input' : 'Clean' : 'Unavailable — not recorded']] : []),
   ];
 }
 

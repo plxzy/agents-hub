@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { sanitizeFailureContext } from './failure-telemetry.mjs';
 import { sanitizeProgress } from './run-progress.mjs';
+import { publicRunContext } from './run-trace.mjs';
 
 export const HUB_CONFIG = path.join(os.homedir(), '.config/agent-readonly/mac.json');
 export const DECIDE_IN_HUB = 'Decide this in the Agents Hub panel (the Hub keeps ratings and memory notes; the Mac cannot decide them).';
@@ -54,7 +55,7 @@ export const hubRun = (id, options = {}) => hubCall(`runs/${encodeURIComponent(i
 const SEND = ['run_id', 'agent', 'kind', 'agent_version', 'status', 'task', 'started', 'ended', 'model', 'thinking', 'output', 'error',
   'tool_calls', 'blocked', 'model_calls', 'usage', 'failure_context', 'output_partial', 'progress'];
 export function hubReceipt(receipt, proposals = []) {
-  const out = Object.fromEntries(SEND.filter((k) => receipt[k] !== undefined && receipt[k] !== null).map((k) => [k, receipt[k]]));
+  const out = { ...Object.fromEntries(SEND.filter((k) => receipt[k] !== undefined && receipt[k] !== null).map((k) => [k, receipt[k]])), ...publicRunContext(receipt) };
   if (out.failure_context) out.failure_context = sanitizeFailureContext(out.failure_context);
   if (out.progress) out.progress = sanitizeProgress(out.progress);
   if (receipt.status === 'unknown') out.status = 'interrupted';

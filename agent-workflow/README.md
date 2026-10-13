@@ -172,13 +172,14 @@ returns confirmation codes, and exposes no decision capability. `GET /relay/mac/
 run details, including dok runs. Hosted decision checks and one-time code handling are unchanged.
 
 **Historical traceability (13 October 2026):** both detail renderers use `run-trace.mjs` to show
-recorded repository, workspace, review ref, base commit and commit, with exact values and explicit
-unavailable labels. The local `get_run` adds these presentation rows as `trace`; HTML formats the same
-receipt fields. A review ref is distinct from the checkout branch (not recorded). The hosted receipt
-does not include workspace paths or raw logs; these remain unavailable in the view. No current Git
-checkout is consulted, and no historical metadata is backfilled or inferred from agent defaults.
-Run output remains visible separately from raw logs. This is a display improvement using existing
-records, not new run telemetry. Dashboard resource v7 and plugins 0.4.1 contain the change.
+recorded repository, workspace, checkout branch, review ref, base commit, recorded commit and logs,
+with exact values and explicit unavailable labels. Local runs capture the starting Git branch and
+commit plus their private JSONL event log path; dok runs record the actual isolated checkout branch
+(`agent-run` for writable runs or detached HEAD for read-only runs), alongside the source commit. Hosted receipts intentionally omit Mac workspace and log paths, so
+those values remain unavailable there. A review ref is distinct from the checkout branch. No current
+Git checkout is consulted and no historical metadata is backfilled or inferred from agent defaults.
+Run output remains visible separately from raw logs. Dashboard and plugin renderers consume the same
+receipt fields.
 
 **Partial failure telemetry (13 October 2026, plugins 0.4.2 / dashboard v8):** new failed one-shot
 Mac and dok receipts retain bounded assistant text from before the failure, including streamed text

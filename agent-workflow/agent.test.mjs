@@ -43,6 +43,31 @@ const reply = (text) => [
   { type: 'message_end', message: { role: 'assistant', provider: 'p', model: 'm', content: [{ type: 'text', text }], usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.001 } } } },
 ];
 
+test('local receipt freezes start context across a branch and commit change, including Hub publication', async t => {
+  const { root, state } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => {
+    const r = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
+  };
+  git('init', '-q', '-b', 'start-branch'); git('config', 'user.name', 'fixture'); git('config', 'user.email', 'fixture@example.invalid');
+  git('add', '.'); git('commit', '-qm', 'initial');
+  const base = git('rev-parse', 'HEAD'), sent = [];
+  const spawn = (...args) => {
+    git('checkout', '-qb', 'later-branch'); git('commit', '--allow-empty', '-qm', 'later');
+    return fakeSpawn(reply('ok'), [])(...args);
+  };
+  const r = await runAgent('demo', 'fixture', { root, state, spawn, useMemory: false,
+    hubConfig: { endpoint: 'https://hub.example', token: 'fixture-token' },
+    fetchImpl: async (_url, init) => { sent.push(JSON.parse(init.body)); return Response.json({}); } });
+  assert.equal(r.checkout_branch, 'start-branch'); assert.equal(r.base_commit, base);
+  assert.equal(r.commit, git('rev-parse', 'HEAD')); assert.notEqual(r.commit, base);
+  assert.equal(r.worktree_dirty, false); assert.equal(r.logs.status, 'recorded');
+  assert.equal(r.logs.location, r.raw_events);
+  assert.equal(sent[0].checkout_branch, 'start-branch'); assert.equal(sent[0].base_commit, base);
+  assert.equal(sent.at(-1).commit, r.commit); assert.equal(sent.at(-1).logs.status, 'recorded');
+  assert.equal(sent.at(-1).workspace, undefined); assert.equal(sent.at(-1).logs.location, undefined);
+});
+
 test('local failed run keeps previous assistant output and publishes failure context', async t => {
   const { root, state } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const events = [...reply('Read the configuration.'), { type: 'message_end', message: {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runTrace, failureGuidance, failureRows, withFailureGuidance } from './run-trace.mjs';
+import { runTrace, failureGuidance, failureRows, withFailureGuidance, publicRunContext } from './run-trace.mjs';
 
 test('failure guidance classifies recorded symptoms and offers a bounded concrete next step', () => {
   const cases = [
@@ -50,14 +50,16 @@ test('advice ignores task, output, raw logs and caller-supplied guidance and nev
 });
 
 test('run trace shows exact receipt facts, distinguishing review ref from checkout branch', () => {
-  const receipt = { repo: 'vm', workspace: '/historical/worktree', review_ref: 'refs/heads/review/runs/r-test', base_commit: 'a'.repeat(40), commit: 'b'.repeat(40) };
+  const receipt = { repo: 'vm', workspace: '/historical/worktree', checkout_branch: 'main', review_ref: 'refs/heads/review/runs/r-test', base_commit: 'a'.repeat(40), commit: 'b'.repeat(40), logs: { kind: 'events', status: 'recorded', observed_at: '2026-10-13T01:00:00Z', location: '/private/run.jsonl' } };
   const trace = Object.fromEntries(runTrace(receipt));
   assert.equal(trace.Repository, receipt.repo);
   assert.equal(trace.Workspace, receipt.workspace);
   assert.equal(trace['Review branch'], receipt.review_ref);
   assert.equal(trace['Base commit'], receipt.base_commit);
   assert.equal(trace['Recorded commit'], receipt.commit);
-  assert.match(trace['Checkout branch'], /Unavailable/);
+  assert.equal(trace['Checkout branch'], receipt.checkout_branch);
+  assert.match(trace.Logs, /private\/run.jsonl/);
+  assert.match(trace.Logs, /current retention unverified/);
 });
 
 test('old, running, failed and redacted receipts never invent missing context or expose raw logs', () => {
@@ -68,4 +70,16 @@ test('old, running, failed and redacted receipts never invent missing context or
     assert.doesNotMatch(JSON.stringify(trace), /private|main|HEAD/);
   }
   assert.equal(runTrace({ workspace: '' })[1][1], runTrace()[1][1]);
+});
+
+test('trace publishing strips private paths and arbitrary log payloads; detached and removed states stay explicit', () => {
+  const source = { workspace: '/private/workspace', checkout_detached: true, context_recorded_at: '2026-10-13T01:00:00Z', worktree_dirty: true,
+    logs: { kind: 'session', status: 'removed', observed_at: '2026-10-13T01:01:00Z', location: '/private/logs', contents: 'private' } };
+  const safe = publicRunContext(source), rows = Object.fromEntries(runTrace(safe));
+  assert.doesNotMatch(JSON.stringify(safe), /private|contents|location|workspace/);
+  assert.equal(rows['Checkout branch'], 'Detached HEAD (at start)');
+  assert.match(rows.Logs, /removed by runner cleanup/);
+  assert.match(rows['Working tree at start'], /Uncommitted changes/);
+  assert.equal(publicRunContext({ checkout_branch: 'Bearer fake-value', logs: { status: 'recorded' } }).checkout_branch, undefined);
+  assert.equal(publicRunContext({ checkout_branch: 'main\nprivate' }).checkout_branch, undefined);
 });

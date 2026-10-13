@@ -1,6 +1,6 @@
 {
   "name": "agents",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "See, run and review your own Pi agents: dashboard, delegation to agents, and the review queue.",
   "author": {
     "name": "effeef"

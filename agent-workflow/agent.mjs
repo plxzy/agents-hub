@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelGateway } from './model gateway.mjs';
+import { captureRunContext, logObservation } from './run-context.mjs';
 import { failureFromEvents } from './failure-telemetry.mjs';
 import { runProgressTelemetry } from './run-progress.mjs';
 import { linuxPolicy } from './linux-sandbox.mjs';
@@ -403,6 +404,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   const hubOptions = { config: hub, fetchImpl, state };
   const fetched = useMemory && hub ? await hubMemory(agent.memory, hubOptions) : null;
   const memories = fetched ? fetched.items : useMemory ? loadMemory(agent.memory, root) : [];
+  const trace = captureRunContext(agent.workspace);
   const runsDir = path.join(state, 'runs');
   // Eval and other non-task runs keep their own sessions, so `--continue` resumes real work only.
   const sessionDir = sessionDirectory(agent, state, kind);
@@ -410,13 +412,14 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
   const prompt = buildSystemPrompt(agent, memories);
   const runningMarker = writeRunningMarker(state, { run_id: runId, agent: agent.name, kind, task, workspace: agent.workspace, pid: process.pid });
+  Object.assign(runningMarker, trace);
   const { started } = runningMarker, progress = runProgressTelemetry();
   const marker = path.join(runsDir, `${runId}.running`);
   const rawFile = path.join(runsDir, `${runId}.jsonl`);
   fs.writeFileSync(marker, JSON.stringify({ ...runningMarker, progress: progress.snapshot() }) + '\n', { mode: 0o600 });
 
   const stopHeartbeat = await trackHubRun({ run_id: runId, agent: agent.name, kind, task, started, model: agent.model,
-    agent_version: agent.version, progress: progress.snapshot() }, hubOptions);
+    agent_version: agent.version, ...trace, progress: progress.snapshot() }, hubOptions);
   let progressSavedAt = 0;
   const observe = event => {
     if (!progress.observe(event)) return;
@@ -434,6 +437,7 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
     result = await new Promise((resolve, reject) => {
       const child = spawn(...piCommand(agent, piArgs(agent, { task, prompt, sessionDir, resume })), { cwd: agent.workspace, env: { ...agentEnv(agent, root), ...gateway.env }, stdio: ['ignore', 'pipe', 'pipe'] });
       const raw = fs.createWriteStream(rawFile, { mode: 0o600 });
+      raw.on('error', reject);
       const events = [];
       let buf = '';
       let timedOut = false;
@@ -448,9 +452,9 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
       const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
       child.on('error', (e) => { clearTimeout(timer); raw.end(); reject(e); });
       child.on('close', (code) => {
-        clearTimeout(timer); raw.end();
+        clearTimeout(timer);
         if (buf.trim()) { try { const event = JSON.parse(buf); events.push(event); observe(event); } catch { /* incomplete event stays in raw log */ } }
-        resolve({ events, exitCode: code, timedOut });
+        raw.end(() => resolve({ events, exitCode: code, timedOut }));
       });
     });
   } catch (e) { launchError = e; result = { events: [], exitCode: null, timedOut: false }; }
@@ -472,10 +476,11 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   const candidates = hub ? proposals.map(() => 'hub') : proposals.length ? saveCandidates(proposals, { agent, runId, root }) : [];
   const receipt = {
     run_id: runId, agent: agent.name, kind, agent_version: agent.version, status, task, resumed: resume, memory_enabled: useMemory,
-    workspace: agent.workspace, tools: agent.tools, started, ended: new Date().toISOString(),
+    workspace: agent.workspace, ...trace, tools: agent.tools, started, ended: new Date().toISOString(),
     memory_supplied: memories.map((m) => m.meta.id), memory_proposed: candidates,
     ...(hub && useMemory ? { memory_source: fetched ? 'hub' : 'local-fallback', ...(fetched ? { memory_hash: fetched.hash } : {}) } : {}),
-    exit_code: exitCode, ...summary, progress: progress.snapshot(), raw_events: rawFile,
+    exit_code: exitCode, ...summary, commit: captureRunContext(agent.workspace).base_commit,
+    progress: progress.snapshot(), raw_events: rawFile, logs: logObservation(rawFile, 'events'),
   };
   fs.writeFileSync(path.join(runsDir, `${runId}.json`), JSON.stringify(receipt, null, 2) + '\n', { mode: 0o600 });
   fs.rmSync(marker, { force: true });
@@ -508,6 +513,7 @@ export async function runChat(name, { root = ROOT, state = STATE, resume = false
   const hubOptions = { config: hub, fetchImpl, state };
   const fetched = hub ? await hubMemory(agent.memory, hubOptions) : null;
   const memories = fetched ? fetched.items : loadMemory(agent.memory, root);
+  const trace = captureRunContext(agent.workspace);
   const sessionDir = sessionDirectory(agent, state), runsDir = path.join(state, 'runs');
   fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
   const sessions = () => fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl'));
@@ -516,6 +522,8 @@ export async function runChat(name, { root = ROOT, state = STATE, resume = false
   log('When you exit, this chat is saved as a run you can rate and the coach can learn from.\n');
   const marker = writeRunningMarker(state, { run_id: newId('c'), agent: agent.name, kind: 'chat',
     task: `Interactive chat with ${agent.name}`, workspace: agent.workspace, pid: process.pid });
+  Object.assign(marker, trace);
+  fs.writeFileSync(path.join(runsDir, `${marker.run_id}.running`), JSON.stringify(marker) + '\n', { mode: 0o600 });
   const stopHeartbeat = await trackHubRun({ ...marker, model: agent.model, agent_version: agent.version }, hubOptions);
   let gateway, launchError, exitCode;
   try {
@@ -540,6 +548,7 @@ export async function runChat(name, { root = ROOT, state = STATE, resume = false
   receipts[0].run_id = marker.run_id;
   receipts[0].started = marker.started;
   for (const receipt of receipts) {
+    Object.assign(receipt, trace, { commit: captureRunContext(agent.workspace).base_commit, logs: logObservation(receipt.session_file, 'session') });
     receipt.ended ??= new Date().toISOString();
     if (launchError || exitCode !== 0) {
       receipt.status = 'failed'; receipt.error = launchError?.message ?? `Chat process exited with code ${exitCode}`;
