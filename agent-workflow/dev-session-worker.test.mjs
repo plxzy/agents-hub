@@ -28,10 +28,11 @@ export async function createAgentSession(options) {
   prompt:async()=>{
    const message = text=>({role:'assistant', provider:'openai',model:'gpt-6-luna',content:[{type:'text',text}],usage:{totalTokens:12}});
    listener({type:'message_end',message:message('Earlier useful output')});
-   listener({type:'tool_execution_start',toolName:'read'});
+   listener({type:'tool_execution_start',toolName:mode==='write-limit'?'write':'read'});
    listener({type:'message_update',message:message('Streaming fragment')});
    if(mode==='throw') throw new Error('503 upstream disconnected');
-   listener({type:'message_end',message:{...message(mode==='success'?'Final answer':''),stopReason:mode==='success'?'stop':'error',errorMessage:mode==='success'?undefined:mode==='limit'?'429 quota exhausted':'503 upstream disconnected'}});
+   const success = mode==='success' || (mode==='recover' && options.model.provider==='openai-2');
+   listener({type:'message_end',message:{...message(success?'Final answer':''),stopReason:success?'stop':'error',errorMessage:success?undefined:(mode.includes('limit')||mode==='recover')?'429 quota exhausted':'503 upstream disconnected'}});
   }
  }; return {session};
 }
@@ -56,6 +57,15 @@ export async function createAgentSession(options) {
     const ok = await execute({ ...config, prompt: 'success' }, 'fixture only');
     assert.equal(ok.output, 'Final answer'); assert.equal(ok.failure_context, undefined);
   }
+  await assert.rejects(executeRun({ ...config, prompt: 'write-limit', writable: true, slots: ['openai', 'openai-2'] }, 'fixture'), error => {
+    assert.deepEqual(error.partial.slots_used, ['openai'], 'no retry after a write');
+    assert.match(error.partial.output, /Earlier useful output/);
+    assert.equal(error.partial.failure_context.last_tool, 'write');
+    return true;
+  });
+  const recovered = await executeRun({ ...config, prompt: 'recover', slots: ['openai', 'openai-2'] }, 'fixture');
+  assert.deepEqual(recovered.slots_used, ['openai', 'openai-2']);
+  assert.equal(recovered.output, 'Final answer'); assert.equal(recovered.failure_context, undefined);
   // Exercise the real child entrypoint and IPC serialization without an external model request.
   const configFile = path.join(root, 'config.json');
   fs.writeFileSync(configFile, JSON.stringify({ ...config, prompt: 'error' }));
