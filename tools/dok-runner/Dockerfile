@@ -1,7 +1,9 @@
-# Agents runner on dok: Pi + the agent-workflow supervisor, nothing else (no sshd, no editors, no other CLIs).
+# Agents runner on dok: Pi + the agent-workflow supervisor (no sshd, editors or other agent CLIs).
 FROM node:26.11.1-trixie-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0
 RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap git python3 ca-certificates tini \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap git python3 ca-certificates tini procps mawk \
+    # The sandbox mounts /usr, but not the host's /etc/alternatives tree.
+    && ln -s /usr/bin/mawk /usr/local/bin/awk \
     && rm -rf /var/lib/apt/lists/* \
     && usermod -l agent -d /home/agent -m node && groupmod -n agent node
 # Pi is pinned by its lockfile (registry integrity); lifecycle scripts never run.

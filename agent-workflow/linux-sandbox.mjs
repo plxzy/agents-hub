@@ -57,7 +57,8 @@ export function sandboxArgs(policy) {
   return ['--unshare-all', '--die-with-parent', '--new-session', '--clearenv',
     '--ro-bind', '/usr', '/usr', '--ro-bind', '/opt', '/opt',
     '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
-    '--dev', '/dev', '--dir', '/proc', '--tmpfs', '/tmp', '--dir', '/tmp/home',
+    // A fresh procfs belongs to --unshare-all's PID namespace; never bind the host's /proc.
+    '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--dir', '/tmp/home',
     policy.readonly_workspace ? '--ro-bind' : '--bind', policy.workspace, policy.workspace,
     '--ro-bind', policy.release, policy.release, '--ro-bind', policy.runtime, policy.runtime,
     ...(policy.readonly ?? []).flatMap(p => ['--ro-bind', p, p]),

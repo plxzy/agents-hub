@@ -49,6 +49,25 @@ release process identity, and a 30-second heartbeat age. A live Node process wit
 therefore unhealthy; a stale file from an earlier supervisor cannot pass the identity checks. Docker reports the state
 but the restart policy does not restart solely because a healthcheck fails.
 
+### Candidate test utilities (2026-10-13)
+
+The image recipe includes `procps` (`ps`) and `mawk`. `/usr/local/bin/awk` points directly to
+`/usr/bin/mawk`: Debian's `/usr/bin/awk` normally goes through `/etc/alternatives`, which is outside
+the tool sandbox. Installing `mawk` alone therefore does not make `awk` usable there.
+
+The tool sandbox mounts fresh procfs with `--proc /proc` inside its existing isolated PID namespace.
+It never bind-mounts the runner's or dok host's `/proc`. Linux acceptance checks verify process listing,
+awk execution, exclusion of an outside process, and refusal to reach an outside file through procfs.
+Docker's default masked proc paths prevent this nested mount. The matching Compose recipe uses
+`systempaths=unconfined`, which removes Docker's default path masks in the outer runner container;
+capabilities remain dropped and `no-new-privileges`, seccomp, and the tool's namespaces/mount isolation
+remain enabled. This is a runtime configuration change, not just a package installation. Do not roll out
+the new sandbox release without the matching image and Compose settings: the old settings reject its
+procfs mount. No host PID namespace, privileged mode, Docker socket, or host-root mount is required.
+Run these checks in a separate candidate container without the `agents-home` volume or a Hub connection.
+Promoting a candidate image and its matching sandbox release is a separate rollout; changing the image
+recipe alone does not update a running container.
+
 ## Restart recovery (2026-10-13)
 
 One-shot runs persist private checkpoints under `state/recovery-v1/<run>/` before executing tools.

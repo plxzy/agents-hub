@@ -15,6 +15,7 @@ test('sandbox mount policy rejects writable tool/runtime roots', () => {
   assert.ok(args.includes('--clearenv'));
   assert.ok(!args.includes('/home'));
   assert.ok(!args.includes('--share-net'));
+  assert.equal(args[args.indexOf('/proc') - 1], '--proc');
 });
 
 test('read-only runs mount the workspace read-only and refuse write tools', () => {
@@ -43,6 +44,17 @@ test('real Linux tools isolate secrets, protect files, support loopback and kill
   await assert.rejects(sandboxExecute(p, 'read', { path: 'escape' }));
   await assert.rejects(sandboxExecute(p, 'write', { path: 'protected', content: 'changed' }));
   assert.equal(fs.readFileSync(protectedFile, 'utf8'), 'original');
+  const processes = await sandboxExecute(p, 'bash', { command: "ps -eo pid=,ppid=,etimes=,args=; awk 'BEGIN { print \"AWK_OK\" }'" });
+  assert.match(JSON.stringify(processes), /AWK_OK/);
+  assert.match(JSON.stringify(processes), /linux-worker/);
+  // A parent outside the sandbox must not appear in its PID namespace's procfs.
+  const marker = 'OUTSIDE_SANDBOX_PROCESS_719bcf';
+  const outside = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)', marker], { stdio: 'ignore' });
+  try {
+    const inside = await sandboxExecute(p, 'bash', { command: 'ps -eo args=' });
+    assert.ok(!JSON.stringify(inside).includes(marker));
+    await assert.rejects(sandboxExecute(p, 'read', { path: '/proc/1/root' + secret }));
+  } finally { outside.kill('SIGKILL'); }
   const loopback = `node -e 'const n=require("net");const s=n.createServer(c=>c.end("LOOPBACK_OK"));s.listen(0,"127.0.0.1",()=>{const c=n.connect(s.address().port,"127.0.0.1");c.on("data",d=>console.log(d.toString()));c.on("end",()=>s.close());})'`;
   assert.match(JSON.stringify(await sandboxExecute(p, 'bash', { command: loopback })), /LOOPBACK_OK/);
   const controller = new AbortController();

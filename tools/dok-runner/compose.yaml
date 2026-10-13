@@ -21,6 +21,10 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+      # Docker's default proc path masks prevent a nested user/PID namespace from
+      # mounting fresh procfs. The tool sandbox supplies its own --proc /proc;
+      # it never receives this container's procfs or PID namespace.
+      - systempaths=unconfined
       # The existing profile allows bwrap's unprivileged user namespaces.
       - seccomp=${AGENTS_SECCOMP_PROFILE:-${HOME}/.config/dok-dev/seccomp.json}
 volumes:
