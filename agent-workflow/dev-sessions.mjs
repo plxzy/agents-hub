@@ -35,6 +35,25 @@ const READ_ONLY = ['read', 'grep', 'find', 'ls'];
 const ALL_TOOLS = [...READ_ONLY, 'write', 'edit', 'bash'];
 export const RUN_ID = /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 
+// Persist first. The cleanup callback cannot run if result construction or durable storage fails.
+export function persistRunCompletion({ file, receipt, result, observed, done, code, failure, remembered = [], commit, baseCommit, harvested, cleanup, persist = save }) {
+  const terminal = { ...receipt, status: failure || result.error ? 'failed' : code === 0 ? 'completed' : 'interrupted',
+        ...(remembered.length ? { memory_proposed: remembered.length, memory_proposals: remembered } : {}),
+        ended: new Date().toISOString(), ...(commit ? { commit } : {}), ...(baseCommit ? { base_commit: baseCommit } : {}),
+        ...(done && harvested ? harvested : {}), ...(observed ? { runtime: observed } : {}),
+        ...(failure || result.error ? { error: failure ?? result.error } : {}),
+        output: safeOutput(result.output ?? ''), tool_calls: Array.isArray(result.tool_calls) ? result.tool_calls.slice(0, 500) : [],
+        ...(result.runtime || observed || receipt.mcp_connection ? { configuration: runConfiguration({ runtime: result.runtime ?? observed, mcp_connection: receipt.mcp_connection }) } : {}),
+        ...(!done ? { failure_context: result.failure_context, output_partial: result.output_partial } : {}),
+        ...(result.usage ? { usage: result.usage } : {}), ...(Number.isInteger(result.model_calls) ? { model_calls: result.model_calls } : {}),
+        ...(Array.isArray(result.slots_used) ? { accounts_used: result.slots_used.filter(s => /^openai(-[1-9]\d*)?$/.test(s)) } : {}) };
+  persist(file, terminal);
+  if (done && cleanup) {
+    try { cleanup(); } catch { /* Keep the durable result; retained artifacts can be cleaned later. */ }
+  }
+  return terminal;
+}
+
 export class DevelopmentSessions {
   constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, knowledgeHub, hub_agents = null, accounts_module = null, limits = {} }) {
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
@@ -63,7 +82,7 @@ export class DevelopmentSessions {
       const file = path.join(this.state, 'agent-runs', name), r = read(file);
       if (r.status === 'running') save(file, { ...r, status: 'interrupted', ended: new Date().toISOString(), error: 'Runner restarted during the run' });
     }
-    for (const name of fs.readdirSync(path.join(this.state, 'run-work'))) fs.rmSync(path.join(this.state, 'run-work', name, 'workspace'), { recursive: true, force: true });
+    // Unfinished work is recovery evidence; never delete it at supervisor startup.
     for (const name of fs.readdirSync(path.join(this.state, 'runs'))) {
       const file = path.join(this.state, 'runs', name), r = read(file);
       if (r.status === 'running') save(file, { ...r, status: 'interrupted', stopped_at: Date.now(), error: 'Supervisor restarted; new grant required' });
@@ -311,7 +330,7 @@ export class DevelopmentSessions {
     this.runs.set(run_id, { write, repo: project });
     void this.report(run_id);
     // Clone and execution continue after the start acknowledgement; the transport attempt is short.
-    void this.executeRun(agent, runtime, receipt, previous).catch(() => {});
+    void this.executeRun(agent, runtime, receipt, previous).catch(() => this.finalizationFailed(receipt));
     const { root: _root, ...visible } = receipt;
     return visible;
   }
@@ -340,22 +359,17 @@ export class DevelopmentSessions {
       const remembered = done ? extractRemember(result.output, agent).slice(0, 5) : [];
       if (typeof result.output === 'string') result.output = result.output.replace(/```remember\n[\s\S]*?```/g, '').trim();
       receipt.logs = logObservation(path.join(base, 'pi-sessions'), 'session');
-      // Cleanup is part of this observation, before the final receipt is saved and reported.
-      fs.rmSync(write ? workspace : base, { recursive: true, force: true });
-      if (!write && receipt.logs.status === 'recorded') receipt.logs = { kind: 'session', status: 'removed', observed_at: new Date().toISOString() };
-      save(file, { ...receipt, status: failure || result.error ? 'failed' : code === 0 ? 'completed' : 'interrupted',
-        ...(remembered.length ? { memory_proposed: remembered.length, memory_proposals: remembered } : {}),
-        ended: new Date().toISOString(), ...(commit ? { commit } : {}), ...(baseCommit ? { base_commit: baseCommit } : {}),
-        ...(done && harvested ? harvested : {}), ...(observed ? { runtime: observed } : {}),
-        ...(failure || result.error ? { error: failure ?? result.error } : {}),
-        output: safeOutput(result.output ?? ''), tool_calls: Array.isArray(result.tool_calls) ? result.tool_calls.slice(0, 500) : [],
-        ...(result.runtime || observed || mcp_connection ? { configuration: runConfiguration({ runtime: result.runtime ?? observed, mcp_connection }) } : {}),
-        ...(!done ? { failure_context: result.failure_context, output_partial: result.output_partial } : {}),
-        ...(result.usage ? { usage: result.usage } : {}), ...(Number.isInteger(result.model_calls) ? { model_calls: result.model_calls } : {}),
-        ...(Array.isArray(result.slots_used) ? { accounts_used: result.slots_used.filter(s => /^openai(-[1-9]\d*)?$/.test(s)) } : {}) });
+      persistRunCompletion({ file, receipt, result, observed, done, code, failure, remembered, commit, baseCommit, harvested,
+        cleanup: () => { /* Completed work alone is eligible for cleanup, after the result is durable. */
+          fs.rmSync(write ? workspace : base, { recursive: true, force: true });
+          if (!write && receipt.logs.status === 'recorded') {
+            const terminal = read(file);
+            save(file, { ...terminal, logs: { kind: 'session', status: 'removed', observed_at: new Date().toISOString() } });
+          }
+        } });
       this.runs.delete(receipt.run_id);
       // Write conversations keep their Pi history (not the checkout) so a follow-up can continue; others are removed.
-      if (write) this.prune();
+      if (write && done) this.prune();
       await this.report(receipt.run_id);
     };
     try {
@@ -469,14 +483,25 @@ export class DevelopmentSessions {
           try { harvested = await this.harvest(policy, receipt, baseCommit, repository); commit = harvested.commit; }
           catch (error) { failure = /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(error.message) ? error.message : 'Export failed'; }
         }
-        void finish(code, result);
+        await finish(code, result);
       };
-      child.on('error', () => { failure ??= 'Pi process could not start'; void done(1); });
-      child.on('close', code => void done(code)); child.stdin.on('error', () => {}); child.stdin.end(receipt.task);
+      child.on('error', () => { failure ??= 'Pi process could not start'; void done(1).catch(() => this.finalizationFailed(receipt)); });
+      child.on('close', code => void done(code).catch(() => this.finalizationFailed(receipt))); child.stdin.on('error', () => {}); child.stdin.end(receipt.task);
     } catch (error) {
       failure ??= /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(error.message) ? error.message : 'Run preparation failed';
       await finish(1);
     }
+  }
+  finalizationFailed(receipt) {
+    // A storage failure must not become an unhandled rejection that kills other runs.
+    this.runs.delete(receipt.run_id);
+    try {
+      const file = path.join(this.state, 'agent-runs', receipt.run_id + '.json');
+      const saved = read(file);
+      if (saved.status === 'running') save(file, { ...saved, status: 'interrupted', ended: new Date().toISOString(),
+        error: 'Run finalization failed; retained work requires recovery' });
+    } catch { /* Existing running receipt and workspace remain for startup reconciliation. */ }
+    void this.report(receipt.run_id);
   }
   // After a write run: commit and bundle inside the sandbox (the checkout's git config is agent-controlled),
   // then import the bundle into the bare repository as an append-only review ref.
@@ -500,7 +525,10 @@ export class DevelopmentSessions {
   // Keep the newest few write conversations for a week; read runs and everything else is removed.
   prune() {
     const dir = path.join(this.state, 'run-work'), live = new Set([...this.runs.keys()].map(id => this.runRoot(id)));
-    const items = fs.readdirSync(dir).filter(n => !live.has(n)).map(n => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs })).sort((a, b) => b.t - a.t);
+    const unresolved = new Set(fs.readdirSync(path.join(this.state, 'agent-runs')).flatMap(name => {
+      try { const r = read(path.join(this.state, 'agent-runs', name)); return r.status !== 'completed' ? [r.root ?? r.run_id] : []; } catch { return fs.readdirSync(dir); }
+    }));
+    const items = fs.readdirSync(dir).filter(n => !live.has(n) && !unresolved.has(n)).map(n => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs })).sort((a, b) => b.t - a.t);
     items.forEach(({ n, t }, i) => { if (i >= this.limits.keepConversations || Date.now() - t > this.limits.keepMs) fs.rmSync(path.join(dir, n), { recursive: true, force: true }); });
   }
   runRoot(runId) { try { return read(path.join(this.state, 'agent-runs', runId + '.json')).root ?? runId; } catch { return runId; } }
