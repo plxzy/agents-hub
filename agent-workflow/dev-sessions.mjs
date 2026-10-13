@@ -10,6 +10,7 @@ import { linuxPolicy, sandboxExecute } from './linux-sandbox.mjs';
 import { DEVELOPMENT, digest } from './dev-grants.mjs';
 import { DEVELOPMENT_RUNTIME, runtimeMatches, agentRuntime } from './dev-runtime.mjs';
 import { titleOf } from './contract.mjs';
+import { failedResult, sanitizeFailureContext } from './failure-telemetry.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
@@ -196,11 +197,13 @@ export class DevelopmentSessions {
       const done = async code => {
         clearInterval(watchdog); clearInterval(renew); clearInterval(disk); clearTimeout(timeout); clearTimeout(killTimer);
         let result = {};
-        try { if (code === 0 && !failure) result = JSON.parse(output); } catch { failure = 'Invalid Pi result'; }
+        try { result = JSON.parse(output || '{}'); } catch { failure ??= 'Invalid Pi result'; }
         if (code === 0 && !failure && (!runtime || !runtimeMatches(result.runtime, config.manifest.runtime))) failure = 'Missing verified Pi runtime';
-        save(file, { ...receipt, status: failure || code !== 0 ? 'interrupted' : 'completed', stopped_at: Date.now(),
+        if (failure || result.error || code !== 0) result = failedResult(result, {}, failure ?? result.error ?? 'Pi process exited');
+        save(file, { ...receipt, status: failure || result.error || code !== 0 ? 'interrupted' : 'completed', stopped_at: Date.now(),
           ...(runtime ? { runtime } : {}),
-          ...(failure ? { error: failure } : {}), output: safeOutput(result.output ?? ''), tool_calls: result.tool_calls ?? [],
+          ...(failure || result.error ? { error: failure ?? result.error } : {}), output: safeOutput(result.output ?? ''), tool_calls: result.tool_calls ?? [],
+          ...(result.failure_context ? { failure_context: result.failure_context, output_partial: result.output_partial } : {}),
           ...(/^[a-f0-9]{40,64}$/.test(result.commit ?? '') ? { commit: result.commit } : {}) });
         this.active = null;
         try { await this.lease({ ...leaseArgs, execution_state: 'stopped' }); } catch { /* stop remains unconfirmed on Hub until reconnect */ }
@@ -310,12 +313,13 @@ export class DevelopmentSessions {
     const file = path.join(this.state, 'agent-runs', receipt.run_id + '.json');
     const entry = this.runs.get(receipt.run_id);
     const branch = receipt.continued_from ? 'review/runs/' + receipt.continued_from : 'main';
-    let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer;
+    let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer, checkpoint = {};
     const finish = async (code, result = {}) => {
       clearTimeout(timeout); clearTimeout(killTimer); clearInterval(diskTimer);
       const { provider: _p, ...pinnedRuntime } = runtime;
       if (code === 0 && !failure && !(runtimeMatches(result.runtime, pinnedRuntime) && (runtime.provider !== 'openai' ? result.runtime.provider === runtime.provider : this.limits.slots.includes(result.runtime.provider)))) failure = 'Missing verified Pi runtime';
       const done = !failure && !result.error && code === 0;
+      if (!done) result = failedResult(result, checkpoint, failure ?? result.error ?? 'Pi process exited');
       if (write && done && harvested?.review_ref) fs.writeFileSync(path.join(base, 'head'), receipt.run_id, { mode: 0o600 });
       // ```remember blocks become memory candidates (sent with the receipt); they are not part of the shown answer.
       const remembered = done ? extractRemember(result.output, agent).slice(0, 5) : [];
@@ -326,6 +330,7 @@ export class DevelopmentSessions {
         ...(done && harvested ? harvested : {}), ...(observed ? { runtime: observed } : {}),
         ...(failure || result.error ? { error: failure ?? result.error } : {}),
         output: safeOutput(result.output ?? ''), tool_calls: Array.isArray(result.tool_calls) ? result.tool_calls.slice(0, 500) : [],
+        ...(!done ? { failure_context: result.failure_context, output_partial: result.output_partial } : {}),
         ...(result.usage ? { usage: result.usage } : {}), ...(Number.isInteger(result.model_calls) ? { model_calls: result.model_calls } : {}),
         ...(Array.isArray(result.slots_used) ? { accounts_used: result.slots_used.filter(s => /^openai(-[1-9]\d*)?$/.test(s)) } : {}) });
       this.runs.delete(receipt.run_id);
@@ -413,6 +418,11 @@ export class DevelopmentSessions {
       }
       const { provider: _provider, ...pinned } = runtime;
       child.on('message', message => {
+        if (message?.type === 'checkpoint' && observed) {
+          checkpoint = { output: safeOutput(typeof message.partial?.output === 'string' ? message.partial.output : ''),
+            failure_context: sanitizeFailureContext(message.partial?.failure_context) };
+          return;
+        }
         if (message?.type === 'account' && slots.includes(message.slot) && ['usage limit reached', 'account not eligible'].includes(message.kind)) {
           void this.accountLimited(message.slot, message.kind); return;
         }

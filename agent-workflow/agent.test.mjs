@@ -43,6 +43,18 @@ const reply = (text) => [
   { type: 'message_end', message: { role: 'assistant', provider: 'p', model: 'm', content: [{ type: 'text', text }], usage: { input: 10, output: 5, totalTokens: 15, cost: { total: 0.001 } } } },
 ];
 
+test('local failed run keeps previous assistant output and publishes failure context', async t => {
+  const { root, state } = fixture(); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const events = [...reply('Read the configuration.'), { type: 'message_end', message: {
+    role: 'assistant', provider: 'openai', model: 'gpt-6-luna', content: [], stopReason: 'error', errorMessage: '503 service unavailable',
+  } }];
+  const r = await runAgent('demo', 'fixture', { root, state, spawn: fakeSpawn(events, []), hubConfig: null });
+  assert.equal(r.status, 'failed'); assert.equal(r.output, 'Read the configuration.');
+  assert.equal(r.output_partial, true); assert.equal(r.failure_context.last_tool, 'ls');
+  assert.equal(r.failure_context.message, '503 service unavailable');
+  assert.equal(r.memory_proposed.length, 0);
+});
+
 test('nested sandbox launches fail before spawning or writing run state', async (t) => {
   const { root, state } = fixture();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

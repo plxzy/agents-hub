@@ -12,3 +12,10 @@ export function runTrace(r = {}) {
     ['Logs', 'Unavailable in this view; run output is shown separately'],
   ];
 }
+
+export function failureRows(r = {}) {
+  const f = r.failure_context;
+  if (!f) return [];
+  return [['Last phase', f.phase], ['Last tool', f.last_tool], ['Provider', f.provider], ['Model', f.model], ['Diagnostic', f.message]]
+    .map(([label, value]) => [label, value || 'Unavailable — not recorded']);
+}

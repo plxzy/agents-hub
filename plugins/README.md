@@ -48,6 +48,10 @@ base commit and recorded commit. The shared `run-trace.mjs` formatter also drive
 Missing fields, checkout branch and raw logs are explicitly unavailable; a review ref is not presented
 as the execution branch. This does not look up current Git state or expose private runner logs.
 
+**Failure details (0.4.2):** the error remains visible alongside labelled partial output. New failure
+receipts also display last observed phase/tool, provider/model and a bounded redacted diagnostic via
+the shared operations formatter. Older receipts show their original error without invented telemetry.
+
 Check: `claude plugin validate plugins/agents-panel` and `claude plugin test plugins/agents-panel`.
 Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin marketplace update dev-workflow`).
 

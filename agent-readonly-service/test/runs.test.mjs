@@ -9,6 +9,18 @@ import { sanitizeReceipt, observedRun, MAC_HEARTBEAT_TTL_MS } from '../src/runs.
 const DOK = 'dok-test-only';
 const RUN = 'r-20261012T120000Z-abcdef';
 
+test('failure evidence survives Hub sanitization without leaking nested raw fields', () => {
+  const r = sanitizeReceipt({ run_id: RUN, agent: 'helper', status: 'failed', started: '2026-10-12T12:00:00Z', output_partial: true,
+    output: 'Useful partial output', failure_context: { phase: 'model', last_tool: 'read', provider: 'openai', model: 'gpt-6-luna',
+      message: '503 connection dropped\nAuthorization: Bearer credential\n/home/name/private/file', stack: 'private stack', args: { token: 'private' } } }, 'dok');
+  assert.equal(r.failure_context.phase, 'model'); assert.equal(r.failure_context.last_tool, 'read');
+  assert.match(r.failure_context.message, /503 connection dropped/);
+  assert.doesNotMatch(JSON.stringify(r.failure_context), /credential|\/home|private|stack|token/);
+  assert.equal(r.output_partial, true); assert.equal(r.output, 'Useful partial output');
+  const success = sanitizeReceipt({ ...r, status: 'completed' }, 'dok');
+  assert.equal(success.failure_context, undefined); assert.equal(success.output_partial, undefined);
+});
+
 test('Mac liveness uses the Hub observation time and never invents completion', () => {
   const now = Date.parse('2026-10-13T00:00:00Z');
   const row = { receipt: JSON.stringify({ run_id: RUN, runner: 'mac', status: 'running' }), updated_at: new Date(now).toISOString() };
@@ -248,5 +260,12 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   const pool = (await (await accounts(null, 'GET')).json()).accounts;
   assert.deepEqual(pool.map((a) => [a.slot, a.state]), [['openai', 'cooldown'], ['openai-2', 'ok']]); // elapsed disable reads as ok
   assert.equal(JSON.parse((await tool('get_status')).content[0].text).accounts.length, 2);
+  const failedId = 'r-20261012T122000Z-abcdef';
+  await post({ ...running, run_id: failedId, status: 'failed', error: 'model turn failed', output: 'Partial answer', output_partial: true,
+    failure_context: { phase: 'model', last_tool: 'read', provider: 'openai', model: 'gpt-6-luna', message: '503 service unavailable' } });
+  const failed = JSON.parse((await tool('panel_run', { run_id: failedId })).content[0].text);
+  const macFailure = await (await mf.dispatchFetch(`https://test/relay/mac/runs/${failedId}`, { headers: { authorization: 'Bearer mac-secret-token' } })).json();
+  assert.deepEqual(macFailure.failure_context, failed.failure_context);
+  assert.equal(failed.failure_context.last_tool, 'read'); assert.equal(failed.output_partial, true); assert.equal(failed.output, 'Partial answer');
   ws.close();
 });

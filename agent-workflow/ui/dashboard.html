@@ -100,7 +100,7 @@
 <script type="module">/*__HEALTH_BUNDLE__*/</script>
 <script type="module">
 const { App, applyHostStyleVariables } = globalThis.ExtApps;
-const { healthOf, healthLabels, dashboardHealth, runTrace } = globalThis.AgentsHealth;
+const { healthOf, healthLabels, dashboardHealth, runTrace, failureRows } = globalThis.AgentsHealth;
 
 // ---------- state ----------
 const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null, healthOpen: false };
@@ -301,12 +301,15 @@ function detailView() {
     await call('rate_run', { run_id: r.run_id, rating, comment, ...(S.data?.relay ? { confirm: S.confirm?.rate?.[r.run_id] } : {}) });
     await loadDetail(r.run_id); await refresh();
   });
-  const output = String(r.output ?? r.error ?? '').replace(/```remember\n[\s\S]*?```/g, '').trim();
+  const output = String(r.output ?? '').replace(/```remember\n[\s\S]*?```/g, '').trim();
   return h('div', {}, back, h('div', { class: 'row' },
     h('div', { class: 'line' }, h('span', { class: `pill ${r.status}` }, r.status), h('span', { class: 'name' }, r.agent),
       h('span', { class: 'grow muted small ell' }, r.run_id)),
     h('div', { class: 'body' }, r.task ?? r.title ?? ''),
     r.status === 'running' ? h('div', { class: 'meta' }, h('span', { class: 'spin' }), ` started ${ago(r.started)}; this updates on its own`) : null,
+    r.error ? h('p', { class: 'error' }, `Error: ${r.error}`) : null,
+    failureRows(r).length ? h('dl', {}, ...failureRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, value)])) : null,
+    output ? h('h3', {}, r.output_partial ? 'Partial output' : 'Output') : null,
     output ? h('pre', {}, output) : null,
     h('dl', {}, ...[
       ['runner', r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null)], ['model', r.model], ['started', r.started && new Date(r.started).toLocaleString()], ['tools', list(r.tool_calls, ', ', 'call(s)')],

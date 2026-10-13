@@ -1,7 +1,78 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fork } from 'node:child_process';
 import { trustedLoader } from './dev-session-worker.mjs';
 import { observedRuntime } from './dev-runtime.mjs';
+
+test('SDK failures preserve output and usage after tools, throws and account exhaustion', async t => {
+  const { executeRun, executeSession } = await import('./dev-session-worker.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-failure-fixture-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'dist'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: 'fixture' }));
+  const sdk = path.join(root, 'dist/index.mjs');
+  fs.writeFileSync(sdk, `
+export const createExtensionRuntime = () => ({});
+export const SessionManager = { findById: () => null, create: () => ({}) };
+export const SettingsManager = { inMemory: () => ({}) };
+export const ModelRuntime = { create: async () => ({ getProvider: () => ({}), hasConfiguredAuth: () => true, getModel: (provider,id) => ({provider,id}) }) };
+export async function createAgentSession(options) {
+ let listener;
+ const mode = options.resourceLoader.getAppendSystemPrompt()[0];
+ const session = {model:options.model, thinkingLevel: options.thinkingLevel, sessionId:'fixture',
+  setModel:async model => {session.model=model}, setThinkingLevel:v=>{session.thinkingLevel=v},
+  subscribe:fn=>{listener=fn;return ()=>{}}, dispose(){}, abort:async()=>{},
+  prompt:async()=>{
+   const message = text=>({role:'assistant', provider:'openai',model:'gpt-6-luna',content:[{type:'text',text}],usage:{totalTokens:12}});
+   listener({type:'message_end',message:message('Earlier useful output')});
+   listener({type:'tool_execution_start',toolName:'read'});
+   listener({type:'message_update',message:message('Streaming fragment')});
+   if(mode==='throw') throw new Error('503 upstream disconnected');
+   listener({type:'message_end',message:{...message(mode==='success'?'Final answer':''),stopReason:mode==='success'?'stop':'error',errorMessage:mode==='success'?undefined:mode==='limit'?'429 quota exhausted':'503 upstream disconnected'}});
+  }
+ }; return {session};
+}
+`);
+  const config = { mode: 'run', policy: { sdk, workspace: root }, tools: [], sessions: path.join(root, 'sessions'),
+    conversation_id: 'fixture', runtime: { engine: 'pi-sdk', provider: 'openai', model: 'gpt-6-luna', thinking: 'low' },
+    manifest: { agent: 'helper', project: 'fixture', host: 'fixture', commit: 'a'.repeat(40) } };
+  for (const execute of [executeRun, executeSession]) {
+    for (const prompt of ['error', 'throw', 'limit']) {
+      await assert.rejects(execute({ ...config, prompt }, 'fixture only'), error => {
+        assert.match(error.partial.output, /Earlier useful output/);
+        assert.match(error.partial.output, /Streaming fragment/);
+        assert.equal(error.partial.output_partial, true);
+        assert.equal(error.partial.failure_context.last_tool, 'read');
+        assert.equal(error.partial.failure_context.model, 'gpt-6-luna');
+        assert.match(error.partial.failure_context.message, /503|429/);
+        assert.deepEqual(error.partial.tool_calls, ['read']);
+        assert.ok(error.partial.usage.totalTokens >= 12);
+        return true;
+      });
+    }
+    const ok = await execute({ ...config, prompt: 'success' }, 'fixture only');
+    assert.equal(ok.output, 'Final answer'); assert.equal(ok.failure_context, undefined);
+  }
+  // Exercise the real child entrypoint and IPC serialization without an external model request.
+  const configFile = path.join(root, 'config.json');
+  fs.writeFileSync(configFile, JSON.stringify({ ...config, prompt: 'error' }));
+  const messages = [], result = await new Promise((resolve, reject) => {
+    const child = fork(new URL('./dev-session-worker.mjs', import.meta.url), [configFile], { silent: true });
+    let stdout = '';
+    child.on('message', message => messages.push(message));
+    child.stdout.on('data', data => { stdout += data; }); child.stderr.resume();
+    child.on('error', reject); child.on('close', code => resolve({ code, value: JSON.parse(stdout) }));
+    child.stdin.end('fixture only');
+  });
+  assert.equal(result.code, 1); assert.equal(result.value.error, 'model turn failed');
+  assert.match(result.value.output, /Earlier useful output/);
+  assert.equal(result.value.failure_context.last_tool, 'read');
+  assert.equal(messages[0].type, 'runtime');
+  assert.ok(messages.some(m => m.type === 'checkpoint' && m.partial.output.includes('Earlier useful output')));
+});
 
 test('runtime evidence reads actual SDK state and rejects fallback before execution', () => {
   const session = { model: { provider: 'openai', id: 'gpt-6.1-sol' }, thinkingLevel: 'high', sessionId: 'conversation' };

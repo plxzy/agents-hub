@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { modelGateway } from './model gateway.mjs';
+import { failureFromEvents } from './failure-telemetry.mjs';
 import { linuxPolicy } from './linux-sandbox.mjs';
 import { linkedHub, sendReceipt, flushOutbox, hubMemory, trackHubRun, DECIDE_IN_HUB } from './hub.mjs';
 
@@ -372,7 +373,7 @@ export function summarize(events) {
     session_id: events.find((e) => e.type === 'session')?.id ?? null,
     model: final ? `${final.provider}/${final.model}` : null,
     output: final?.content?.filter((p) => p.type === 'text').map((p) => p.text).join('\n') ?? null,
-    error: final?.errorMessage ?? null,
+    error: final?.errorMessage || (['error', 'aborted'].includes(final?.stopReason) ? final.stopReason : null),
     tool_calls: events.filter((e) => e.type === 'tool_execution_start').map((e) => e.toolName),
     // Commands that actually ran; attempts a guard stopped are kept separately as `blocked`.
     commands: bashCalls(events).filter((c) => !c.blocked).map((c) => c.command),
@@ -432,7 +433,11 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
       child.stderr.on('data', () => {});
       const timer = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, timeoutMs);
       child.on('error', (e) => { clearTimeout(timer); raw.end(); reject(e); });
-      child.on('close', (code) => { clearTimeout(timer); raw.end(); resolve({ events, exitCode: code, timedOut }); });
+      child.on('close', (code) => {
+        clearTimeout(timer); raw.end();
+        if (buf.trim()) { try { events.push(JSON.parse(buf)); } catch { /* incomplete event stays in raw log */ } }
+        resolve({ events, exitCode: code, timedOut });
+      });
     });
   } catch (e) { launchError = e; result = { events: [], exitCode: null, timedOut: false }; }
   finally {
@@ -444,6 +449,10 @@ export async function runAgent(name, task, { root = ROOT, state = STATE, resume 
   const summary = summarize(events);
   if (launchError) summary.error = launchError.message;
   const status = timedOut ? 'unknown' : exitCode === 0 && !summary.error ? 'completed' : 'failed';
+  if (status !== 'completed') {
+    summary.error ||= timedOut ? 'Run time limit exceeded' : `Pi process exited (${exitCode ?? 'no exit code'})`;
+    Object.assign(summary, failureFromEvents(events, summary.error));
+  }
   const proposals = status === 'completed' && proposeMemory ? extractRemember(summary.output, agent) : [];
   // Linked: proposals travel with the receipt and wait in the Hub panel; no local candidate file (that would fork the queue).
   const candidates = hub ? proposals.map(() => 'hub') : proposals.length ? saveCandidates(proposals, { agent, runId, root }) : [];

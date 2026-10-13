@@ -101,13 +101,14 @@ async function tick($: Engine) {
 async function openRun($: Engine, runId: string) {
   try {
     const r = await call($, 'get_run', { run_id: runId })
-    const text = String(r.output ?? r.error ?? (r.status === 'running' ? '_Still running…_' : '_No output._'))
+    const text = String(r.output || (r.status === 'running' ? '_Still running…_' : '_No output._'))
     const took = r.ended && r.started ? span(Date.parse(r.ended) - Date.parse(r.started)) : ''
     const tokens = r.usage?.total_tokens ?? r.usage?.totalTokens
     const meta = [r.runner ?? 'mac', String(r.model ?? '').split('/').pop(), took, r.tool_calls != null && `${r.tool_calls} tool calls`, tokens && `${tokens} tokens`]
       .filter(Boolean).join(' · ')
     await update($, detail, () => ({ run_id: r.run_id, agent: r.agent, status: r.status, runner: r.runner, task: String(r.task ?? r.title ?? ''), text: text.slice(0, 20000), meta,
-      trace: r.trace ?? [['Run context', 'Unavailable — update local operations to view recorded context']] }))
+      trace: r.trace ?? [['Run context', 'Unavailable — update local operations to view recorded context']],
+      error: r.error, partial: r.output_partial === true, failureRows: r.failure_rows ?? [] }))
   } catch (err) {
     await fail($)(err)
   }
@@ -238,6 +239,9 @@ export const register: Register = on => {
             <Text wrap="wrap">{shown.task}</Text>
           </Box>
           {shown.meta && <Text dimColor>{shown.meta}</Text>}
+          {shown.error && <Text color="error" wrap="wrap">{`Error: ${shown.error}`}</Text>}
+          {(shown.failureRows ?? []).map(([label, value]) => <Text key={`failure-${label}`} wrap="wrap">{`${label}: ${value}`}</Text>)}
+          {shown.partial && <Text bold>Partial output</Text>}
           <Markdown key="output" text={shown.text} />
           <Box flexDirection="column">
             <Text bold>Recorded run context</Text>

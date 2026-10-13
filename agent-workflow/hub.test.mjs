@@ -9,6 +9,13 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'hub-'));
 const config = { endpoint: 'https://hub.example', token: 't'.repeat(32) };
 const reply = (status, body) => ({ ok: status < 300, status, json: async () => body });
 
+test('Mac receipt carries bounded failure evidence without raw state', () => {
+  const context = { phase: 'model', last_tool: 'read', provider: 'openai', model: 'gpt-6-luna', message: '503 service unavailable' };
+  const r = hubReceipt({ status: 'failed', output: 'Partial answer', output_partial: true, failure_context: context, raw_events: '/private/log', transcript: 'private' });
+  assert.deepEqual(r.failure_context, context); assert.equal(r.output_partial, true);
+  assert.equal(r.raw_events, undefined); assert.equal(r.transcript, undefined);
+});
+
 test('live receipts retry without an outbox and stop drains the heartbeat before final publication', async () => {
   const calls = [], timers = [];
   let finish, count = 0, canceled;

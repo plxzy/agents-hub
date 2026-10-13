@@ -3,6 +3,7 @@ import { containsSecret } from './snapshot.mjs';
 import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
 import { ratingsFor } from './decisions.mjs';
 import { proposeMemory } from './memory.mjs';
+import { sanitizeFailureContext } from '../../agent-workflow/failure-telemetry.mjs';
 
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -46,6 +47,9 @@ export function sanitizeReceipt(r, runner) {
     memory_source: ['hub', 'frozen-release'].includes(r.memory_source) ? r.memory_source : undefined,
     memory_hash: /^[a-f0-9]{16}$/.test(r.memory_hash ?? '') ? r.memory_hash : undefined,
     usage, runtime, error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
+    ...(r.status !== 'completed' && r.status !== 'running' ? {
+      failure_context: sanitizeFailureContext(r.failure_context), output_partial: r.output_partial === true,
+    } : {}),
   };
   return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined));
 }

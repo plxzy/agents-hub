@@ -180,6 +180,21 @@ checkout is consulted, and no historical metadata is backfilled or inferred from
 Run output remains visible separately from raw logs. This is a display improvement using existing
 records, not new run telemetry. Dashboard resource v7 and plugins 0.4.1 contain the change.
 
+**Partial failure telemetry (13 October 2026, plugins 0.4.2 / dashboard v8):** new failed one-shot
+Mac and dok receipts retain bounded assistant text from before the failure, including streamed text
+when Pi supplies it. `output_partial` labels that answer as incomplete. `failure_context` records the
+last observed phase (`startup`, `model`, or `tool`), last tool name, observed provider/model and a
+redacted diagnostic (up to 2,000 characters). Successful output and account-failover policy are unchanged.
+Both details views show the error separately, so partial output cannot hide it.
+
+dok keeps a bounded checkpoint in its supervisor for a Pi child exit without final JSON; streamed
+checkpoints are throttled to one per second, with immediate terminal-message/tool-start checkpoints.
+Thus the latest text can lag, and supervisor/host loss is not a durable progress log. Old receipts are
+not backfilled. Reasoning, tool arguments/results, raw logs, stacks and credentials are not new receipt
+fields; diagnostics redact credential-looking lines, URLs, host paths and addresses. The existing Hub
+receipt route and output redaction remain in use. Failure classification/recovery advice and a live
+phase UI are separate work. Interactive Mac chats retain their existing session-receipt behavior.
+
 The shared view has the agents list, matching agent count, running/to-review counts, and latest 50 runs.
 `open_dashboard` performs a single Hub read, without flushing the outbox. On failure it returns current local
 data with `source: "local (Hub unreachable)"`; without a Hub link, `source` is `local`. Cached Hub review items

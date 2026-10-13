@@ -45,6 +45,22 @@ for (const source of ['hub', 'local (Hub unreachable)']) {
 
 const PROPS = { title: 'Agents', isFocused: true, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } as const
 
+test('failure diagnostics and partial output are both visible', async ($, on) => {
+  on('process.run', async (_$, e) => {
+    const data = e.argv[3] === 'open_dashboard' ? DASHBOARD : { run_id: 'r-1', agent: 'helper', status: 'failed',
+      output: 'Useful partial answer', output_partial: true, error: 'model turn failed', trace: [],
+      failure_rows: [['Last phase', 'model'], ['Last tool', 'read'], ['Diagnostic', '503 upstream disconnected']] }
+    return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
+  })
+  on('clock.after', async () => ({ deny: 'no timers in this test' }) as never)
+  on('ui.status', async () => ({ value: undefined }) as never)
+  const ui = await $.ui.mount({ plugin: 'agents-panel', surface: 'desktop', component: 'Pane', requestId: 'agents', props: PROPS as never })
+  await ui.press({ key: 'refresh' }); await ui.press({ key: 'run-r-1' })
+  for (const text of ['Error: model turn failed', 'Partial output', 'Useful partial answer', 'Last tool: read', 'Diagnostic: 503 upstream disconnected']) {
+    expect(await ui.find({ text })).toBeDefined()
+  }
+})
+
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`draws runs and review items, opens a run and decides on a click (${surface})`, async ($, on) => {
     const calls: string[][] = []
