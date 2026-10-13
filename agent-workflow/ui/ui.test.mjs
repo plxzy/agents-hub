@@ -129,6 +129,21 @@ test('failed detail shows its error alongside labelled partial output and record
   assert.deepEqual(failureRows({ status: 'failed', error: 'old receipt' }), []);
 });
 
+test('development task shows error and diagnostics alongside partial output', () => {
+  const html = dashboardHtml();
+  const receipt = { run_id: 'r-failed', status: 'failed', error: 'model turn failed', output: 'Partial development answer', output_partial: true,
+    failure_context: { phase: 'model', last_tool: 'read', message: '503 upstream disconnected' } };
+  const context = vm.createContext({ S: { development: { grants: [] }, devRun: receipt, busy: new Set() }, failureRows,
+    h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  vm.runInContext(html.match(/function developmentView\(\) \{[\s\S]*?\n\}/)[0], context);
+  const result = JSON.stringify(context.developmentView());
+  for (const text of ['Error: model turn failed', 'Partial output', 'Partial development answer', 'Last tool', 'read', '503 upstream disconnected']) assert.ok(result.includes(text), text);
+  context.S.devRun = { run_id: 'old-run', status: 'failed', error: 'old error', output: '' };
+  const legacy = JSON.stringify(context.developmentView());
+  assert.match(legacy, /Error: old error/);
+  assert.doesNotMatch(legacy, /Partial output/);
+});
+
 test('runner form defaults to dok, preserves the task, and clears incompatible fields', async () => {
   const html = dashboardHtml(), calls = []; let pending;
   const S = { data: { transport: 'mac', runner_selection: 1, run_targets: [

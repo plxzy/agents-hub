@@ -258,7 +258,11 @@ function developmentView() {
         } }, h('label', {}, 'Task or follow-up', h('textarea', { name: 'task', required: true, maxlength: 16000 })),
           h('button', { type: 'submit', disabled: !d.host?.online || S.busy.has('dev-task') }, 'Run in this conversation')) : null);
     }),
-    S.devRun ? h('div', { class: 'row' }, h('strong', {}, `Task: ${S.devRun.status}`), h('pre', {}, S.devRun.output ?? S.devRun.error ?? S.devRun.run_id),
+    S.devRun ? h('div', { class: 'row' }, h('strong', {}, `Task: ${S.devRun.status}`),
+      S.devRun.error ? h('p', { class: 'error' }, `Error: ${S.devRun.error}`) : null,
+      failureRows(S.devRun).length ? h('dl', {}, ...failureRows(S.devRun).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, value)])) : null,
+      S.devRun.output ? h('h3', {}, S.devRun.output_partial ? 'Partial output' : 'Output') : null,
+      h('pre', {}, S.devRun.output || S.devRun.run_id),
       S.devRun.runtime ? h('pre', {}, JSON.stringify(S.devRun.runtime, null, 2)) : null,
       h('button', { onclick: () => act('dev-result', async () => { S.devRun = await call('get_development_task', { grant_id: S.devRun.grant_id, run_id: S.devRun.run_id }); }) }, 'Refresh task'),
       S.devRun.status === 'completed' ? h('button', { onclick: () => act('dev-export', async () => {
