@@ -117,9 +117,11 @@ test('linked open_dashboard uses exactly the Hub lists and falls back explicitly
 
 test('get_run reads Hub output including dok runs and retains local fallback', async () => {
   const ctx = { ...fixture(), hub: { endpoint: 'https://hub.example', token: 't'.repeat(32) },
-    fetchImpl: async (url) => { assert.ok(url.endsWith('/relay/mac/runs/r-dok')); return Response.json({ run_id: 'r-dok', runner: 'dok', output: 'done' }); } };
+    fetchImpl: async (url) => { assert.ok(url.endsWith('/relay/mac/runs/r-dok')); return Response.json({ run_id: 'r-dok', runner: 'dok', status: 'failed', error: 'usage limit reached', output: 'done' }); } };
   const remote = await callOp('get_run', { run_id: 'r-dok' }, { ctx });
   assert.equal(remote.output, 'done');
+  assert.equal(remote.failure_guidance.category, 'agent_model');
+  assert.match(Object.fromEntries(remote.failure_rows)['Next step'], /reset time/);
   assert.match(Object.fromEntries(remote.trace).Workspace, /Unavailable/);
   fs.mkdirSync(path.join(ctx.state, 'runs'), { recursive: true });
   fs.writeFileSync(path.join(ctx.state, 'runs/r-local.json'), JSON.stringify({ run_id: 'r-local', agent: 'demo', status: 'completed', raw_events: '/private', output: 'local' }));
@@ -128,4 +130,6 @@ test('get_run reads Hub output including dok runs and retains local fallback', a
   assert.equal(local.output, 'local'); assert.equal(local.raw_events, undefined);
   assert.match(Object.fromEntries(local.trace).Logs, /Unavailable/);
   assert.doesNotMatch(JSON.stringify(local.trace), /private/);
+  fs.writeFileSync(path.join(ctx.state, 'runs/r-local.json'), JSON.stringify({ run_id: 'r-local', agent: 'demo', status: 'failed', error: 'Execution lease refused' }));
+  assert.equal((await callOp('get_run', { run_id: 'r-local' }, { ctx })).failure_guidance.category, 'policy_permissions');
 });

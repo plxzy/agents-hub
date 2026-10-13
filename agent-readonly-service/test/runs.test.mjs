@@ -277,6 +277,12 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   const failed = JSON.parse((await tool('panel_run', { run_id: failedId })).content[0].text);
   const macFailure = await (await mf.dispatchFetch(`https://test/relay/mac/runs/${failedId}`, { headers: { authorization: 'Bearer mac-secret-token' } })).json();
   assert.deepEqual(macFailure.failure_context, failed.failure_context);
+  assert.equal(failed.failure_guidance.category, 'agent_model');
+  assert.match(failed.failure_guidance.next_step, /provider diagnostic/);
+  assert.deepEqual(macFailure.failure_guidance, failed.failure_guidance);
+  assert.deepEqual(JSON.parse((await tool('get_run', { run_id: failedId })).content[0].text).failure_guidance, failed.failure_guidance);
+  const storedFailure = JSON.parse((await db.prepare('SELECT receipt FROM runs WHERE run_id = ?').bind(failedId).first()).receipt);
+  assert.equal(storedFailure.failure_guidance, undefined, 'read-time advice does not rewrite historical receipts');
   assert.equal(failed.failure_context.last_tool, 'read'); assert.equal(failed.output_partial, true); assert.equal(failed.output, 'Partial answer');
   ws.close();
 });

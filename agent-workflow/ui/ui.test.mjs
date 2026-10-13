@@ -125,8 +125,11 @@ test('failed detail shows its error alongside labelled partial output and record
     canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.detailView());
-  for (const text of ['Error: model turn failed', 'Partial output', 'Useful partial answer', 'Last tool', 'read', '503 upstream disconnected']) assert.ok(result.includes(text), text);
-  assert.deepEqual(failureRows({ status: 'failed', error: 'old receipt' }), []);
+  for (const text of ['Error: model turn failed', 'Partial output', 'Useful partial answer', 'Last tool', 'read', '503 upstream disconnected', 'Failure category (inferred)', 'Agent / model', 'Next step']) assert.ok(result.includes(text), text);
+  assert.equal(failureRows({ status: 'failed', error: 'old receipt' })[0][1], 'Unclassified');
+  const bundled = vm.createContext({});
+  vm.runInContext([...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)].find(m => m[1].includes('globalThis.AgentsHealth ='))[1], bundled);
+  assert.equal(JSON.stringify(bundled.AgentsHealth.failureRows(receipt)), JSON.stringify(failureRows(receipt)));
 });
 
 test('run list and detail expose live progress, stale checkpoints and missing older telemetry', () => {

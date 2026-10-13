@@ -15,7 +15,7 @@
 
 import { sanitizeProgress } from './run-progress.mjs';
 
-export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v9.html';
+export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v10.html';
 /** Any earlier dashboard URI a host may still have cached; it is answered with the current page. */
 export const isDashboardUri = (uri) => typeof uri === 'string' && /^ui:\/\/agents(-hub)?\/dashboard(-v\d+)?\.html$/.test(uri);
 

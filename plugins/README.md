@@ -58,6 +58,11 @@ operations catalog. Stale observations and missing telemetry are explicit; an el
 the agent is stuck. Completed-run observations are labelled historical. Use a fresh Claude Code session
 after updating the plugin; an already-mounted ChatGPT dashboard may retain an older renderer.
 
+**Failure guidance (0.4.4):** failed/interrupted details show an inferred category and a concrete next
+step from the shared catalog. Old receipts are classified on read when their errors contain enough
+evidence; otherwise they show Unclassified. Guidance never starts retries or changes permissions.
+Running, completed and unknown-contact receipts do not acquire a failure diagnosis.
+
 Check: `claude plugin validate plugins/agents-panel` and `claude plugin test plugins/agents-panel`.
 Install: `claude plugin install agents-panel@dev-workflow` (after `claude plugin marketplace update dev-workflow`).
 

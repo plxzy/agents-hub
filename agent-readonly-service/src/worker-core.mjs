@@ -1,4 +1,5 @@
 import { dokTarget } from '../../agent-workflow/run-selection.mjs';
+import { withFailureGuidance } from '../../agent-workflow/run-trace.mjs';
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
@@ -65,7 +66,7 @@ const TOOLS = [
   { name: 'list_runs', ...READ_OPS.list_runs,
     run: (p, { agent, limit = 10 }) => ({ snapshot: freshness(p.meta), runs: p.snap.payload.runs.filter((r) => !agent || r.agent === agent).slice(-limit) }) },
   { name: 'get_run', ...READ_OPS.get_run,
-    run: (p, { run_id }) => { const run = p.snap.payload.runs.find((r) => r.run_id === run_id); if (!run) throw new Error('no run ' + run_id); return { ...run, snapshot: freshness(p.meta) }; } },
+    run: (p, { run_id }) => { const run = p.snap.payload.runs.find((r) => r.run_id === run_id); if (!run) throw new Error('no run ' + run_id); return { ...withFailureGuidance(run), snapshot: freshness(p.meta) }; } },
   { name: 'resolve_context', title: 'Resolve context', description: 'List approved context metadata from the latest published snapshot.', annotations: { readOnlyHint: true },
     input: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }, additionalProperties: false },
     run: (p, { limit = 20 }) => ({ snapshot: freshness(p.meta), ...page(p.snap.payload.context ?? [], null, limit) }) },
@@ -263,7 +264,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
   if (url.pathname === '/v1/runs') return json({ ...m, ...page(snap.payload.runs, url.searchParams.get('cursor'), url.searchParams.get('limit')) });
   if (url.pathname.startsWith('/v1/runs/')) {
     const item = snap.payload.runs.find((x) => x.run_id === decodeURIComponent(url.pathname.slice('/v1/runs/'.length)));
-    return item ? json({ ...m, item }) : json({ error: 'not_found' }, 404);
+    return item ? json({ ...m, item: withFailureGuidance(item) }) : json({ error: 'not_found' }, 404);
   }
   if (url.pathname === '/v1/context') return json({ ...m, ...page(snap.payload.context ?? [], url.searchParams.get('cursor'), url.searchParams.get('limit')) });
   return json({ error: 'not_found' }, 404);

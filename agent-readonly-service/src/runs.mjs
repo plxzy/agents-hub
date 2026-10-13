@@ -5,6 +5,7 @@ import { ratingsFor } from './decisions.mjs';
 import { proposeMemory } from './memory.mjs';
 import { sanitizeFailureContext } from '../../agent-workflow/failure-telemetry.mjs';
 import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
+import { withFailureGuidance } from '../../agent-workflow/run-trace.mjs';
 
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -87,7 +88,7 @@ export async function readRun(env, runId) {
   const row = await env.DB.prepare('SELECT receipt, updated_at FROM runs WHERE run_id = ?').bind(runId).first();
   if (!row) return null;
   const receipt = observedRun(row), rating = (await ratingsFor(env, [runId])).get(runId);
-  return rating ? { ...receipt, feedback: rating } : receipt;
+  return withFailureGuidance(rating ? { ...receipt, feedback: rating } : receipt);
 }
 
 /** Newest `limit` receipts as briefs (oldest first, like the snapshot's run list). */

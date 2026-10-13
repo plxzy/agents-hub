@@ -192,8 +192,18 @@ checkpoints are throttled to one per second, with immediate terminal-message/too
 Thus the latest text can lag, and supervisor/host loss is not a durable progress log. Old receipts are
 not backfilled. Reasoning, tool arguments/results, raw logs, stacks and credentials are not new receipt
 fields; diagnostics redact credential-looking lines, URLs, host paths and addresses. The existing Hub
-receipt route and output redaction remain in use. Failure classification/recovery advice remain separate
-work; live progress is described below. Interactive Mac chats retain their existing session-receipt behavior.
+receipt route and output redaction remain in use. Failure guidance and live progress are described below.
+Interactive Mac chats retain their existing session-receipt behavior.
+
+**Actionable failures (13 October 2026, plugins 0.4.4 / dashboard v10):** full run reads return
+`failure_guidance` for failed/interrupted receipts. Both dashboards show a suggested category and one
+concrete next step: handshake/protocol, agent/model, environment/SSH, policy/permissions, or Unclassified.
+The shared formatter uses terminal status and bounded recorded diagnostics; task text, output and
+caller-supplied advice cannot become instructions. Categories are inferences, not verified root causes.
+Ambiguous errors stay unclassified; missing Mac contact is still unknown, not a failed run.
+Guidance is computed on read, so old receipts benefit without changing stored evidence or restarting
+the runner. It never triggers a retry, changes permissions or disables checks. Partial output and the
+original error remain visible. Admission/dispatch failures without a run receipt are outside this view.
 
 **Live run visibility (13 October 2026, plugins 0.4.3 / dashboard v9):** one-shot Mac/dok runs
 publish event metadata in `progress`: phase, last action/tool, latest completed checkpoint and its
