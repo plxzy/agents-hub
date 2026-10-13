@@ -163,3 +163,20 @@ test('account slots are registered with the base catalog and kept only when logg
   assert.deepEqual(slots, ['openai', 'openai-2']);
   assert.deepEqual(await registerSlots(runtime, { slots: ['openai', 'openai-2'] }), ['openai', 'openai-2']); // already registered
 });
+
+test('durable final result returns without opening credentials or invoking a model', async t => {
+  const { executeRun } = await import('./dev-session-worker.mjs');
+  const { RunJournal } = await import('./run-recovery.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-result-fixture-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'dist'));
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: 'fixture' }));
+  const sdk = path.join(root, 'dist/index.mjs');
+  fs.writeFileSync(sdk, 'export const ModelRuntime = { create() { throw Error("Must not access account"); } };');
+  const runtime = { provider: 'openai', model: 'gpt-6-luna', thinking: 'low' };
+  const file = path.join(root, 'previous.json'), j = new RunJournal(file, { remainingMs: 60000 });
+  j.finish({ output: 'Saved answer', runtime });
+  const result = await executeRun({ policy: { sdk }, tools: [], runtime, slots: ['openai'],
+    recover_from: file, checkpoint_file: path.join(root, 'next.json'), remaining_ms: 59000 }, 'Do not repeat');
+  assert.equal(result.output, 'Saved answer');
+});

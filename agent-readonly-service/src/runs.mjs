@@ -1,4 +1,5 @@
 // Run receipts in D1: written by authenticated runners, read by the Hub's MCP tools.
+import { publicRecovery } from '../../agent-workflow/recovery-contract.mjs';
 import { containsSecret } from './snapshot.mjs';
 import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
 import { ratingsFor } from './decisions.mjs';
@@ -50,6 +51,7 @@ export function sanitizeReceipt(r, runner) {
     memory_proposed: Number.isInteger(r.memory_proposed) && r.memory_proposed >= 0 && r.memory_proposed <= 20 ? r.memory_proposed : undefined,
     memory_source: ['hub', 'frozen-release'].includes(r.memory_source) ? r.memory_source : undefined,
     memory_hash: /^[a-f0-9]{16}$/.test(r.memory_hash ?? '') ? r.memory_hash : undefined,
+    recovery: publicRecovery(r.recovery ? { ...r.recovery, inspection: redactLines(r.recovery.inspection, 12000) } : null),
     usage, runtime, configuration, progress: sanitizeProgress(r.progress), error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
     ...(r.status !== 'completed' && r.status !== 'running' ? {
       failure_context: sanitizeFailureContext(r.failure_context), output_partial: r.output_partial === true,
@@ -64,7 +66,9 @@ export async function storeRun(env, receipt, runner) {
   const r = sanitizeReceipt(receipt, runner);
   await env.DB.prepare(`INSERT INTO runs (run_id, agent, runner, status, started, ended, updated_at, receipt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(run_id) DO UPDATE SET status=excluded.status, ended=excluded.ended, updated_at=excluded.updated_at, receipt=excluded.receipt
-    WHERE runs.runner = excluded.runner AND (runs.status = 'running' OR excluded.status <> 'running')
+    WHERE runs.runner = excluded.runner
+      AND COALESCE(json_extract(excluded.receipt, '$.recovery.revision'), 0) >= COALESCE(json_extract(runs.receipt, '$.recovery.revision'), 0)
+      AND (runs.status = 'running' OR excluded.status <> 'running')
       AND (excluded.status <> 'running' OR COALESCE(json_extract(excluded.receipt, '$.progress.observed_at'), '') >= COALESCE(json_extract(runs.receipt, '$.progress.observed_at'), ''))`)
     .bind(r.run_id, r.agent, runner, r.status, r.started, r.ended ?? null, new Date().toISOString(), JSON.stringify(r)).run();
   await env.DB.prepare('DELETE FROM runs WHERE run_id NOT IN (SELECT run_id FROM runs ORDER BY started DESC LIMIT ?)').bind(KEEP).run();
@@ -117,5 +121,5 @@ export async function runForRequest(env, requestId) {
   const row = await env.DB.prepare("SELECT receipt, updated_at FROM runs WHERE runner = 'dok' AND json_extract(receipt, '$.request_id') = ? LIMIT 1").bind(requestId).first();
   if (!row) return null;
   const r = observedRun(row);
-  return { state: 'started', run_id: r.run_id, runner: 'dok', status: r.status };
+  return { state: 'started', run_id: r.run_id, runner: 'dok', status: r.status, ...(r.recovery?.resumed_by ? { latest_run_id: r.recovery.resumed_by } : {}) };
 }

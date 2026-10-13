@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+import net from 'node:net';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DevelopmentSessions, save } from './dev-sessions.mjs';
@@ -14,6 +15,22 @@ const pidFile = path.join(config.state, 'supervisor.json');
 const identity = pid => {
   try { return fs.readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ').at(-1).split(' ')[19]; } catch { return null; }
 };
+const controlPath = path.join(config.state, 'control.sock');
+async function control(command) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection(controlPath); let data = '';
+    socket.setTimeout(3000, () => socket.destroy(Error('Supervisor control timed out')));
+    socket.on('connect', () => socket.end(command)); socket.on('data', b => { data += b; });
+    socket.on('error', reject); socket.on('end', () => { try { resolve(JSON.parse(data)); } catch (e) { reject(e); } });
+  });
+}
+if (process.argv.includes('--drain')) {
+  let status = await control('drain');
+  for (let n = 0; !status.idle && n < 60; n++) { await new Promise(r => setTimeout(r, 1000)); status = await control('status'); }
+  if (!status.idle) { await control('undrain'); throw Error('Active work remains; deployment restart refused'); }
+  console.log('Runner drained and idle'); process.exit(0);
+}
+if (process.argv.includes('--undrain')) { await control('undrain'); process.exit(0); }
 if (process.argv.includes('--stop')) {
   if (fs.existsSync(pidFile)) {
     const { pid, started } = JSON.parse(fs.readFileSync(pidFile, 'utf8'));
@@ -92,6 +109,7 @@ async function execute(message) {
     if (operation === 'dev_read') return { ok: true, value: sessions.get(args.run_id) };
     if (operation === 'run_lookup') return { ok: true, value: sessions.runLookup(args.target_request_id) };
     if (operation === 'run_read') return { ok: true, value: sessions.runGet(args.run_id) };
+    if (operation === 'run_resume') return { ok: true, value: await sessions.resumeRun(args, { approved: args.approved === true }) };
     if (operation === 'run_start') return { ok: true, value: await sessions.runStart(args) };
     if (operation === 'dev_start') return { ok: true, value: await sessions.start(args) };
     const file = path.join(journal, args.request_id + '.json'), fp = fingerprintText(operation, args);
@@ -112,6 +130,7 @@ async function execute(message) {
   }
 }
 async function publish() {
+  await sessions.recoverPending();
   await sessions.flushReports();
   await acknowledgeStopped();
 }
@@ -123,16 +142,32 @@ async function acknowledgeStopped() {
     catch { return; }
   }
 }
+// Private local control only. The drained admission flag and active count belong to this process.
+try { fs.unlinkSync(controlPath); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+const controlServer = net.createServer({ allowHalfOpen: true }, socket => {
+  let request = '';
+  socket.on('data', b => { request += b; if (request.length > 32) socket.destroy(); });
+  socket.on('error', () => {});
+  socket.on('end', () => {
+    if (request === 'drain') sessions.draining = true;
+    else if (request === 'undrain') sessions.draining = false;
+    socket.end(JSON.stringify({ idle: !sessions.active && sessions.runs.size === 0 && !sessions.recoveryScanning, draining: sessions.draining === true }));
+  });
+});
+await new Promise((resolve, reject) => { controlServer.once('error', reject); controlServer.listen(controlPath, resolve); });
+fs.chmodSync(controlPath, 0o600);
 try {
   await serveSocket({ host: 'dok-dev', session: processSession, signal: controller.signal,
-    readConfig: () => ({ endpoint: config.endpoint, token: config.token, enabled: true, agents, run_selection: sessions.runSelection() }),
+    readConfig: () => ({ endpoint: config.endpoint, token: config.token, enabled: !sessions.draining, agents, run_selection: sessions.runSelection() }),
     execute, publish,
     onState: ({ hub_ready, last_pong_at, fatal }) => writeHealth({ hub_ready: hub_ready === true,
       last_pong_at: last_pong_at ?? null, fatal: fatal === true }) });
 } finally {
   sessions.stop();
-  for (let n = 0; n < 60 && sessions.active; n++) await new Promise(r => setTimeout(r, 100));
+  for (let n = 0; n < 60 && (sessions.active || sessions.runs.size); n++) await new Promise(r => setTimeout(r, 100));
   sessions.active?.child?.kill('SIGKILL');
+  controlServer.close();
+  try { fs.unlinkSync(controlPath); } catch {}
   writeHealth({ hub_ready: false, last_pong_at: null, fatal: false });
   if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
 }

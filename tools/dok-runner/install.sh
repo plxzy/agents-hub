@@ -2,6 +2,12 @@
 # On dok, as the host user: install a committed agent-workflow revision into the runner and restart it.
 set -euo pipefail
 rev=${1:?usage: install.sh REVISION [KNOWLEDGE_DIR_NAME]}
+# Admission is closed atomically by the live supervisor before release activation.
+# Older releases without control.sock require a verified idle cutover by the operator.
+if test -n "$(docker ps -q --filter name=^agents$)"; then
+  docker exec agents /home/agent/.local/bin/agent-supervisor --drain /home/agent/.config/agent-workflow/dok.json
+  trap 'docker exec agents /home/agent/.local/bin/agent-supervisor --undrain /home/agent/.config/agent-workflow/dok.json >/dev/null 2>&1 || true' EXIT
+fi
 knowledge=${2:-$(docker run --rm --entrypoint sh -v agents-home:/home/agent agents-runner:pi-1.1.0 -c 'basename "$(python3 -c "import json;print(json.load(open(\"/home/agent/.config/agent-workflow/dok.json\"))[\"knowledge\"])")"')}
 cd "$(dirname "$0")"
 docker compose run --rm --no-deps --entrypoint bash runner -lc "set -e

@@ -131,7 +131,7 @@ const list = (v, sep, unit) => (Array.isArray(v) ? (v.length ? v.join(sep) : nul
 // ---------- server calls ----------
 function showError(msg) { const e = document.getElementById('error'); e.textContent = msg ?? ''; e.hidden = !msg; }
 async function call(name, args = {}) {
-  if (S.data?.transport !== 'mac' && S.data?.relay && ['start_run', 'rate_run', 'review_decide'].includes(name)) args = { ...args, request_id: crypto.randomUUID() };
+  if (S.data?.transport !== 'mac' && S.data?.relay && ['start_run', 'rate_run', 'review_decide'].includes(name)) args = { ...args, request_id: args.request_id ?? crypto.randomUUID() };
   if (S.data?.transport !== 'mac' && S.data?.relay && ['rate_run', 'review_decide'].includes(name) && !args.confirm) {
     throw new Error('This panel has no confirmation code for that item yet. Press Refresh and try again.');
   }
@@ -296,6 +296,32 @@ function runsView() {
       r.blocked > 0 && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')))));
 }
 
+function recoveryView(r) {
+  const v = r.recovery;
+  if (!v) return null;
+  const key = `recovery-${r.run_id}-${v.checkpoint_version}`;
+  const hosted = S.data?.relay && S.data?.transport !== 'mac';
+  const action = name => act(key, async () => {
+    const request_id = S.devRequests.get(key) ?? crypto.randomUUID();
+    S.devRequests.set(key, request_id);
+    const result = await call(name, { run_id: r.run_id, checkpoint_version: v.checkpoint_version, request_id,
+      ...(name === 'decide_recovery' ? { confirm: S.confirm?.recovery?.[`${r.run_id}:${v.checkpoint_version}`] } : {}) });
+    await loadDetail(result.run_id); await refresh();
+  });
+  return h('section', { 'aria-live': 'polite' }, h('h3', {}, 'Saved work and recovery'),
+    h('p', {}, `${v.state}${v.checkpoint_at ? ` · saved ${ago(v.checkpoint_at)}` : ''}`),
+    v.reason ? h('p', {}, v.reason) : null,
+    v.retained ? h('p', { class: 'small muted' }, 'Recovery artifacts are retained on dok.') : null,
+    v.resumed_from ? h('button', { onclick: () => loadDetail(v.resumed_from) }, 'Previous attempt') : null,
+    v.resumed_by ? h('button', { onclick: () => loadDetail(v.resumed_by) }, 'Open resumed run') : null,
+    v.inspection ? h('pre', {}, v.inspection) : null,
+    hosted && r.status === 'interrupted' && v.state === 'ready' ? h('button', { disabled: S.busy.has(key), onclick: () => action('resume_run') }, 'Resume saved work') : null,
+    hosted && r.status === 'interrupted' && v.state === 'awaiting_review' && v.inspection
+      ? h('div', {}, h('p', {}, 'Continuing permits further work on the inspected files. The interrupted command will not be replayed.'),
+        h('button', { disabled: S.busy.has(key), onclick: () => action('decide_recovery') }, 'Approve continuation from current files'),
+        h('p', { class: 'small muted' }, 'Leave this run paused by taking no action.')) : null);
+}
+
 function detailView() {
   const r = S.detail;
   const back = h('button', { class: 'back', onclick: () => { S.detail = null; render(); } }, '← All runs');
@@ -313,6 +339,7 @@ function detailView() {
     h('div', { class: 'body' }, r.task ?? r.title ?? ''),
     r.status === 'running' ? h('div', { class: 'meta' }, h('span', { class: 'spin' }), ` started ${ago(r.started)}; this updates on its own`) : null,
     r.error ? h('p', { class: 'error' }, `Error: ${r.error}`) : null,
+    recoveryView(r),
     progressRows(r).length ? h('section', {}, h('h3', {}, ['running', 'unknown'].includes(r.status) ? 'Run progress' : 'Recorded progress'),
       h('dl', {}, ...progressRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)]))) : null,
     failureRows(r).length ? h('dl', {}, ...failureRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, value)])) : null,
@@ -356,6 +383,24 @@ function reviewView() {
   }));
 }
 
+function hostedRequests() {
+  try { return JSON.parse(localStorage.getItem('agents-hub-starts-v1') ?? '[]'); } catch { return []; }
+}
+async function reserveHostedStart(args) {
+  const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(args)));
+  const fingerprint = Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join('');
+  const requests = hostedRequests();
+  const old = requests.find(r => r.fingerprint === fingerprint && !r.run_id);
+  if (old) return old.request_id;
+  const request_id = crypto.randomUUID();
+  // Persist identity before asking the host to admit a run. Store no task text or credentials.
+  if (requests.filter(r => !r.run_id).length >= 20) throw new Error('Check unresolved requests before starting more runs.');
+  localStorage.setItem('agents-hub-starts-v1', JSON.stringify([...requests.filter(r => !r.run_id), { fingerprint, request_id, state: 'unknown', runner: 'dok' }]));
+  return request_id;
+}
+function resolveHostedStart(request_id, result) {
+  if (result.run_id) localStorage.setItem('agents-hub-starts-v1', JSON.stringify(hostedRequests().map(r => r.request_id === request_id ? { ...r, run_id: result.run_id, state: 'started' } : r)));
+}
 function formView() {
   const local = S.data?.transport === 'mac';
   const supported = !local || S.data.runner_selection === 1;
@@ -380,7 +425,9 @@ function formView() {
       if (runner === 'mac' && S.form.continue) args.continue = true;
     }
     act('start', async () => {
+      if (!local) args.request_id = submittedForm.request_id = await reserveHostedStart(args);
       const result = await call(local ? 'start_selected_run' : 'start_run', args);
+      if (!local) resolveHostedStart(args.request_id, result);
       await refresh();
       if (!result.run_id) {
         // The durable client journal owns this identity even after this form closes.
@@ -392,7 +439,7 @@ function formView() {
     });
   };
   const change = patch => { Object.assign(S.form, patch); S.form.request_id = undefined; render(); };
-  const requests = local ? (S.data.start_requests ?? []) : [];
+  const requests = local ? (S.data.start_requests ?? []) : hostedRequests();
   return h('div', {}, h('button', { class: 'back', onclick: () => { S.form = null; render(); } }, '← Back'),
     h('form', { class: 'row', onsubmit: submit },
       local ? h('label', {}, 'Runner', h('select', { name: 'runner', disabled: S.busy.has('start'), onchange: e => change({ runner: e.target.value, cwd: '', continue: false }) },
@@ -410,10 +457,11 @@ function formView() {
         : `Remote checkout: ${chosen?.repo ?? 'agent default'}. Tasks that change files return review branches; this Mac’s working tree is untouched.`),
       chosen?.model ? h('p', { class: 'small muted' }, `Model: ${chosen.model}`) : null,
       h('div', { class: 'actions' }, h('button', { class: 'primary', type: 'submit', disabled: S.busy.has('start') || !available }, S.busy.has('start') ? 'Starting…' : 'Start run'))),
-    ...requests.map(r => h('div', { class: 'row' }, h('p', {}, `${r.runner} · ${r.state} · ${firstLine(r.task)}`), h('p', { class: 'small muted' }, r.request_id),
+    ...requests.map(r => h('div', { class: 'row' }, h('p', {}, `${r.runner} · ${r.state} · ${firstLine(r.task ?? '')}`), h('p', { class: 'small muted' }, r.request_id),
       r.run_id ? h('button', { onclick: () => { S.form = null; loadDetail(r.run_id); } }, 'Open run')
         : r.state === 'unknown' ? h('button', { disabled: S.busy.has(r.request_id), onclick: () => act(r.request_id, async () => {
-          const result = await call('get_selected_start', { request_id: r.request_id });
+          const result = await call(local ? 'get_selected_start' : 'get_start_status', { request_id: r.request_id });
+          if (!local) resolveHostedStart(r.request_id, result);
           await refresh();
           if (result.run_id) { S.form = null; await loadDetail(result.run_id); }
           else throw new Error(result.message ?? 'Still unresolved. No new task was submitted.');

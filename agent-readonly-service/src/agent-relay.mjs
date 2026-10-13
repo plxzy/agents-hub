@@ -57,7 +57,7 @@ export class AgentRelay extends DurableObject {
   }
   pendingStarts() {
     // Older retained requests have no operation; conservatively include them.
-    return this.one("SELECT COUNT(DISTINCT r.id) AS n FROM requests r JOIN attempts a ON a.request=r.id WHERE r.result IS NULL AND a.expires > ? AND (r.operation IN ('run_start','start_run') OR r.operation IS NULL)", Date.now())?.n ?? 0;
+    return this.one("SELECT COUNT(DISTINCT r.id) AS n FROM requests r JOIN attempts a ON a.request=r.id WHERE r.result IS NULL AND a.expires > ? AND (r.operation IN ('run_start','start_run','run_resume') OR r.operation IS NULL)", Date.now())?.n ?? 0;
   }
   requestStatus(id) {
     const row = this.one('SELECT result FROM requests WHERE id=?', id);
@@ -129,6 +129,7 @@ export class AgentRelay extends DurableObject {
     if (!status.online) throw new Error('Runner is offline. No action was queued.');
     if (['start_run', 'run_start'].includes(operation) && (!status.enabled || !status.agents.includes(args.agent))) throw new Error('Remote runs are off or this agent is not remote-allowed.');
     if (this.waiters.size >= WIRE.capacity) throw new Error('Relay is busy. No action was queued.');
+    if (operation === 'run_resume' && !status.enabled) throw new Error('Remote runs are off. No action was queued.');
     const ws = this.socket(), a = ws.deserializeAttachment();
     const attempt = crypto.randomUUID(), expires = Date.now() + WIRE.attempt;
     const message = encode({ v: 1, type: 'request', session: a.session, socket: a.socket, attempt, id, operation, args, expires });

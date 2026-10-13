@@ -1,11 +1,13 @@
 // Credential-owning Pi process. Never discovers resources from a writable checkout.
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import os from 'node:os';
 import { sandboxExecute } from './linux-sandbox.mjs';
 import { DEVELOPMENT_RUNTIME, observedRuntime, runtimeMatches } from './dev-runtime.mjs';
 import { failureTelemetry } from './failure-telemetry.mjs';
 import { runProgressTelemetry } from './run-progress.mjs';
+import { RunJournal, loadCheckpoint, reconcileSession } from './run-recovery.mjs';
 
 export function trustedLoader(sdk, prompt) {
   const extensions = { extensions: [], errors: [], runtime: sdk.createExtensionRuntime() };
@@ -145,6 +147,16 @@ export async function executeRun(config, task) {
   const sdk = await import(config.policy.sdk);
   const piVersion = JSON.parse(fs.readFileSync(path.join(path.dirname(config.policy.sdk), '../package.json'), 'utf8')).version;
   const names = sessionTools(config);
+  const restored = config.recover_from ? loadCheckpoint(config.recover_from) : null;
+  const journal = config.checkpoint_file ? new RunJournal(config.checkpoint_file, { remainingMs: config.remaining_ms,
+    previous: restored ?? undefined }) : null;
+  let currentManager;
+  if (restored?.result && !restored.result.error && restored.result.runtime?.model === config.runtime.model
+    && restored.result.runtime?.thinking === config.runtime.thinking && config.slots.includes(restored.result.runtime?.provider)) {
+    journal.update({ result: restored.result });
+    process.send?.({ type: 'runtime', runtime: restored.result.runtime });
+    return restored.result; // model already finished; only export/publication remains
+  }
   const modelRuntime = await sdk.ModelRuntime.create({ authPath: path.join(os.homedir(), '.pi/agent/auth.json'),
     modelsPath: null, allowModelNetwork: false });
   // Overrides name a provider; the pool applies to the openai provider only.
@@ -165,7 +177,9 @@ export async function executeRun(config, task) {
       const customTools = names.map(name => {
         const definition = sdk[FACTORIES[name]](config.policy.workspace);
         return { name, label: name, description: definition.description, parameters: definition.parameters,
-          execute: (_id, args, signal) => sandboxExecute(config.policy, name, args, { signal }) };
+          execute: (id, args, signal) => journal
+            ? journal.tool(id, name, args, () => sandboxExecute(config.policy, name, args, { signal }), currentManager, () => execFileSync('/usr/bin/sync', ['-f', config.policy.workspace], { timeout: 30000, stdio: 'ignore' }))
+            : sandboxExecute(config.policy, name, args, { signal }) };
       });
       customTools.push({ name: 'session_runtime', label: 'Session runtime',
         description: 'Read trusted Pi session identity, actual provider/model/thinking and executor. This does not launch another agent.',
@@ -174,20 +188,32 @@ export async function executeRun(config, task) {
       // Every attempt is a fresh session unless continuing: no conversation state crosses accounts.
       const sessions = path.join(config.sessions, slot), sessionId = config.conversation_id + '-' + slot;
       fs.mkdirSync(sessions, { recursive: true, mode: 0o700 });
-      const earlier = config.resume ? sdk.SessionManager.findById(config.policy.workspace, sessionId, sessions) : null;
+      const earlier = config.recover_from ? journal.value.session_file ?? sdk.SessionManager.findById(config.policy.workspace, sessionId, sessions)
+        : config.resume ? sdk.SessionManager.findById(config.policy.workspace, sessionId, sessions) : null;
+      if (config.recover_from && ((earlier && !fs.existsSync(earlier)) || (!earlier && Object.keys(journal.value.tools).length))) throw new Error('Recovery session unavailable');
       const sessionManager = earlier ? sdk.SessionManager.open(earlier, sessions, config.policy.workspace)
         : sdk.SessionManager.create(config.policy.workspace, sessions, { id: sessionId });
+      currentManager = sessionManager;
+      if (config.recover_from) await reconcileSession(sessionManager, journal, customTools, { approved: config.recovery_approved === true });
       const { session } = await sdk.createAgentSession({ cwd: config.policy.workspace, agentDir: config.agentDir,
         modelRuntime, model, thinkingLevel: expected.thinking, noTools: 'builtin', tools: [...names, 'session_runtime'], customTools,
         resourceLoader: trustedLoader(sdk, config.prompt), sessionManager,
         settingsManager: sdk.SettingsManager.inMemory({ packages: [], extensions: [], skills: [], enableSkillCommands: false }) });
       let failed = null;
+      const journalTimer = journal ? setInterval(() => {
+        try { journal.session(sessionManager); if (journal.value.remaining_ms <= 0) { failed = 'Run execution budget exhausted'; void session.abort(); } }
+        catch { failed = 'Recovery persistence failed'; void session.abort(); }
+      }, 1000) : null;
       const unsubscribe = session.subscribe(event => {
         telemetry.observe(event);
         progress.observe(event);
         // Retain a bounded checkpoint in the supervisor for a process exit with no final JSON.
         if (runtime && process.connected && (Date.now() - checkpointAt >= 1000 || ['message_end', 'tool_execution_start', 'tool_execution_end'].includes(event.type))) {
           checkpointAt = Date.now();
+          if (journal) {
+            try { journal.session(sessionManager); journal.update({ partial: telemetry.partial(), runtime }); }
+            catch { failed = 'Recovery persistence failed'; void session.abort(); }
+          }
           process.send({ type: 'checkpoint', partial: telemetry.partial(), progress: progress.snapshot() }, () => {});
         }
         if (event.type === 'tool_execution_start') calls.push(event.toolName);
@@ -209,10 +235,21 @@ export async function executeRun(config, task) {
           implementation_revision: config.manifest.implementation_revision, policy_digest: config.manifest.policy_digest };
         telemetry.runtime(runtime);
         process.send?.({ type: 'runtime', runtime });
-        await session.prompt(`${runPreface(config, runtime)}\n\n${task}`);
+        if (journal) journal.update({ runtime });
+        const messages = config.recover_from ? sessionManager.buildSessionContext().messages : [];
+        const last = messages.at(-1);
+        if (last?.role === 'assistant' && last.stopReason === 'stop' && !(last.content ?? []).some(c => c.type === 'toolCall')) {
+          output = (last.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('\n');
+        } else {
+          await session.prompt(config.recover_from && messages.length
+            ? 'Continue the interrupted task from the saved conversation and current files. Completed tool results are recorded. Do not repeat completed work. Finish the original task within its existing scope.'
+            : `${runPreface(config, runtime)}\n\n${task}`);
+        }
         if (!failed) {
           observedRuntime(session, piVersion, expected);
-          return { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id, runtime, usage, model_calls: models, slots_used: used };
+          const result = { output, tool_calls: calls.slice(0, 500), conversation_id: config.conversation_id, runtime, usage, model_calls: models, slots_used: used };
+          if (journal) journal.finish(result, sessionManager);
+          return result;
         }
         const kind = limitKind(failed);
         if (!kind) throw Object.assign(new Error('Model turn failed'), { detail: failed });
@@ -225,9 +262,10 @@ export async function executeRun(config, task) {
         }
         output = '';
       } catch (error) {
+        if (journal) { try { journal.session(sessionManager); journal.update({ partial: telemetry.partial(), runtime }); } catch { /* Preserve the last durable checkpoint. */ } }
         error.partial = { ...telemetry.partial(error.detail ?? error.message), tool_calls: calls, usage, model_calls: models, slots_used: used };
         throw error;
-      } finally { unsubscribe(); process.removeListener('SIGTERM', abort); session.dispose(); }
+      } finally { clearInterval(journalTimer); unsubscribe(); process.removeListener('SIGTERM', abort); session.dispose(); }
     }
     throw Object.assign(new Error('usage limit reached'), { detail: 'usage limit reached', partial: { ...telemetry.partial(), tool_calls: calls, usage, model_calls: models, slots_used: used } });
   } catch (error) {

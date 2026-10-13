@@ -14,20 +14,16 @@ import { failedResult, sanitizeFailureContext } from './failure-telemetry.mjs';
 import { runProgressTelemetry, sanitizeProgress, progressPublisher } from './run-progress.mjs';
 import { captureRunContext, logObservation } from './run-context.mjs';
 import { runConfiguration } from './run-config.mjs';
+import { save, read } from './durable-file.mjs';
+import { RunJournal, fingerprint } from './run-recovery.mjs';
+import { RecoveryHost } from './run-recovery-host.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const gitEnv = { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/nonexistent', GIT_CONFIG_NOSYSTEM: '1',
   GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
-export function save(file, value) {
-  const temporary = file + '.' + randomUUID();
-  fs.writeFileSync(temporary, JSON.stringify(value) + '\n', { mode: 0o600, flag: 'wx', flush: true });
-  fs.renameSync(temporary, file);
-  const directory = fs.openSync(path.dirname(file), 'r');
-  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-}
-const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+export { save } from './durable-file.mjs';
 const safeOutput = text => /(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|Bearer\s+\S+|-----BEGIN.*PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}\.)/.test(text)
   ? '[redacted: output resembled a credential]' : text.slice(0, 48000);
 
@@ -54,8 +50,9 @@ export function persistRunCompletion({ file, receipt, result, observed, done, co
   return terminal;
 }
 
-export class DevelopmentSessions {
+export class DevelopmentSessions extends RecoveryHost {
   constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, knowledgeHub, hub_agents = null, accounts_module = null, limits = {} }) {
+    super();
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
     this.repos = { [path.basename(this.repository).replace(/\.git$/, '')]: this.repository,
@@ -73,14 +70,34 @@ export class DevelopmentSessions {
     // Two independent clones may run at once. A repository lock below still serializes work aimed at
     // the same project; these limits bound model, disk and account pressure.
     this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 2, runMs: 15 * 60000, writeRuns: 2, writeMs: 30 * 60000, keepConversations: 20, keepMs: 7 * 24 * 3600000,
-      slots: ['openai', 'openai-2', 'openai-3'], cooldownMs: 60 * 60000, disableMs: 24 * 60 * 60000, ...limits };
+      autoRecovery: false, slots: ['openai', 'openai-2', 'openai-3'], cooldownMs: 60 * 60000, disableMs: 24 * 60 * 60000, ...limits };
     this.active = null;
     this.runs = new Map();
     fs.mkdirSync(this.state, { recursive: true, mode: 0o700 });
-    for (const name of ['conversations', 'runs', 'requests', 'quarantine', 'agent-runs', 'agent-requests', 'run-work']) fs.mkdirSync(path.join(this.state, name), { mode: 0o700, recursive: true });
+    for (const name of ['conversations', 'runs', 'requests', 'quarantine', 'agent-runs', 'agent-requests', 'run-work', 'recovery-v1']) fs.mkdirSync(path.join(this.state, name), { mode: 0o700, recursive: true });
+    // A linked resume intent is authoritative even if the process died before writing its receipt.
+    for (const id of fs.readdirSync(path.join(this.state, 'recovery-v1'))) {
+      try {
+        const link = read(path.join(this.recoveryDir(id), 'lifecycle.json'));
+        if (!RUN_ID.test(link.resumed_by ?? '')) continue;
+        const setup = read(path.join(this.recoveryDir(link.resumed_by), 'setup.json'));
+        const request = path.join(this.state, 'agent-requests', setup.receipt.request_id + '.json');
+        if (!fs.existsSync(request)) save(request, { fingerprint: setup.request_fingerprint, run_id: link.resumed_by, receipt: setup.receipt });
+      } catch { /* Invalid recovery evidence stays quarantined. */ }
+    }
+    // Recover reserved identities before inspecting receipts; never admit an orphan twice.
+    for (const name of fs.readdirSync(path.join(this.state, 'agent-requests'))) {
+      try { const intent = read(path.join(this.state, 'agent-requests', name));
+        const dest = path.join(this.state, 'agent-runs', intent.run_id + '.json');
+        if (intent.receipt && RUN_ID.test(intent.run_id) && !fs.existsSync(dest)) save(dest, intent.receipt);
+      } catch { /* Retain corrupt evidence without taking down unrelated runs. */ }
+    }
     for (const name of fs.readdirSync(path.join(this.state, 'agent-runs'))) {
-      const file = path.join(this.state, 'agent-runs', name), r = read(file);
-      if (r.status === 'running') save(file, { ...r, status: 'interrupted', ended: new Date().toISOString(), error: 'Runner restarted during the run' });
+      try {
+        const file = path.join(this.state, 'agent-runs', name), r = read(file);
+        if (r.status === 'running') save(file, { ...r, status: 'interrupted', ended: new Date().toISOString(),
+          error: 'Runner restarted during the run', reported_at: undefined, recovery: { ...this.recoveryInfo(r.run_id).info, revision: (r.recovery?.revision ?? 0) + 1 } });
+      } catch { /* Preserve malformed receipt for operator recovery. */ }
     }
     // Unfinished work is recovery evidence; never delete it at supervisor startup.
     for (const name of fs.readdirSync(path.join(this.state, 'runs'))) {
@@ -240,8 +257,9 @@ export class DevelopmentSessions {
     } catch (e) { this.active = null; throw e; }
   }
   stop() {
+    this.draining = true;
     this.active?.stop?.('Operator stopped supervisor');
-    for (const run of this.runs.values()) run.stop?.('Runner stopped');
+    for (const run of this.runs.values()) { run.stopped = 'Runner stopped'; run.stop?.('Runner stopped'); }
   }
 
   // ---------- one-shot agent runs (a fresh clone per run; no grant needed) ----------
@@ -300,6 +318,7 @@ export class DevelopmentSessions {
       if (old.fingerprint !== fingerprint) throw new Error('Request identity conflict');
       return this.runGet(old.run_id);
     }
+    if (this.draining) throw new Error('Runner draining; retry when available');
     const agent = this.runnable().find(a => a.name === name);
     if (!agent) throw new Error('Agent is not runnable on dok');
     const write = this.isWrite(agent), project = this.repoFor(agent, repo);
@@ -325,8 +344,8 @@ export class DevelopmentSessions {
       started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version,
       repo: project, write, ...(mcp_connection ? { mcp_connection } : {}),
       progress: runProgressTelemetry().snapshot(), ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
+    save(requestFile, { fingerprint, run_id, receipt });
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
-    save(requestFile, { fingerprint, run_id });
     this.runs.set(run_id, { write, repo: project });
     void this.report(run_id);
     // Clone and execution continue after the start acknowledgement; the transport attempt is short.
@@ -334,14 +353,17 @@ export class DevelopmentSessions {
     const { root: _root, ...visible } = receipt;
     return visible;
   }
-  async executeRun(bootAgent, runtime, receipt, previous) {
+  async executeRun(bootAgent, runtime, receipt, previous, recovery) {
+    const io = this.runIO ?? { spawn, sandboxExecute, linuxPolicy, execFileSync };
     let agent = bootAgent;
     const { write, repo, root } = receipt, repository = this.repos[repo];
     const base = path.join(this.state, 'run-work', root), workspace = path.join(base, 'workspace');
     const file = path.join(this.state, 'agent-runs', receipt.run_id + '.json');
     const entry = this.runs.get(receipt.run_id);
+    const recoveryDir = this.recoveryDir(receipt.run_id);
+    fs.mkdirSync(recoveryDir, { recursive: true, mode: 0o700 });
     const branch = receipt.continued_from ? 'review/runs/' + receipt.continued_from : 'main';
-    let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer, checkpoint = {};
+    let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer, policy, configFile, slots, checkpoint = {};
     const progress = progressPublisher(async update => {
       save(file, { ...receipt, ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}), progress: update });
       await this.report(receipt.run_id);
@@ -359,7 +381,8 @@ export class DevelopmentSessions {
       const remembered = done ? extractRemember(result.output, agent).slice(0, 5) : [];
       if (typeof result.output === 'string') result.output = result.output.replace(/```remember\n[\s\S]*?```/g, '').trim();
       receipt.logs = logObservation(path.join(base, 'pi-sessions'), 'session');
-      persistRunCompletion({ file, receipt, result, observed, done, code, failure, remembered, commit, baseCommit, harvested,
+      if (done && receipt.recovery) receipt.recovery = { ...receipt.recovery, state: 'completed' };
+      const terminal = persistRunCompletion({ file, receipt, result, observed, done, code, failure, remembered, commit, baseCommit, harvested,
         cleanup: () => { /* Completed work alone is eligible for cleanup, after the result is durable. */
           fs.rmSync(write ? workspace : base, { recursive: true, force: true });
           if (!write && receipt.logs.status === 'recorded') {
@@ -367,21 +390,33 @@ export class DevelopmentSessions {
             save(file, { ...terminal, logs: { kind: 'session', status: 'removed', observed_at: new Date().toISOString() } });
           }
         } });
+      if (!done) {
+        const info = this.recoveryInfo(receipt.run_id).info;
+        // Failed model turns are terminal unless a command or process interruption needs reconciliation.
+        const interrupted = !result.error || info.state === 'awaiting_review' || ['Runner stopped', 'Pi process exited', 'Invalid Pi result', 'Run state persistence failed'].includes(failure);
+        save(file, { ...terminal, ...(interrupted ? { status: 'interrupted' } : {}), recovery: info });
+      }
       this.runs.delete(receipt.run_id);
       // Write conversations keep their Pi history (not the checkout) so a follow-up can continue; others are removed.
       if (write && done) this.prune();
       await this.report(receipt.run_id);
     };
     try {
+      if (recovery) {
+        const setup = recovery.setup;
+        policy = setup.config.policy; configFile = path.join(recoveryDir, 'config.json'); slots = setup.config.slots;
+        baseCommit = setup.baseCommit; commit = setup.commit; agent = setup.agent;
+        save(configFile, setup.config);
+      } else {
       fs.mkdirSync(base, { recursive: true, mode: 0o700 });
       fs.rmSync(workspace, { recursive: true, force: true });
       // Source is the supervisor-owned bare repository; checkout runs inside the sandbox.
-      execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'clone', '--no-checkout', '--no-tags', '--single-branch', '--branch', branch,
+      io.execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'clone', '--no-checkout', '--no-tags', '--single-branch', '--branch', branch,
         ...(write ? [] : ['--depth', '1']), 'file://' + repository, workspace], { env: gitEnv, stdio: 'pipe', timeout: 120000 });
-      const checkout = linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], skills: [], context: null }, this.state);
-      await sandboxExecute(checkout, 'bash', { command: write ? `git -c core.hooksPath=/dev/null checkout -q -b agent-run origin/${branch}` : 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
+      const checkout = io.linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], skills: [], context: null }, this.state);
+      await io.sandboxExecute(checkout, 'bash', { command: write ? `git -c core.hooksPath=/dev/null checkout -q -b agent-run origin/${branch}` : 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
       // Read before the agent can touch the checkout; later git calls on it run only inside the sandbox.
-      baseCommit = commit = execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
+      baseCommit = commit = io.execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
       // Observe after checkout, before Pi can modify Git configuration or the tree.
       Object.assign(receipt, captureRunContext(workspace), { repo, base_commit: baseCommit });
       save(file, { ...receipt, commit });
@@ -407,8 +442,8 @@ export class DevelopmentSessions {
         memory = loadMemory(agent.memory, this.knowledge);
         receipt.memory_source = 'frozen-release';
       }
-      const policy = write ? linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], context: this.context }, this.state)
-        : linuxPolicy({ ...agent, workspace, protectPaths: [], context: this.context }, this.state, { readOnly: true });
+      policy = write ? io.linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], context: this.context }, this.state)
+        : io.linuxPolicy({ ...agent, workspace, protectPaths: [], context: this.context }, this.state, { readOnly: true });
       const skills = agent.skills === 'none' ? [] : agent.skills;
       const boundary = write
         ? `You run on dok, the always-on Linux runner, in a writable clone of ${repo} (${branch} at ${commit.slice(0, 12)}). Your shell has no network and cannot see credentials or other runs. Do not commit: when you stop, your changes are committed and exported as a review branch for the user, never merged automatically. Mac paths in notes describe the Mac; tools that exist only on macOS are unavailable here.`
@@ -421,18 +456,22 @@ export class DevelopmentSessions {
         policy_digest: await digest({ policy, prompt, runtime, revision: this.revision }) };
       const sessions = path.join(base, 'pi-sessions'), agentDir = path.join(base, 'pi-config');
       fs.mkdirSync(sessions, { recursive: true, mode: 0o700 }); fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-      const configFile = path.join(base, 'config.json');
-      let slots = runtime.provider === 'openai' ? await this.poolSlots() : [runtime.provider];
+      configFile = path.join(recoveryDir, 'config.json');
+      slots = runtime.provider === 'openai' ? await this.poolSlots() : [runtime.provider];
       if (previous) {
         // Reasoning history is bound to the account that produced it: continue on that account or not at all.
         const last = previous.accounts_used?.at(-1);
         if (!last || !slots.includes(last)) throw new Error('The previous run’s account is unavailable; retry later');
         slots = [last];
       }
-      save(configFile, { mode: 'run', writable: write, resume: Boolean(previous), conversation_id: root, policy, prompt, sessions, agentDir, runtime,
-        tools: agent.tools, manifest, slots, accounts_module: this.accountsModule });
+      const config = { checkpoint_file: path.join(recoveryDir, 'checkpoint.json'), remaining_ms: write ? this.limits.writeMs : this.limits.runMs, mode: 'run', writable: write, resume: Boolean(previous), conversation_id: root, policy, prompt, sessions, agentDir, runtime,
+        tools: agent.tools, manifest, slots, accounts_module: this.accountsModule };
+      save(configFile, config);
+      new RunJournal(config.checkpoint_file, { remainingMs: config.remaining_ms });
+      save(path.join(recoveryDir, 'setup.json'), { schema: 1, revision: this.revision, agent, runtime, receipt, config, baseCommit, commit, attempt: 0 });
+      }
       if (entry?.stopped) throw new Error(entry.stopped);
-      const child = spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), configFile],
+      const child = io.spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), configFile],
         { cwd: source, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
       let stopped = false;
       const stop = reason => {
@@ -440,13 +479,13 @@ export class DevelopmentSessions {
         child.kill('SIGTERM'); killTimer = setTimeout(() => child.kill('SIGKILL'), 5000);
       };
       if (entry) entry.stop = stop;
-      timeout = setTimeout(() => stop('Run time limit exceeded'), write ? this.limits.writeMs : this.limits.runMs);
+      timeout = setTimeout(() => stop('Run time limit exceeded'), recovery ? recovery.checkpoint.remaining_ms : write ? this.limits.writeMs : this.limits.runMs);
       if (write) {
         let checking = false;
         diskTimer = setInterval(() => {
           if (checking || stopped) return; checking = true;
           try { this.room(); } catch { stop('Host free-space watermark reached'); }
-          const du = spawn('du', ['-sk', '--', workspace], { env: gitEnv });
+          const du = io.spawn('du', ['-sk', '--', workspace], { env: gitEnv });
           let size = ''; du.stdout.on('data', b => { if (size.length < 200) size += b; }); du.stderr.resume();
           du.on('error', () => { checking = false; stop('Disk accounting unavailable'); });
           du.on('close', code => { checking = false; if (code !== 0 || Number.parseInt(size) * 1024 > this.limits.diskBytes) stop('Run disk budget exceeded'); });
@@ -454,6 +493,7 @@ export class DevelopmentSessions {
       }
       const { provider: _provider, ...pinned } = runtime;
       child.on('message', message => {
+        try {
         if (message?.type === 'checkpoint' && observed) {
           checkpoint = { output: safeOutput(typeof message.partial?.output === 'string' ? message.partial.output : ''),
             failure_context: sanitizeFailureContext(message.partial?.failure_context) };
@@ -468,6 +508,7 @@ export class DevelopmentSessions {
         if (message?.type !== 'runtime' || !runtimeMatches(message.runtime, pinned) || !slots.includes(message.runtime.provider)) { stop('Pi runtime identity mismatch'); return; }
         observed = message.runtime;
         save(file, { ...receipt, commit, runtime: observed });
+        } catch { stop('Run state persistence failed'); }
       });
       child.stdout.on('data', b => { bytes += b.length; if (bytes > 262144) stop('Result limit exceeded'); else output += b; });
       child.stderr.resume();
@@ -477,10 +518,13 @@ export class DevelopmentSessions {
         clearInterval(diskTimer);
         let result = {};
         try { result = JSON.parse(output || '{}'); } catch { failure ??= 'Invalid Pi result'; }
+        if (code !== 0 && !result.error) failure ??= 'Pi process exited';
+        if (code === 0 && !failure && (!observed || !runtimeMatches(result.runtime, { ...runtime, provider: observed.provider }))) failure = 'Missing verified Pi runtime';
         if (write && code === 0 && !failure && !result.error) {
           receipt.progress = { ...receipt.progress, phase: 'export', action: 'export_started', observed_at: new Date().toISOString(), blocker: undefined };
           progress.update(receipt.progress);
-          try { harvested = await this.harvest(policy, receipt, baseCommit, repository); commit = harvested.commit; }
+          try { harvested = await this.harvest(policy, receipt, baseCommit, repository); commit = harvested.commit;
+            save(path.join(recoveryDir, 'export.json'), harvested); }
           catch (error) { failure = /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(error.message) ? error.message : 'Export failed'; }
         }
         await finish(code, result);
@@ -498,7 +542,7 @@ export class DevelopmentSessions {
     try {
       const file = path.join(this.state, 'agent-runs', receipt.run_id + '.json');
       const saved = read(file);
-      if (saved.status === 'running') save(file, { ...saved, status: 'interrupted', ended: new Date().toISOString(),
+      if (saved.status === 'running') save(file, { ...saved, recovery: this.recoveryInfo(receipt.run_id).info, status: 'interrupted', ended: new Date().toISOString(),
         error: 'Run finalization failed; retained work requires recovery' });
     } catch { /* Existing running receipt and workspace remain for startup reconciliation. */ }
     void this.report(receipt.run_id);
@@ -554,7 +598,8 @@ export class DevelopmentSessions {
     try {
       const receipt = this.runGet(runId);
       await this.reporter(receipt);
-      if (receipt.status !== 'running' && read(file).status === receipt.status) save(file, { ...read(file), reported_at: Date.now() });
+      const current = read(file);
+      if (receipt.status !== 'running' && current.status === receipt.status && current.recovery?.revision === receipt.recovery?.revision) save(file, { ...current, reported_at: Date.now() });
     } catch { /* retried by flushReports */ }
   }
   async flushReports() {

@@ -162,3 +162,25 @@ async function macRoute(request, env, pathname, readPanel) {
   } catch (e) { return json({ ok: false, error: /^(The Hub holds|Push too large|Refused file|Invalid push)/.test(e.message) ? e.message : 'Request refused' }, 400); }
   return json({ error: 'not_found' }, 404);
 }
+
+/** Read-only reconciliation for hosted callers; absence is never permission to duplicate. */
+export async function getStartStatus(env, requestId) {
+  validateRelay('get_start_status', { request_id: requestId });
+  const saved = await runForRequest(env, requestId);
+  if (saved) return saved;
+  const host = env.RELAY.getByName('owner-dok-dev');
+  const known = await host.requestStatus(requestId);
+  if (known.state !== 'unknown') return known;
+  if (!(await dokStatus(env)).online) return { state: 'unknown', reason: 'Runner unavailable for reconciliation' };
+  const result = await host.dispatch('run_lookup', { target_request_id: requestId });
+  return result.ok && result.value.state === 'started' ? result.value
+    : { state: 'unknown', reason: 'No accepted run established; keep the original request identity' };
+}
+export async function resumeRun(env, args, { approved = false } = {}) {
+  validateRelay('resume_run', args);
+  const result = await env.RELAY.getByName('owner-dok-dev').dispatch('run_resume', { ...args, approved });
+  if (!result.ok) throw Error(result.error);
+  try { await storeRun(env, result.value, 'dok'); } catch { /* Runner retries publication. */ }
+  const r = result.value;
+  return { run_id: r.run_id, agent: r.agent, runner: 'dok', status: r.status, recovery: r.recovery };
+}

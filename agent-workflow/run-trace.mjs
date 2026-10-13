@@ -33,6 +33,10 @@ export function runTrace(r = {}) {
     ['Base commit', recorded(r.base_commit)],
     ['Recorded commit', recorded(r.commit)],
     ['Logs', logText],
+    ...(r.recovery ? [['Recovery', r.recovery.state],
+      ...(r.recovery.checkpoint_at ? [['Saved checkpoint', r.recovery.checkpoint_at]] : []),
+      ...(r.recovery.resumed_by ? [['Resumed run', r.recovery.resumed_by]] : []),
+      ...(r.recovery.resumed_from ? [['Previous attempt', r.recovery.resumed_from]] : [])] : []),
     ...(r.context_recorded_at ? [['Context captured', `${r.context_recorded_at} (at start)`],
       ['Working tree at start', typeof r.worktree_dirty === 'boolean' ? r.worktree_dirty ? 'Uncommitted changes present; commit alone does not identify the full input' : 'Clean' : 'Unavailable — not recorded']] : []),
   ];

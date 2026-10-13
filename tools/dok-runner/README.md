@@ -48,3 +48,48 @@ and each authenticated pong. The check also verifies the recorded supervisor PID
 release process identity, and a 30-second heartbeat age. A live Node process with a stale or disconnected Hub link is
 therefore unhealthy; a stale file from an earlier supervisor cannot pass the identity checks. Docker reports the state
 but the restart policy does not restart solely because a healthcheck fails.
+
+## Restart recovery (2026-10-13)
+
+One-shot runs persist private checkpoints under `state/recovery-v1/<run>/` before executing tools.
+The Pi child is the only checkpoint writer; the supervisor reads after the child stops. Completed tool
+results are reused by tool-call identity. A started mutating tool is never replayed: the runner performs
+one read-only inspection and the Hub requires **Approve continuation from current files** before writes.
+Each continuation has a new run ID linked to its predecessor. Original interrupted receipts remain intact.
+Checkpoints and tool results are private (mode 600), bounded to 16 MiB total / 2 MiB per result; only bounded
+recovery metadata reaches the Hub. Execution budgets carry across attempts. Final receipts are durable
+before cleanup, and unfinished work is excluded from pruning.
+
+`limits.autoRecovery: true` enables up to two automatic safe attempts per chain. Revision changes,
+missing/invalid checkpoints, changed agent/knowledge, missing workspaces, or exhausted budgets pause recovery.
+A crash during preparation before the setup record exists requires operator inspection; it does not re-clone
+over retained files. Account unavailability is shown and retried without creating a new run. Completed
+model results can finish export without another model call. This does not promise exactly-once arbitrary
+shell effects: uncertain commands require inspection and approval.
+
+`install.sh` drains admission and refuses to restart while active work remains. The initial migration from
+releases without `control.sock` requires a backed-up, verified-idle operator cutover. Subsequent upgrades and
+rollbacks use the current installer (including when installing an older release); never run two supervisors.
+Keep `e4e9acf` as the preservation-capable rollback baseline. Recovery journals are release-bound; rollback
+preserves them but does not automatically resume newer checkpoints.
+
+The hosted form saves request identity before admission. Model callers must choose and retain `request_id`
+before `start_run`. After a caller-side permission-review timeout, use `get_start_status` with that identity.
+An unknown result does not establish that no run exists. If the caller allows one retry, reuse the exact
+request and identity; changing the model is a different request. A second timeout requires user guidance.
+
+Historical pre-checkpoint runs can be reconciled with the operator-only script below. It reads the last
+assistant text within the run's recorded time window, checks the matching review ref and retained head, and
+requires ancestry from the original base. Recovered text is explicitly partial/unverified, and status stays
+interrupted. It backs up each original receipt before applying and never executes project code or moves refs.
+
+```sh
+node tools/dok-runner/reconcile-interrupted.mjs PRIVATE_CONFIG RUN_ID...
+node tools/dok-runner/reconcile-interrupted.mjs PRIVATE_CONFIG RUN_ID... --apply
+```
+
+Validation: `node --test agent-workflow/`, `cd agent-readonly-service && npm test`.
+On the actual Linux runner, copy source into an isolated directory and run the recovery, worker, supervisor
+completion and sandbox tests with `AGENT_TEST_LINUX=1`; use temporary state, never the production supervisor
+configuration. Tests must verify partial-write refusal, approved continuation without command replay,
+linked-intent reconstruction, retained artifacts, and saved-result reuse.

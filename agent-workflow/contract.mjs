@@ -13,9 +13,10 @@
 //               remain unchanged. Snapshot capabilities describe the published surface, never live relay authority.
 //   get_run     the run itself (local: the full receipt; hosted: its brief), plus `snapshot` on the hosted hub.
 
+import { publicRecovery } from './recovery-contract.mjs';
 import { sanitizeProgress } from './run-progress.mjs';
 
-export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v11.html';
+export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v12.html';
 /** Any earlier dashboard URI a host may still have cached; it is answered with the current page. */
 export const isDashboardUri = (uri) => typeof uri === 'string' && /^ui:\/\/agents(-hub)?\/dashboard(-v\d+)?\.html$/.test(uri);
 
@@ -52,6 +53,7 @@ export function runBrief(r) {
     run_id: r.run_id, agent: r.agent, kind: r.kind ?? 'task', status: r.status, title: r.title ?? titleOf(r.task),
     started: r.started, ended: r.ended, model: r.model, tool_calls: count(r.tool_calls), blocked: count(r.blocked),
     tokens: num(r.usage?.totalTokens, r.tokens), cost_usd: num(r.usage?.cost, r.cost_usd),
+    ...(publicRecovery(r.recovery) ? { recovery: { ...publicRecovery(r.recovery), inspection: undefined } } : {}),
     feedback: rating === 'good' || rating === 'bad' ? rating : null,
     ...(['running', 'unknown'].includes(r.status) && sanitizeProgress(r.progress) ? { progress: sanitizeProgress(r.progress) } : {}),
   };

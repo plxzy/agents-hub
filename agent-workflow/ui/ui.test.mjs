@@ -91,6 +91,7 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
     canDecide: () => true, list: () => null, runTrace, failureRows, progressRows, progressSummary, configurationRows, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
     h: (tag, attrs, ...children) => ({ tag, attrs, children }),
   });
+  vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function setData\(data\) \{[\s\S]*?\n\}/)[0], context);
   assert.doesNotMatch(JSON.stringify(context.detailView()), /rate-why/);
@@ -105,6 +106,7 @@ test('run details render shared historical context as text and label absent fiel
   const receipt = { run_id: 'r-demo', agent: 'demo', repo: '<script>not executable</script>', commit: 'a'.repeat(40), status: 'failed', error: 'model turn failed' };
   const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows,
     canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.detailView());
   for (const [label, value] of runTrace(receipt)) { assert.ok(result.includes(label)); assert.ok(result.includes(value)); }
@@ -123,6 +125,7 @@ test('failed detail shows its error alongside labelled partial output and record
     failure_context: { phase: 'model', last_tool: 'read', provider: 'openai', model: 'gpt-6-luna', message: '503 upstream disconnected' } };
   const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows,
     canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.detailView());
   for (const text of ['Error: model turn failed', 'Partial output', 'Useful partial answer', 'Last tool', 'read', '503 upstream disconnected', 'Failure category (inferred)', 'Agent / model', 'Next step']) assert.ok(result.includes(text), text);
@@ -138,6 +141,7 @@ test('run list and detail expose live progress, stale checkpoints and missing ol
     observed_at: time, last_tool: 'read', checkpoint: 'tool_error', checkpoint_tool: 'ls', checkpoint_at: time, blocker: 'tool_error' } };
   const context = vm.createContext({ S: { detail: receipt, data: { runs: [receipt] }, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows,
     canDecide: () => false, list: () => null, ago: () => '1m', firstLine: x => x, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   for (const name of ['detailView', 'runsView']) vm.runInContext(html.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0], context);
   const detail = JSON.stringify(context.detailView());
   for (const text of ['Run progress', 'Last reported phase', 'Latest checkpoint', 'ls reported an error', 'Last tool', 'read', 'Blocker', 'stale observation']) assert.ok(detail.includes(text), text);
@@ -202,4 +206,21 @@ test('browser bridge rejects cross-site calls without its token and rejects wron
     req.on('error', reject); req.end('{}');
   });
   assert.equal(wrongHost, 403);
+});
+
+test('hosted form persists request identity before admission and reuses it after reload', async () => {
+  const html = dashboardHtml(), storage = new Map();
+  const context = vm.createContext({ crypto: globalThis.crypto, TextEncoder, Uint8Array,
+    localStorage: { getItem: k => storage.get(k), setItem: (k, v) => storage.set(k, v) } });
+  for (const name of ['hostedRequests', 'reserveHostedStart', 'resolveHostedStart']) {
+    vm.runInContext(html.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0], context);
+  }
+  const args = { agent: 'demo', task: 'A private task' };
+  const first = await context.reserveHostedStart(args);
+  assert.equal(await context.reserveHostedStart(args), first);
+  assert.doesNotMatch([...storage.values()].join(''), /private task/);
+  context.resolveHostedStart(first, { run_id: 'r-result' });
+  assert.notEqual(await context.reserveHostedStart(args), first);
+  context.localStorage.setItem = () => { throw Error('Storage unavailable'); };
+  await assert.rejects(context.reserveHostedStart({ ...args, task: 'Another task' }), /Storage unavailable/);
 });

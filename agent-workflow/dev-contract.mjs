@@ -21,6 +21,7 @@ export const HOST_OPS = {
     model: { type: 'string', pattern: '^[a-z0-9-]{1,40}/[A-Za-z0-9._:-]{1,80}$' }, thinking: { type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
     repo: { type: 'string', pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }, continue_from: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' },
     mcp_connection: { type: 'object' } }, ['request_id', 'agent', 'task']),
+  run_resume: schema({ run_id: id, request_id: id, checkpoint_version: { type: 'integer', minimum: 1 }, approved: { type: 'boolean' } }, ['run_id', 'request_id', 'checkpoint_version']),
   run_lookup: schema({ target_request_id: id }),
   run_read: schema({ run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' } }),
 };
@@ -30,7 +31,7 @@ export function validateDevelopment(name, args, host = false) {
   for (const k of s.required) if (!(k in args)) throw new Error('Missing ' + k);
   for (const [k, v] of Object.entries(args)) {
     const rule = s.properties[k];
-    if (!rule || typeof v !== rule.type || rule.enum && !rule.enum.includes(v) || rule.pattern && !new RegExp(rule.pattern).test(v)
+    if (!rule || (rule.type === 'integer' ? !Number.isSafeInteger(v) || v < (rule.minimum ?? 0) : typeof v !== rule.type) || rule.enum && !rule.enum.includes(v) || rule.pattern && !new RegExp(rule.pattern).test(v)
       || rule.minLength && v.trim().length < rule.minLength || rule.maxLength && v.length > rule.maxLength) throw new Error('Invalid ' + k);
   }
 }

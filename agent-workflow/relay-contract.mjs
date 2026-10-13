@@ -11,6 +11,19 @@ export const RELAY_OPS = {
   panel_run: { title: 'Run details for the panel', appOnly: true, read: true,
     input: { type: 'object', required: ['run_id'], additionalProperties: false, properties: { run_id: { type: 'string', maxLength: 100 } } },
     description: 'Read a run’s full output in the user’s panel.' },
+  get_start_status: { title: 'Reconcile a start request', read: true,
+    input: { type: 'object', required: ['request_id'], additionalProperties: false, properties: { request_id: requestId } },
+    description: 'Read whether the original request reached the runner, without starting work. Unknown does not mean safe to duplicate. After an automatic permission-review timeout, reconcile first; retry the identical request once only if the caller permits it, then ask for guidance. A model change is a different request.' },
+  resume_run: { title: 'Resume saved work', read: false,
+    input: { type: 'object', required: ['run_id', 'request_id', 'checkpoint_version'], additionalProperties: false,
+      properties: { run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' }, request_id: requestId,
+        checkpoint_version: { type: 'integer', minimum: 1 } } },
+    description: 'Resume an interrupted dok run from its exact saved checkpoint, returning a linked new run id. Reuse the request id only for the identical checkpoint. Uncertain file-changing commands require the user to approve recovery in the Hub panel.' },
+  decide_recovery: { title: 'Continue inspected work', appOnly: true, read: false,
+    input: { type: 'object', required: ['run_id', 'request_id', 'checkpoint_version', 'confirm'], additionalProperties: false,
+      properties: { run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' }, request_id: requestId,
+        checkpoint_version: { type: 'integer', minimum: 1 }, confirm } },
+    description: 'Continue from inspected saved files only after the user clicks the exact recovery card. Interrupted commands are recorded as uncertain and are not replayed.' },
   start_run: { title: 'Start an allowed agent', read: false,
     input: { type: 'object', required: ['agent', 'task', 'request_id'], additionalProperties: false, properties: {
       agent: { type: 'string', maxLength: 100 }, task: { type: 'string', minLength: 1, maxLength: 16000 },
@@ -38,7 +51,7 @@ export function validateRelay(name, args) {
     // The local Mac adapter may attach a bounded initialize observation to a dok start.
     // It is internal metadata, never part of the public start_run tool schema.
     if (name === 'start_run' && key === 'mcp_connection' && value && typeof value === 'object' && !Array.isArray(value)) continue;
-    if (!rule || typeof value !== rule.type || (rule.enum && !rule.enum.includes(value))
+    if (!rule || (rule.type === 'integer' ? !Number.isSafeInteger(value) || value < (rule.minimum ?? 0) : typeof value !== rule.type) || (rule.enum && !rule.enum.includes(value))
       || (rule.minLength && value.trim().length < rule.minLength) || (rule.maxLength && value.length > rule.maxLength)
       || (rule.pattern && !new RegExp(rule.pattern).test(value))) throw new Error(`Invalid ${key}`);
   }

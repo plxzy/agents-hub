@@ -5,6 +5,7 @@ services:
     build: .
     container_name: agents
     restart: unless-stopped
+    stop_grace_period: 15s
     healthcheck:
       test: ["CMD", "/usr/local/bin/agent-healthcheck", "/home/agent/.config/agent-workflow/dok.json"]
       interval: 10s

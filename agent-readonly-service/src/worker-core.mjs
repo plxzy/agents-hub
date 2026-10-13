@@ -3,7 +3,7 @@ import { withFailureGuidance } from '../../agent-workflow/run-trace.mjs';
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
-import { relayFetch, startRun, getRun, dokEnabled, dokStatus } from './relay.mjs';
+import { relayFetch, startRun, getRun, getStartStatus, resumeRun, dokEnabled, dokStatus } from './relay.mjs';
 import { readRun, recentRuns, mergeRuns } from './runs.mjs';
 import { readAccounts } from './accounts.mjs';
 import { issueCodes, redeemCode, rateRun } from './decisions.mjs';
@@ -96,6 +96,7 @@ async function nativePanel(env, { withConfirm = false } = {}) {
   const confirm = withConfirm ? {
     rate: await issueCodes(env, 'rate', hubRuns.filter((r) => ['completed', 'failed', 'interrupted'].includes(r.status)).map((r) => r.run_id)),
     review: await issueCodes(env, 'review', notes.map((n) => n.id)),
+    recovery: await issueCodes(env, 'recovery', hubRuns.filter(r => r.recovery?.state === 'awaiting_review' && r.recovery?.checkpoint_version).map(r => `${r.run_id}:${r.recovery.checkpoint_version}`)),
   } : null;
   const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
   return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending,
@@ -130,7 +131,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: [...(dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The panel shows runs, agents and the review queue held by the Hub.' } : t),
-      ...relayToolList().filter((t) => ['start_run', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
+      ...relayToolList().filter((t) => ['start_run', 'get_start_status', 'resume_run', 'decide_recovery', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
     ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
@@ -148,7 +149,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
       // The panel, ratings and review decisions are served by the Hub from D1.
-      if (dokEnabled(env) && ['panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(params?.name)) {
+      if (dokEnabled(env) && ['panel_data', 'panel_run', 'rate_run', 'review_decide', 'decide_recovery'].includes(params?.name)) {
         try {
           const args = params.arguments ?? {};
           if (params.name === 'panel_data') {
@@ -158,6 +159,12 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           if (params.name === 'panel_run') {
             const run = await readRun(env, args.run_id);
             if (run) return reply({ content: [{ type: 'text', text: JSON.stringify(run) }] });
+          }
+          if (params.name === 'decide_recovery') {
+            validateRelay('decide_recovery', args);
+            await redeemCode(env, args.confirm, 'recovery', `${args.run_id}:${args.checkpoint_version}`);
+            const { confirm: _confirm, ...resume } = args;
+            return reply({ content: [{ type: 'text', text: JSON.stringify(await resumeRun(env, resume, { approved: true })) }] });
           }
           if (params.name === 'review_decide' && await isMemory(env, args.id)) {
             validateRelay('review_decide', args);
@@ -174,11 +181,12 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           if (params.name === 'review_decide') throw new Error('Unknown review item ' + args.id);
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
-      if (dokEnabled(env) && ['start_run', 'get_remote_run'].includes(params?.name)) {
+      if (dokEnabled(env) && ['start_run', 'get_remote_run', 'get_start_status', 'resume_run'].includes(params?.name)) {
         try {
           const args = params.arguments ?? {};
           const result = params.name === 'start_run' ? await startRun(env, args)
-            : await getRun(env, args.run_id);
+            : params.name === 'get_start_status' ? await getStartStatus(env, args.request_id)
+            : params.name === 'resume_run' ? await resumeRun(env, args) : await getRun(env, args.run_id);
           if (params.name === 'get_remote_run' && !result) throw new Error('Unknown run ' + args.run_id + ' (not in the Hub).');
           const { confirm, ...value } = result ?? {};
           // Confirmation codes go only to the panel: hosts pass a result's _meta to the widget, never to the model.
