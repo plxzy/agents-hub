@@ -375,7 +375,7 @@ function detailView() {
       ['tokens', r.usage?.totalTokens ?? r.tokens],
       ['your rating', typeof r.feedback === 'string' ? r.feedback : r.feedback ? `${r.feedback.rating}${r.feedback.comment ? ` — ${r.feedback.comment}` : ''}` : null],
     ].filter(([, v]) => v !== null && v !== undefined && v !== '').flatMap(([k, v]) => [h('dt', {}, k), h('dd', { style: k === 'commands' || k === 'blocked' ? 'white-space:pre-wrap;font-family:var(--font-mono)' : null }, v)])),
-    h('details', {}, h('summary', {}, 'Technical details and saved run evidence'),
+    h('details', { open: S.traceOpen === r.run_id, ontoggle: (e) => { S.traceOpen = e.currentTarget.open ? r.run_id : null; } }, h('summary', {}, 'Technical details and saved run evidence'),
       h('dl', {}, ...runTrace(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)]))),
     rateable ? h('div', { class: 'actions' },
       h('input', { id: 'rate-why', placeholder: 'Why (optional, your words)', 'aria-label': 'Reason for rating' }),
