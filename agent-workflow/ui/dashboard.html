@@ -159,14 +159,15 @@ const hubPanel = () => S.data?.hub_panel === true && S.data?.transport !== 'mac'
 async function refresh({ poll = false } = {}) {
   if (S.closed) return;
   // A refresh asked for during a poll (e.g. after a click) runs right after it instead of being dropped.
+  if (!poll) S.quiet = 0;
   if (S.refreshing) { S.again ||= !poll; return; }
   S.refreshing = true;
   try {
     if (hubPanel()) {
       const since = poll && S.version && Date.now() - S.fullAt < 60000 ? S.version : undefined;
       const live = await call('panel_data', since ? { since } : {});
-      if (live.unchanged) return;
-      S.version = live.version; S.fullAt = Date.now();
+      if (live.unchanged) { S.quiet = (S.quiet ?? 0) + 1; return; }
+      S.version = live.version; S.fullAt = Date.now(); S.quiet = 0;
       if (live.development) S.development = live.development;
       else if (live.development_available) S.development = await call('development_panel');
       setData({ ...live, health: live.health ?? dashboardHealth(S.data, live) }); showError();
@@ -185,7 +186,8 @@ async function refresh({ poll = false } = {}) {
     setData(data); showError(data.relay?.error);
   }
   // Keep showing the last data, with the error, and any tab the host switched to.
-  catch (e) { showError(`Could not refresh: ${e.message}`); render({ passive: true }); }
+  // A host that rejects `since` (e.g. an older cached tool schema) gets plain full reads from then on.
+  catch (e) { if (poll) S.version = undefined; showError(`Could not refresh: ${e.message}`); render({ passive: true }); }
   finally {
     S.refreshing = false;
     if (S.again) { S.again = false; refresh(); } else scheduleRefresh();
@@ -196,7 +198,8 @@ function scheduleRefresh() {
   if (document.hidden || S.closed) return;
   // Follow active runs on either runner. The Hub's change check is cheap, so a hosted panel checks every few seconds.
   const active = S.data?.runs?.some((r) => r.status === 'running' || publicationPending(r.publication));
-  S.poll = setTimeout(() => refresh({ poll: true }), hubPanel() ? (active ? 2000 : 3000) : (active ? 4000 : 30000));
+  // After about two quiet minutes a hosted panel slows to 15 s until something changes or the user acts.
+  S.poll = setTimeout(() => refresh({ poll: true }), hubPanel() ? (active ? 2000 : (S.quiet ?? 0) >= 40 ? 15000 : 3000) : (active ? 4000 : 30000));
 }
 async function act(key, fn) {
   if (S.busy.has(key)) return;

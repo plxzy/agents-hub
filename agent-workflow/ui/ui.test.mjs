@@ -115,6 +115,9 @@ test('Hub running receipts poll quickly and detail reads work with dok offline',
   context.S.data = { hub_panel: true, runs: [] };
   context.scheduleRefresh();
   assert.equal(delays.pop(), 3000);
+  context.S.quiet = 40;
+  context.scheduleRefresh();
+  assert.equal(delays.pop(), 15000, 'quiet panels back off');
   context.S.data.runs = [{ status: 'running' }];
   context.scheduleRefresh();
   assert.equal(delays.pop(), 2000);
@@ -135,7 +138,7 @@ test('hosted refresh polls panel_data alone, skips unchanged answers and never d
   vm.runInContext(html.match(/const hubPanel = .*\n/)[0].replace('const ', 'var '), context);
   vm.runInContext(html.match(/async function refresh\([\s\S]*?\n\}\n/)[0], context);
   await context.refresh({ poll: true });
-  assert.deepEqual(calls.pop(), { name: 'panel_data', since: 'a'.repeat(16) }); assert.equal(set.length, 0);
+  assert.deepEqual(calls.pop(), { name: 'panel_data', since: 'a'.repeat(16) }); assert.equal(set.length, 0); assert.equal(context.S.quiet, 1);
   answer = { hub_panel: true, version: 'b'.repeat(16), runs: [], health: { live: true }, development: { grants: [] } };
   await context.refresh();
   assert.deepEqual(calls.pop(), { name: 'panel_data' }, 'a click always reads in full');
@@ -148,6 +151,12 @@ test('hosted refresh polls panel_data alone, skips unchanged answers and never d
   await context.refresh();
   release({ unchanged: true, version: 'b'.repeat(16) }); await first;
   await new Promise((r) => setImmediate(r));
+  assert.deepEqual(calls.map((c) => c.since ?? 'full'), ['b'.repeat(16), 'full']);
+  // A rejected `since` poll falls back to full reads.
+  calls.length = 0; context.S.fullAt = Date.now(); context.S.version = 'b'.repeat(16);
+  context.call = async (name, args) => { calls.push({ name, ...args }); throw new Error('Invalid arguments'); };
+  context.render = () => {};
+  await context.refresh({ poll: true }); await context.refresh({ poll: true });
   assert.deepEqual(calls.map((c) => c.since ?? 'full'), ['b'.repeat(16), 'full']);
 });
 
