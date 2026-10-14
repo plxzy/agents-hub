@@ -33,6 +33,11 @@ Hub D1 runs, definitions and reviews through `nativePanel`; the Mac read route o
 historical success is not a heartbeat. The UI shows one runner line and collapsible details.
 Legacy snapshot fallback readers still exist, but their timestamps are no longer dashboard health bubbles.
 
+**Live panel (2026-10-14).** The widget polls `panel_data` alone (it carries health and the Development tab). With `since` it gets
+`{unchanged, version}` from one batched D1 read plus the runner status, so a hosted panel checks every 2–3 s and does a full read
+only on change (and once a minute). Per-run publication/review lookups and confirmation codes are batched. The Worker uses smart
+placement near D1. Measured: a new run appears in about 2–4 s (was 60–80 s); see `evidence/2026-10-14-dashboard-latency-after/`.
+
 **Snapshots are retired (2026-10-12).** `agent` no longer publishes snapshots and `publisher.mjs` is gone; the Hub reads runs,
 ratings, memory notes, agent definitions and counts from D1. `POST /v1/snapshots` and the snapshot readers remain only as a
 fallback for the old data; delete the `PUBLISH_TOKEN` secret to close the endpoint (done after this change), then the
