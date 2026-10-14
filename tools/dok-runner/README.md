@@ -45,7 +45,8 @@ Mac remote: `git remote set-url dok dok:/home/agent/repos/dev-workflow.git` with
 `remote.dok.receivepack = docker exec -i agents git-receive-pack` and
 `remote.dok.uploadpack = docker exec -i agents git-upload-pack`.
 
-Upgrade: `install.sh <revision>` (archives that commit from the bare repo, installs it, restarts the container).
+Upgrade: `install.sh <revision>` fetches the public repository (`AGENTS_SOURCE` in `.env`, default GitHub `plxzy/agents-hub`) into
+the bare mirror `~/repos/agents-hub.git` in the home volume, archives that commit, installs it and restarts the container.
 Rollback: `install.sh <previous revision>`. Never run a second supervisor against the same Hub owner: starting one
 replaces the other's connection.
 
