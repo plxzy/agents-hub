@@ -9,7 +9,7 @@ export const fixtures = {
   runs: [
     { run_id: 'demo-1', agent: 'reviewer', kind: 'task', status: 'completed', title: 'Check the sample interface', started: '2026-10-14T11:20:00.000Z', ended: '2026-10-14T11:21:00.000Z', model: 'fixture/model', tool_calls: 3, blocked: 0, tokens: 412, feedback: 'good', output: 'The sample interface is ready for review.' },
     { run_id: 'demo-2', agent: 'reviewer', kind: 'task', status: 'completed', title: 'Review the latest change', started: '2026-10-14T11:40:00.000Z', ended: '2026-10-14T11:42:00.000Z', model: 'fixture/model', tool_calls: 4, blocked: 0, tokens: 608, feedback: null, output: 'The change keeps the read-only boundary intact.' },
-    { run_id: 'demo-3', agent: 'builder', kind: 'task', status: 'running', title: 'Prepare a sample result', started: '2026-10-14T11:58:00.000Z', model: 'fixture/model', tool_calls: 1, blocked: 0, progress: { phase: 'tool', text: 'Reading the sample project structure', tool: 'read', updated_at: '2026-10-14T11:59:00.000Z' } }
+    { run_id: 'demo-3', agent: 'builder', kind: 'task', status: 'running', title: 'Prepare a sample result', started: '2026-10-14T11:58:00.000Z', model: 'fixture/model', tool_calls: 1, blocked: 0, progress: { phase: 'tool', action: 'tool_running', last_tool: 'read', observed_at: '2026-10-14T11:59:00.000Z' } }
   ],
   pending: [{ id: 'demo-note-1', kind: 'proposal', agent: 'reviewer', why: 'A sample review item', body: 'Keep the demo fixture deterministic.' }],
   snapshot: { generated_at: '2026-10-14T11:59:00.000Z', published_at: '2026-10-14T11:59:00.000Z', stale: false },
