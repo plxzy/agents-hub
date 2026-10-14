@@ -55,17 +55,23 @@ test('unknown booleans, missing history and unavailable allowlist remain unknown
 });
 
 test('malformed, normalized-invalid and future timestamps never become age zero or healthy', () => {
-  for (const invalid of ['not a date', '2026-02-30T01:00:00.000Z', '2026-10-09T15:00:01.000Z', '', 0]) {
+  for (const invalid of ['not a date', '2026-02-30T01:00:00.000Z', '2026-10-09T15:00:06.000Z', '', 0]) {
     assert.equal(healthTime(invalid, now).at, null); assert.equal(healthTime(invalid, now).age_ms, null);
     const d = data(); d.snapshot.generated_at = invalid;
     assert.equal(report(d).snapshot.state, 'unknown'); assert.equal(report(d).snapshot.age_ms, null);
     d.snapshot.generated_at = at(); d.relay.last_seen_at = invalid;
     assert.equal(report(d).relay.state, 'unknown'); assert.equal(report(d).execution.available, null);
   }
-  const d = data(); d.snapshot.published_at = at(-1);
+  const d = data(); d.snapshot.published_at = at(-6000);
   assert.equal(report(d).snapshot.state, 'unknown');
   delete d.snapshot.published_at; assert.equal(report(d).snapshot.state, 'unknown');
-  d.relay.observed_at = at(-1); assert.equal(report(d).exit_code, 2);
+  d.relay.observed_at = at(-6000); assert.equal(report(d).exit_code, 2);
+});
+
+test('a runner clock a few milliseconds ahead of the Worker is skew, not a future timestamp', () => {
+  assert.deepEqual(healthTime(at(-14), now), { at: at(-14), age_ms: 0, problem: null });
+  const d = data(); d.relay.observed_at = at(-14); d.relay.last_seen_at = at(-14);
+  assert.equal(report(d).relay.state, 'connected'); assert.equal(report(d).exit_code, 0);
 });
 
 test('an old online observation expires into last-known information, not new execution authority', () => {

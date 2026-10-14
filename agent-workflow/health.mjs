@@ -1,12 +1,14 @@
 // Pure, additive observations shared by Node, the Worker and the dashboard. No I/O or execution authority.
+const CLOCK_SKEW_MS = 5000;
 export function healthTime(value, now = Date.now()) {
   if (value == null) return { at: null, age_ms: null, problem: 'missing' };
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(value)) return { at: null, age_ms: null, problem: 'malformed' };
   const time = Date.parse(value);
   const normalized = value.replace(/(?:\.(\d{1,3}))?Z$/, (_, fraction) => `.${(fraction ?? '').padEnd(3, '0')}Z`);
   if (!Number.isFinite(time) || new Date(time).toISOString() !== normalized) return { at: null, age_ms: null, problem: 'malformed' };
-  if (time > now) return { at: null, age_ms: null, problem: 'future' };
-  return { at: new Date(time).toISOString(), age_ms: now - time, problem: null };
+  // The runner's Durable Object and the Worker read different clocks; a few seconds ahead is skew, not a bad timestamp.
+  if (time > now + CLOCK_SKEW_MS) return { at: null, age_ms: null, problem: 'future' };
+  return { at: new Date(time).toISOString(), age_ms: Math.max(0, now - time), problem: null };
 }
 
 const boolean = (value) => typeof value === 'boolean' ? value : null;
