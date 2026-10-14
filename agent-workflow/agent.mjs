@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { modelGateway } from './model gateway.mjs';
+import { modelGateway } from './model-gateway.mjs';
 import { captureRunContext, logObservation } from './run-context.mjs';
 import { failureFromEvents } from './failure-telemetry.mjs';
 import { runProgressTelemetry } from './run-progress.mjs';
