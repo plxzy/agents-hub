@@ -61,6 +61,22 @@ test('closed PRs and repository or branch substitution stop before pushing', asy
   await assert.rejects(publishJob(config, f.gh, { ...job(), branch: 'main' }, new Uint8Array(), f.io), /invalid_artifact/);
   assert.equal(f.pushes, 1);
 });
+test('a stale PR response after a confirmed push retries without another push', async () => {
+  const f = fake(); await publishJob(config, f.gh, job(), new Uint8Array(), f.io);
+  const next = job(); next.run_id = NEXT;
+  next.receipt = { ...next.receipt, run_id: NEXT, commit: C, base_commit: B };
+  next.thread = { repo: 'vm', branch: next.branch, commit_sha: B, pr_number: 17 };
+  const request = f.gh.request; let stale = true;
+  f.gh.request = async (url, options) => {
+    const result = await request(url, options);
+    return stale && url.endsWith('/pulls/17') ? { ...result, head: { ...result.head, sha: B } } : result;
+  };
+  await assert.rejects(publishJob(config, f.gh, next, new Uint8Array(), f.io),
+    e => e.code === 'unavailable' && e.retry === true);
+  stale = false;
+  assert.equal((await publishJob(config, f.gh, next, new Uint8Array(), f.io)).status, 'published');
+  assert.equal(f.pushes, 2); assert.equal(f.creates, 1);
+});
 test('real Git bundle verification rejects corruption and preserves exact identity', async t => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'publisher-test-')); t.after(() => fs.rm(tmp, { recursive: true, force: true }));
   await git(tmp, ['init', '-b', 'main']);

@@ -181,7 +181,13 @@ export async function publishJob(config, github, job, bytes, { verify = verified
     } });
     // Follow-up evidence stays in its Hub receipt; never overwrite a human-edited PR body.
     const final = await api(`/pulls/${pr.number}`);
-    if (final.head?.sha !== head) { pr = final; await verifyIncluded(); }
+    if (final.head?.sha !== head) {
+      pr = final;
+      // GitHub's PR projection can lag the branch ref just confirmed above.
+      // Reconcile on retry before classifying this as a concurrent change.
+      try { await verifyIncluded(); }
+      catch { throw new PublicationError('unavailable', true); }
+    }
     if (final.html_url !== `https://github.com/${job.github}/pull/${pr.number}`) throw new PublicationError('unavailable', true);
     return { status: 'published', commit: head, pr_number: pr.number, pr_url: final.html_url };
   });
