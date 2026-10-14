@@ -1,0 +1,5 @@
+#!/bin/sh
+# Blocks a push when a private value appears in tracked files. Skipped when no private-values list exists.
+list=${PRIVATE_VALUES:-$HOME/.config/agents-hub/private-values.txt}
+test -f "$list" || exit 0
+exec node "$(git rev-parse --show-toplevel)/tools/public-check/check.mjs"
