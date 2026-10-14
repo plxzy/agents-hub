@@ -9,6 +9,7 @@ import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
 import { withFailureGuidance, publicRunContext } from '../../agent-workflow/run-trace.mjs';
 import { runConfiguration, runtimeConfig } from '../../agent-workflow/run-config.mjs';
 import { readArtifact } from './run-artifacts.mjs';
+import { publicSourceReview } from '../../agent-workflow/run-continuation.mjs';
 
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -48,6 +49,7 @@ export function sanitizeReceipt(r, runner) {
     base_commit: /^[a-f0-9]{40,64}$/.test(r.base_commit ?? '') ? r.base_commit : undefined,
     review_ref: new RegExp(`^refs/heads/review/runs/${r.run_id}$`).test(r.review_ref ?? '') ? r.review_ref : undefined,
     continued_from: RUN_ID.test(r.continued_from ?? '') ? r.continued_from : undefined,
+    source_review: publicSourceReview(r.source_review),
     changed_files: Array.isArray(r.changed_files) ? r.changed_files.filter((f) => typeof f === 'string' && f.length <= 300 && !/[\r\n]/.test(f)).slice(0, 200) : undefined,
     memory_proposed: Number.isInteger(r.memory_proposed) && r.memory_proposed >= 0 && r.memory_proposed <= 20 ? r.memory_proposed : undefined,
     memory_source: ['hub', 'frozen-release'].includes(r.memory_source) ? r.memory_source : undefined,

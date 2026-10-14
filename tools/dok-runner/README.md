@@ -117,3 +117,12 @@ On the actual Linux runner, copy source into an isolated directory and run the r
 completion and sandbox tests with `AGENT_TEST_LINUX=1`; use temporary state, never the production supervisor
 configuration. Tests must verify partial-write refusal, approved continuation without command replay,
 linked-intent reconstruction, retained artifacts, and saved-result reuse.
+
+### Continuity rollout (2026-10-14)
+
+The continuation/recovery update accepts eligible failed model turns without relabelling the original receipt. Only new
+failures stamped by the updated supervisor participate in automatic failed-turn recovery. Do not bulk-convert old failed
+receipts or resume superseded work during deployment. Preserve all checkpoints and their release bindings. Drain and
+back up before installing; validate in isolated Linux state with no production configuration or second Hub connection.
+A missing review ref or mismatched saved head refuses before cloning. No-edit review continuations keep `source_review`
+and remain continuable; unresolved attempts in the same conversation block workspace replacement.

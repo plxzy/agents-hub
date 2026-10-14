@@ -381,3 +381,23 @@ A returned run ID means a start was accepted; inspect its receipt for running/co
 Timeouts: relay attempt 20 seconds, Mac Hub request 30 seconds, Claude operation 40 seconds.
 These bounds do not prove delivery: recovery uses durable identities, including after disconnection.
 No new executor, relay, synchronization service, model/repository picker or remote continuation is added.
+
+## Review continuity and failed-turn recovery (2026-10-14)
+
+Read `get_run` before a follow-up and use its derived `next_action`. A run ID in task prose does not select a checkout.
+`continue_from` selects the latest completed conversation run, including a review that made no edits. The runner verifies
+both the retained ref and the checkout against the recorded commit. Such a review carries `source_review` (original run,
+base, commit and review ref), advances the conversation head, and creates no new artifact. If the conversation expired,
+import the original Hub artifact; a fresh `main` run cannot inspect it. Retained unfinished work blocks continuation until
+recovered, so a new clone cannot overwrite a failed attempt's files.
+
+`resume_run` accepts interrupted runs and failed model turns with a recorded transient transport diagnostic (truncated
+terminal response, connection reset/timeout, or 502/503/504). Other failures remain paused for inspection. The supervisor,
+receipt next action and dashboard use the shared recovery eligibility contract. Existing journal, revision, account,
+knowledge, workspace, execution-budget and uncertain-command approval checks still apply. New eligible failures receive
+a private automatic-recovery marker; historical failed receipts without that marker require explicit selection. Automatic
+attempts remain capped at two. Original failed receipts stay failed and link to the resumed run.
+
+Hosted discovery must expose `start_run`, `resume_run` and `get_start_status`. Refresh client discovery after changing tool
+metadata; server-side advertisement alone does not prove a previously connected Dots session has refreshed its tools.
+A private Hub review ref/bundle is not a GitHub branch or PR; use the verified importer for that handoff.

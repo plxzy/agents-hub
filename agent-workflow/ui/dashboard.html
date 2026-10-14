@@ -100,7 +100,7 @@
 <script type="module">/*__HEALTH_BUNDLE__*/</script>
 <script type="module">
 const { App, applyHostStyleVariables } = globalThis.ExtApps;
-const { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary, configurationRows } = globalThis.AgentsHealth;
+const { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction } = globalThis.AgentsHealth;
 
 // ---------- state ----------
 const S = { data: null, tab: 'runs', detail: null, form: null, busy: new Set(), poll: null, healthOpen: false };
@@ -315,8 +315,8 @@ function recoveryView(r) {
     v.resumed_from ? h('button', { onclick: () => loadDetail(v.resumed_from) }, 'Previous attempt') : null,
     v.resumed_by ? h('button', { onclick: () => loadDetail(v.resumed_by) }, 'Open resumed run') : null,
     v.inspection ? h('pre', {}, v.inspection) : null,
-    hosted && r.status === 'interrupted' && v.state === 'ready' ? h('button', { disabled: S.busy.has(key), onclick: () => action('resume_run') }, 'Resume saved work') : null,
-    hosted && r.status === 'interrupted' && v.state === 'awaiting_review' && v.inspection
+    hosted && recoveryAction(r) === 'resume_run' ? h('button', { disabled: S.busy.has(key), onclick: () => action('resume_run') }, 'Resume saved work') : null,
+    hosted && recoveryAction(r) === 'decide_recovery'
       ? h('div', {}, h('p', {}, 'Continuing permits further work on the inspected files. The interrupted command will not be replayed.'),
         h('button', { disabled: S.busy.has(key), onclick: () => action('decide_recovery') }, 'Approve continuation from current files'),
         h('p', { class: 'small muted' }, 'Leave this run paused by taking no action.')) : null);

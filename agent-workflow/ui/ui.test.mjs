@@ -8,7 +8,27 @@ import http from 'node:http';
 import { healthOf, healthLabels } from '../health.mjs';
 import { runTrace, failureRows, progressRows, progressSummary, configurationRows } from '../run-trace.mjs';
 import { bridgeScript, dashboardHtml } from './dashboard.mjs';
+import { recoveryAction } from '../recovery-contract.mjs';
 import { createUiServer } from './server.mjs';
+
+test('recovery buttons use the same eligibility as the runner for failed and interrupted work', () => {
+  const html = dashboardHtml();
+  const context = vm.createContext({ S: { data: { relay: {} }, busy: new Set(), devRequests: new Map() }, recoveryAction,
+    ago: () => 'now', h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
+  const r = { run_id: 'r-20261014T000000Z-abcdef', status: 'failed', error: 'model turn failed',
+    failure_context: { phase: 'model', message: 'OpenAI Responses stream ended before a terminal response event' },
+    recovery: { state: 'ready', retained: true, checkpoint_version: 7 } };
+  assert.match(JSON.stringify(context.recoveryView(r)), /Resume saved work/);
+  r.error = 'Execution lease refused';
+  assert.doesNotMatch(JSON.stringify(context.recoveryView(r)), /Resume saved work/);
+  r.status = 'interrupted';
+  assert.match(JSON.stringify(context.recoveryView(r)), /Resume saved work/);
+  r.recovery.state = 'awaiting_review'; r.recovery.inspection = 'Saved changes inspected';
+  assert.match(JSON.stringify(context.recoveryView(r)), /Approve continuation from current files/);
+  r.recovery.retained = false;
+  assert.doesNotMatch(JSON.stringify(context.recoveryView(r)), /Approve continuation/);
+});
 
 test('the dashboard inlines the MCP Apps bridge and loads nothing from the network', () => {
   const html = dashboardHtml();
@@ -88,7 +108,7 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
   const html = dashboardHtml(), refreshed = [];
   const context = vm.createContext({
     S: { detail: { run_id: 'mac-run', agent: 'helper', status: 'unknown', error: 'Mac heartbeat expired' }, busy: new Set() },
-    canDecide: () => true, list: () => null, runTrace, failureRows, progressRows, progressSummary, configurationRows, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
+    canDecide: () => true, list: () => null, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
     h: (tag, attrs, ...children) => ({ tag, attrs, children }),
   });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
@@ -104,7 +124,7 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
 test('run details render shared historical context as text and label absent fields', () => {
   const html = dashboardHtml({ bridge: '' });
   const receipt = { run_id: 'r-demo', agent: 'demo', repo: '<script>not executable</script>', commit: 'a'.repeat(40), status: 'failed', error: 'model turn failed' };
-  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows,
+  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
     canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
@@ -123,7 +143,7 @@ test('failed detail shows its error alongside labelled partial output and record
   const html = dashboardHtml();
   const receipt = { run_id: 'r-failed', agent: 'helper', status: 'failed', error: 'model turn failed', output: 'Useful partial answer', output_partial: true,
     failure_context: { phase: 'model', last_tool: 'read', provider: 'openai', model: 'gpt-6-luna', message: '503 upstream disconnected' } };
-  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows,
+  const context = vm.createContext({ S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
     canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
@@ -139,7 +159,7 @@ test('run list and detail expose live progress, stale checkpoints and missing ol
   const html = dashboardHtml(), time = new Date(Date.now() - 60000).toISOString();
   const receipt = { run_id: 'live', agent: 'helper', status: 'running', progress: { phase: 'tool', action: 'tool_started',
     observed_at: time, last_tool: 'read', checkpoint: 'tool_error', checkpoint_tool: 'ls', checkpoint_at: time, blocker: 'tool_error' } };
-  const context = vm.createContext({ S: { detail: receipt, data: { runs: [receipt] }, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows,
+  const context = vm.createContext({ S: { detail: receipt, data: { runs: [receipt] }, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
     canDecide: () => false, list: () => null, ago: () => '1m', firstLine: x => x, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   for (const name of ['detailView', 'runsView']) vm.runInContext(html.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0], context);

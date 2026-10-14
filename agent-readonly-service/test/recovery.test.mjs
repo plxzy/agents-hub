@@ -19,6 +19,12 @@ test('hosted recovery reconciles identities and requires checkpoint-bound privat
   const tool = async (name, args = {}) => (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST',
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) })).json()).result;
   const value = r => JSON.parse(r.content[0].text);
+  const discovery = await (await mf.dispatchFetch('https://test/mcp', { method: 'POST',
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) })).json();
+  for (const name of ['start_run', 'resume_run', 'get_start_status']) {
+    const advertised = discovery.result.tools.find(t => t.name === name);
+    assert.ok(advertised, name); assert.notDeepEqual(advertised._meta?.ui?.visibility, ['app']);
+  }
   assert.equal(value(await tool('get_start_status', { request_id: 'never-admitted' })).state, 'unknown');
   const res = await mf.dispatchFetch('https://test/relay/dok-dev/connect', { headers: { upgrade: 'websocket', authorization: 'Bearer dok-test',
     'x-relay-hello': encode({ v: 1, session: 'recovery-session', mode: 'acquire', status: { enabled: true, agents: ['workflow'] } }) } });
@@ -55,6 +61,13 @@ test('hosted recovery reconciles identities and requires checkpoint-bound privat
   assert.equal((await tool('decide_recovery', { ...args, confirm: code })).isError, true);
   assert.equal(value(await tool('get_start_status', { request_id: args.request_id })).run_id, nextId);
   assert.equal(value(await tool('get_run', { run_id: id })).status, 'interrupted');
+  const failedId = 'r-20261014T000123Z-bcd497';
+  await mf.dispatchFetch('https://test/relay/dok-dev/runs', { method: 'POST', headers: { authorization: 'Bearer dok-test' }, body: JSON.stringify({
+    run_id: failedId, agent: 'workflow', status: 'failed', started: new Date().toISOString(), error: 'model turn failed',
+    failure_context: { phase: 'model', message: 'OpenAI Responses stream ended before a terminal response event' },
+    recovery: { state: 'ready', checkpoint_version: 827, retained: true } }) });
+  assert.deepEqual(value(await tool('get_run', { run_id: failedId })).next_action,
+    { tool: 'resume_run', run_id: failedId, checkpoint_version: 827 });
   const publish = revision => mf.dispatchFetch('https://test/relay/dok-dev/runs', { method: 'POST', headers: { authorization: 'Bearer dok-test' }, body: JSON.stringify({
     run_id: id, request_id: 'original-request', agent: 'workflow', status: 'interrupted', started: new Date().toISOString(),
     recovery: { state: revision === 3 ? 'resumed' : 'ready', revision, checkpoint_version: 7, retained: true, ...(revision === 3 ? { resumed_by: nextId } : {}) } }) });

@@ -1,5 +1,7 @@
 // Presentation shared by local operations and the bundled HTML dashboard.
 // Only receipt facts: never resolve today's checkout or infer a branch from an agent default.
+import { recoveryAction } from './recovery-contract.mjs';
+import { publicSourceReview, reviewSource } from './run-continuation.mjs';
 export function publicRunContext(r = {}) {
   const text = v => typeof v === 'string' && v.length <= 200 && !/[\x00-\x1f\x7f]|Bearer\s|\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}/i.test(v);
   const sha = v => typeof v === 'string' && /^[a-f0-9]{40,64}$/.test(v);
@@ -32,6 +34,7 @@ export function runTrace(r = {}) {
     ['Review branch', recorded(r.review_ref)],
     ['Base commit', recorded(r.base_commit)],
     ['Recorded commit', recorded(r.commit)],
+    ...(publicSourceReview(r.source_review) ? [['Source review run', r.source_review.run_id], ['Source review commit', r.source_review.commit], ['Source review base', r.source_review.base_commit]] : []),
     ['Logs', logText],
     ...(r.recovery ? [['Recovery', r.recovery.state],
       ...(r.recovery.checkpoint_at ? [['Saved checkpoint', r.recovery.checkpoint_at]] : []),
@@ -85,9 +88,16 @@ export function failureGuidance(r = {}) {
 
 export function withFailureGuidance(r) {
   // Never trust advice persisted or supplied by a caller; derive it from this receipt each time.
-  const { failure_guidance: _ignored, ...receipt } = r;
+  const { failure_guidance: _ignored, next_action: _action, ...receipt } = r;
   const guidance = failureGuidance(receipt);
-  return guidance ? { ...receipt, failure_guidance: guidance } : receipt;
+  const source = reviewSource(receipt), action = recoveryAction(receipt);
+  const next_action = source ? { tool: 'start_run', continue_from: receipt.run_id, source_review: source,
+    note: 'Use continue_from explicitly. If the conversation expired, import the source artifact; never substitute a fresh main checkout.' }
+    : action === 'decide_recovery' ? { tool: 'open_dashboard', run_id: receipt.run_id,
+      note: 'The user must approve continuation from inspected files in the Hub recovery card. Models cannot approve recovery.' }
+    : action ? { tool: action, run_id: receipt.run_id, checkpoint_version: receipt.recovery.checkpoint_version }
+    : receipt.recovery?.resumed_by ? { tool: 'get_run', run_id: receipt.recovery.resumed_by } : undefined;
+  return { ...receipt, ...(guidance ? { failure_guidance: guidance } : {}), ...(next_action ? { next_action } : {}) };
 }
 
 export function failureRows(r = {}) {

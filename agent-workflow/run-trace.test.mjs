@@ -2,6 +2,20 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { runTrace, failureGuidance, failureRows, withFailureGuidance, publicRunContext, configurationRows } from './run-trace.mjs';
 
+test('next actions retain original patch identity after a no-edit review and route eligible failures to recovery', () => {
+  const id = 'r-20261014T000000Z-abcdef', next = 'r-20261014T000001Z-abcdef';
+  const source = { run_id: id, base_commit: 'a'.repeat(40), commit: 'b'.repeat(40), review_ref: `refs/heads/review/runs/${id}` };
+  const r = withFailureGuidance({ run_id: next, status: 'completed', commit: source.commit, source_review: source, changed_files: [] });
+  assert.equal(r.next_action.continue_from, next);
+  assert.deepEqual(r.next_action.source_review, source);
+  assert.equal(r.review_ref, undefined);
+  assert.equal(withFailureGuidance({ ...r, commit: 'c'.repeat(40) }).next_action, undefined);
+  const failure = withFailureGuidance({ run_id: id, status: 'failed', error: 'model turn failed',
+    failure_context: { phase: 'model', message: 'OpenAI Responses stream ended before a terminal response event' },
+    recovery: { state: 'ready', retained: true, checkpoint_version: 827 } });
+  assert.deepEqual(failure.next_action, { tool: 'resume_run', run_id: id, checkpoint_version: 827 });
+});
+
 test('failure guidance classifies recorded symptoms and offers a bounded concrete next step', () => {
   const cases = [
     ['MRTR requires MCP 2026-07-28 or newer', 'handshake_protocol', /initialize protocolVersion/],

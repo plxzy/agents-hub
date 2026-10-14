@@ -38,8 +38,11 @@ export function dashboardHtml({ bridge } = {}) {
   const page = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
   if (!page.includes(PLACEHOLDER)) throw new Error('dashboard.html has no bridge placeholder');
   const health = fs.readFileSync(path.join(DIR, '../health.mjs'), 'utf8').replace(/^export /gm, '');
-  const trace = fs.readFileSync(path.join(DIR, '../run-trace.mjs'), 'utf8').replace(/^export /gm, '');
+  const shared = name => fs.readFileSync(path.join(DIR, '../' + name + '.mjs'), 'utf8').replace(/^export /gm, '');
+  const recovery = `const { recoveryAction } = (() => { ${shared('recovery-contract')}\nreturn { recoveryAction }; })();`;
+  const continuation = `const { publicSourceReview, reviewSource } = (() => { ${shared('run-continuation')}\nreturn { publicSourceReview, reviewSource }; })();`;
+  const trace = shared('run-trace').replace(/^import .*;\n/gm, '');
   if (!page.includes('/*__HEALTH_BUNDLE__*/')) throw new Error('dashboard.html has no health placeholder');
   return page.replace(PLACEHOLDER, () => bridge ?? (cached ??= bridgeScript()))
-    .replace('/*__HEALTH_BUNDLE__*/', () => `${health}\n${trace}\nglobalThis.AgentsHealth = { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary, configurationRows };`);
+    .replace('/*__HEALTH_BUNDLE__*/', () => `${health}\n${recovery}\n${continuation}\n${trace}\nglobalThis.AgentsHealth = { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary, configurationRows };\nglobalThis.AgentsHealth.recoveryAction = recoveryAction;`);
 }

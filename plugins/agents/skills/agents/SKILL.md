@@ -17,7 +17,9 @@ the agent decides how to do the work, you decide whether to delegate.
 | see everything at a glance, manage agents | `open_dashboard` (a dashboard where the host supports MCP Apps; elsewhere a summary) |
 | know which agents exist and are online | `get_status` (see `start_run.runners.dok`), `list_agents` |
 | ask about a repository, or have code changed in dev-workflow, vm or tikkytracker | `start_run` with that agent, then poll `get_run` with the returned `run_id` |
-| follow up on code an agent changed | `start_run` with `continue_from` set to the previous run id |
+| follow up on code or review | Read `get_run`, then `start_run` with `continue_from` set to the latest completed conversation run |
+| recover failed/interrupted work | Read `get_run`; follow `next_action` and use `resume_run` with its checkpoint version, or the Hub recovery card when inspection approval is required |
+| reconcile a lost start response | `get_start_status` with the original request ID; never invent another identity |
 | check recent work | `list_runs`, `get_run` |
 
 - Pass the user's request as `task`, in their words; don't pre-solve it. Read-only agents (helper) answer questions;
@@ -36,11 +38,20 @@ Ratings and accepting or rejecting memory notes are the user's clicks in the Age
 tools for them are hidden from you on purpose, and the Mac cannot make them either. Never try to rate, accept or reject
 on your own initiative.
 
+## Continuity and retained work
+
+- A run ID in task text is context, not a checkout selection. Always pass `continue_from` for follow-ups.
+- A no-edit review keeps `source_review`; its `changed_files: []` does not mean the original patch disappeared.
+- `review_ref` and `artifact` identify a private Hub export, not a GitHub branch or PR. Use the existing verified bundle importer for the external review handoff.
+- If a conversation expired, import the original artifact. Do not rerun the patch on main or ask a new sandbox to search other runs.
+- Recovery uses the original files and checkpoint, with a linked new run ID. Uncertain commands require the user's Hub card; the model cannot approve them.
+- If recovery tools are missing from the client, refresh connector discovery or use the Hub panel. Report the capability gap; never emulate recovery with a fresh run.
+
 ## When it fails
 
 - `No runner is online`: dok and the Mac relay are both offline; say so, don't retry in a loop.
 - `Agent is not runnable on dok` / `dok does not run <agent>`: call `get_status` and use a name listed under
   `start_run.runners.dok`.
-- `dok runner is busy`: one run (and one write run) at a time; retry in a minute.
+- `dok runner is busy`: per-repository or runner capacity is occupied; wait for the current run and reuse the original request identity.
 - `cannot start a sandboxed agent from inside a sandbox` (local server): you are inside an agent's sandbox; tell the
   user the command to run themselves.

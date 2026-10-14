@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { save, read } from './durable-file.mjs';
 import { loadCheckpoint, recoveryState, fingerprint } from './run-recovery.mjs';
-import { publicRecovery } from './recovery-contract.mjs';
+import { publicRecovery, recoveryEligible } from './recovery-contract.mjs';
 import { newId } from './agent.mjs';
 import { sanitizeFailureContext } from './failure-telemetry.mjs';
 
@@ -28,6 +28,8 @@ export class RecoveryHost {
       const receipt = read(path.join(this.state, 'agent-runs', id + '.json'));
       let state = checkpoint ? recoveryState(checkpoint) : 'paused';
       let reason = checkpoint ? undefined : 'No durable child checkpoint; retained work requires inspection';
+      if (receipt.status === 'failed' && !recoveryEligible(receipt)) { state = 'paused'; reason = 'Failure requires operator inspection before recovery'; }
+      if (!fs.existsSync(setup.config.policy.workspace)) { state = 'paused'; reason = 'Recovery workspace unavailable'; }
       if (checkpoint && lifecycle.retry_reason) reason = lifecycle.retry_reason;
       if (lifecycle.inspection_error) reason = lifecycle.inspection_error;
       if (state === 'ready' && (setup.attempt ?? 0) >= 2) { state = 'paused'; reason = 'Automatic recovery attempt limit reached'; }
@@ -64,9 +66,11 @@ export class RecoveryHost {
     try {
       for (const name of fs.readdirSync(path.join(this.state, 'agent-runs'))) {
         let r; try { r = read(path.join(this.state, 'agent-runs', name)); } catch { continue; }
-        if (r.status !== 'interrupted' || this.runs.has(r.run_id)) continue;
+        if (!recoveryEligible(r) || this.runs.has(r.run_id)) continue;
         const value = this.recoveryInfo(r.run_id);
         this.saveRecoveryInfo(r.run_id, value.info);
+        // Old failed runs are preserved for explicit selection, never revived by an upgrade.
+        if (r.status === 'failed' && value.lifecycle?.automatic_eligible !== true) continue;
         if (value.info.state === 'awaiting_review' && !value.lifecycle.inspection_started) await this.inspectRecovery(r, value);
         else if (value.info.state === 'ready') {
           try { await this.resumeRun({ run_id: r.run_id, request_id: `recover-${r.run_id}-${value.checkpoint.version}`,
@@ -96,7 +100,9 @@ export class RecoveryHost {
     const previous = read(path.join(this.state, 'agent-runs', run_id + '.json'));
     const recovery = this.recoveryInfo(run_id), { setup, checkpoint, info } = recovery;
     if (info.state === 'resumed') return this.runGet(info.resumed_by);
-    if (previous.status !== 'interrupted' || !checkpoint || checkpoint.version !== checkpoint_version) throw Error('Recovery checkpoint changed; refresh the run');
+    if (!recoveryEligible(previous)) throw Error('Failure requires operator inspection before recovery');
+    if (!checkpoint || checkpoint.version !== checkpoint_version) throw Error('Recovery checkpoint changed; refresh the run');
+    if (automatic && previous.status === 'failed' && recovery.lifecycle.automatic_eligible !== true) throw Error('Historical failed run requires explicit recovery selection');
     // Safety invariants cannot depend on which blocker the UI happens to display.
     if (setup.revision !== this.revision) throw Error('Runner release changed; operator migration required');
     if (checkpoint.remaining_ms <= 1000) throw Error('Run execution budget exhausted');

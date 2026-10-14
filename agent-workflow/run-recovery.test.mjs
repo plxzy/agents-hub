@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { save, read } from './durable-file.mjs';
 import { RunJournal, loadCheckpoint, recoveryState, reconcileSession, fingerprint } from './run-recovery.mjs';
 import { DevelopmentSessions } from './dev-sessions.mjs';
+import { recoveryAction, recoveryEligible } from './recovery-contract.mjs';
 
 function fixture(t) {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'recovery-test-'));
@@ -93,6 +94,66 @@ function hostFixture(t, { uncertain = false } = {}) {
   if (uncertain) { j.value.tools[fingerprint('x')] = { name: 'write', state: 'started' }; j.update({}); }
   return { host, id, j, dir, receipt };
 }
+
+const modelFailure = { status: 'failed', error: 'model turn failed', failure_context: {
+  phase: 'model', message: 'OpenAI Responses stream ended before a terminal response event' } };
+
+test('failed transport turns resume retained files without changing the original failure', async t => {
+  const { host, id, j, receipt } = hostFixture(t);
+  save(path.join(host.state, 'agent-runs', id + '.json'), { ...receipt, ...modelFailure });
+  fs.writeFileSync(path.join(host.state, 'workspace', 'partial.txt'), 'saved edits');
+  const info = host.recoveryInfo(id).info;
+  assert.equal(recoveryAction({ ...modelFailure, recovery: info }), 'resume_run');
+  let config;
+  host.executeRun = async (_a, _r, _receipt, _p, recovery) => { config = recovery.setup.config; };
+  const next = await host.resumeRun({ run_id: id, request_id: 'failed-resume', checkpoint_version: j.value.version });
+  assert.equal(next.recovery.resumed_from, id);
+  assert.equal(host.runGet(id).status, 'failed');
+  assert.equal(fs.readFileSync(path.join(config.policy.workspace, 'partial.txt'), 'utf8'), 'saved edits');
+  assert.equal(config.recover_from, j.file);
+});
+
+test('automatic failed recovery requires a new failure marker and stops after two attempts', async t => {
+  const { host, id, receipt, dir } = hostFixture(t);
+  save(path.join(host.state, 'agent-runs', id + '.json'), { ...receipt, ...modelFailure });
+  let starts = 0;
+  host.executeRun = async () => { starts++; };
+  await host.recoverPending();
+  assert.equal(starts, 0, 'upgrade must not revive historical failures');
+  save(path.join(dir, 'lifecycle.json'), { automatic_eligible: true });
+  const setup = read(path.join(dir, 'setup.json'));
+  save(path.join(dir, 'setup.json'), { ...setup, attempt: 2 });
+  await host.recoverPending();
+  assert.equal(starts, 0);
+  assert.match(host.runGet(id).recovery.reason, /attempt limit/);
+  save(path.join(dir, 'setup.json'), { ...setup, attempt: 0 });
+  await host.recoverPending();
+  assert.equal(starts, 1);
+  await host.recoverPending();
+  assert.equal(starts, 1, 'resumed original is not admitted again');
+});
+
+test('unsafe failures never become eligible from task text or a ready checkpoint', async t => {
+  const { host, id, j, receipt } = hostFixture(t);
+  for (const error of ['Execution lease refused', 'Run time limit exceeded', 'model turn failed']) {
+    const r = { ...receipt, status: 'failed', error, task: modelFailure.failure_context.message };
+    save(path.join(host.state, 'agent-runs', id + '.json'), r);
+    assert.equal(recoveryEligible(r), false);
+    assert.equal(recoveryAction({ ...r, recovery: { state: 'ready', retained: true, checkpoint_version: 1 } }), null);
+    assert.equal(host.recoveryInfo(id).info.state, 'paused');
+    await assert.rejects(host.resumeRun({ run_id: id, request_id: 'unsafe-resume', checkpoint_version: j.value.version }), /operator inspection/);
+  }
+});
+
+test('failed transport recovery still refuses uncertain tools and missing workspaces', async t => {
+  const { host, id, j, receipt } = hostFixture(t, { uncertain: true });
+  save(path.join(host.state, 'agent-runs', id + '.json'), { ...receipt, ...modelFailure });
+  assert.equal(host.recoveryInfo(id).info.state, 'awaiting_review');
+  await assert.rejects(host.resumeRun({ run_id: id, request_id: 'uncertain-failed', checkpoint_version: j.value.version }), /requires recovery review/);
+  fs.rmSync(path.join(host.state, 'workspace'), { recursive: true });
+  assert.equal(host.recoveryInfo(id).info.state, 'paused');
+  assert.equal(recoveryAction({ ...modelFailure, recovery: host.recoveryInfo(id).info }), null);
+});
 
 test('resume reserves capacity before await and repeated requests return the linked attempt', async t => {
   const { host, id, j } = hostFixture(t); let executions = 0;

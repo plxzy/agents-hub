@@ -11,7 +11,7 @@ import { DevelopmentSessions } from './dev-sessions.mjs';
 import { save, read } from './durable-file.mjs';
 
 test('supervisor completes through actual child callbacks without deleting failed work', async t => {
-  for (const outcome of ['success', 'model_error', 'crash', 'export_error']) for (const connection of [false, true]) {
+  for (const outcome of ['success', 'model_error', 'transport_error', 'crash', 'export_error']) for (const connection of [false, true]) {
     const state = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-completion-'));
     t.after(() => fs.rmSync(state, { recursive: true, force: true }));
     const id = 'r-20261013T000000Z-abcdef', workspace = path.join(state, 'run-work', id, 'workspace');
@@ -41,7 +41,8 @@ test('supervisor completes through actual child callbacks without deleting faile
             child.emit('message', { type: 'runtime', runtime: observed });
             child.emit('message', { type: 'checkpoint', partial: { output: 'Earlier output' } });
             if (outcome !== 'crash') child.stdout.write(JSON.stringify({ runtime: observed, output: 'Completed answer', tool_calls: ['read'],
-              ...(outcome === 'model_error' ? { error: 'model turn failed' } : {}) }));
+              ...(['model_error', 'transport_error'].includes(outcome) ? { error: 'model turn failed' } : {}),
+              ...(outcome === 'transport_error' ? { failure_context: { phase: 'model', message: 'OpenAI Responses stream ended before a terminal response event' } } : {}) }));
             child.emit('close', ['success', 'export_error'].includes(outcome) ? 0 : 1);
           }));
           return child;
@@ -56,5 +57,6 @@ test('supervisor completes through actual child callbacks without deleting faile
     assert.equal(Boolean(final.configuration.mcp_connection), connection);
     assert.equal(fs.existsSync(workspace), outcome !== 'success');
     assert.deepEqual([...host.runs.keys()], ['other']);
+    if (outcome === 'transport_error') assert.equal(read(path.join(state, 'recovery-v1', id, 'lifecycle.json')).automatic_eligible, true);
   }
 });

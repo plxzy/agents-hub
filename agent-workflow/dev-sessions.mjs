@@ -14,11 +14,21 @@ import { failedResult, sanitizeFailureContext } from './failure-telemetry.mjs';
 import { runProgressTelemetry, sanitizeProgress, progressPublisher } from './run-progress.mjs';
 import { captureRunContext, logObservation } from './run-context.mjs';
 import { runConfiguration } from './run-config.mjs';
-import { save, read } from './durable-file.mjs';
+import { save, read, syncDirectory } from './durable-file.mjs';
 import { RunJournal, fingerprint } from './run-recovery.mjs';
 import { RecoveryHost } from './run-recovery-host.mjs';
+import { retryableModelFailure } from './recovery-contract.mjs';
+import { reviewSource, verifyContinuationHead } from './run-continuation.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
+function saveConversationHead(base, id) {
+  const temporary = path.join(base, 'head.' + randomUUID());
+  try {
+    fs.writeFileSync(temporary, id, { mode: 0o600, flag: 'wx', flush: true });
+    fs.renameSync(temporary, path.join(base, 'head'));
+    syncDirectory(base);
+  } finally { try { fs.unlinkSync(temporary); } catch {} }
+}
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/.test(value);
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const gitEnv = { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/nonexistent', GIT_CONFIG_NOSYSTEM: '1',
@@ -327,15 +337,23 @@ export class DevelopmentSessions extends RecoveryHost {
     if (active.some(r => r.repo === project)) throw new Error(`repository ${project} is busy; wait for its current run to finish`);
     if (active.filter(r => r.write === write).length >= (write ? this.limits.writeRuns : this.limits.runs)) throw new Error(`dok ${write ? 'write' : 'read-only'} capacity is full; wait for a slot`);
     this.room();
-    let root, previous;
+    let root, previous, sourceReview;
     if (continue_from) {
       const storedFile = path.join(this.state, 'agent-runs', continue_from + '.json');
       if (!fs.existsSync(storedFile)) throw new Error('Unknown run to continue');
       const stored = read(storedFile);
       previous = stored; root = stored.root;
-      if (stored.agent !== agent.name || stored.repo !== project || stored.status !== 'completed' || !stored.review_ref || !root) throw new Error('Only a completed run of this agent that changed files can be continued');
+      sourceReview = reviewSource(stored);
+      if (stored.agent !== agent.name || stored.repo !== project || !sourceReview || !root) throw new Error('Continue a completed review of this agent and repository; use resume_run for saved failed work');
       let latest; try { latest = fs.readFileSync(path.join(this.state, 'run-work', root, 'head'), 'utf8').trim(); } catch { /* conversation expired */ }
-      if (latest !== continue_from) throw new Error(latest ? `Continue from the latest run of this conversation: ${latest}` : 'That conversation has expired; start a new run');
+      if (latest !== continue_from) throw new Error(latest ? `Continue from the latest run of this conversation: ${latest}` : 'Conversation expired; import the saved review artifact instead of starting from main');
+      for (const name of fs.readdirSync(path.join(this.state, 'agent-runs'))) {
+        let other;
+        try { other = read(path.join(this.state, 'agent-runs', name)); }
+        catch { throw Error('Run history unreadable; inspect retained work before continuing'); }
+        if (other.root === root && other.status !== 'completed' && !other.recovery?.resumed_by)
+          throw new Error(`Retained unfinished work requires recovery: ${other.run_id}`);
+      }
     }
     // Per-run overrides from the caller; only providers this runner holds credentials for.
     const runtime = agentRuntime({ model: model ?? agent.model, thinking: thinking ?? agent.thinking }), run_id = newId('r');
@@ -343,7 +361,7 @@ export class DevelopmentSessions extends RecoveryHost {
     const receipt = { run_id, request_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
       started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version,
       repo: project, write, ...(mcp_connection ? { mcp_connection } : {}),
-      progress: runProgressTelemetry().snapshot(), ...(continue_from ? { continued_from: continue_from } : {}), root: root ?? run_id };
+      progress: runProgressTelemetry().snapshot(), ...(continue_from ? { continued_from: continue_from, source_review: sourceReview } : {}), root: root ?? run_id };
     save(requestFile, { fingerprint, run_id, receipt });
     save(path.join(this.state, 'agent-runs', run_id + '.json'), receipt);
     this.runs.set(run_id, { write, repo: project });
@@ -362,7 +380,7 @@ export class DevelopmentSessions extends RecoveryHost {
     const entry = this.runs.get(receipt.run_id);
     const recoveryDir = this.recoveryDir(receipt.run_id);
     fs.mkdirSync(recoveryDir, { recursive: true, mode: 0o700 });
-    const branch = receipt.continued_from ? 'review/runs/' + receipt.continued_from : 'main';
+    const branch = receipt.source_review ? receipt.source_review.review_ref.slice('refs/heads/'.length) : 'main';
     let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer, policy, configFile, slots, checkpoint = {};
     const progress = progressPublisher(async update => {
       save(file, { ...receipt, ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}), progress: update });
@@ -376,7 +394,6 @@ export class DevelopmentSessions extends RecoveryHost {
       if (code === 0 && !failure && !(runtimeMatches(result.runtime, pinnedRuntime) && (runtime.provider !== 'openai' ? result.runtime.provider === runtime.provider : this.limits.slots.includes(result.runtime.provider)))) failure = 'Missing verified Pi runtime';
       const done = !failure && !result.error && code === 0;
       if (!done) result = failedResult(result, checkpoint, failure ?? result.error ?? 'Pi process exited');
-      if (write && done && harvested?.review_ref) fs.writeFileSync(path.join(base, 'head'), receipt.run_id, { mode: 0o600 });
       // ```remember blocks become memory candidates (sent with the receipt); they are not part of the shown answer.
       const remembered = done ? extractRemember(result.output, agent).slice(0, 5) : [];
       if (typeof result.output === 'string') result.output = result.output.replace(/```remember\n[\s\S]*?```/g, '').trim();
@@ -384,6 +401,7 @@ export class DevelopmentSessions extends RecoveryHost {
       if (done && receipt.recovery) receipt.recovery = { ...receipt.recovery, state: 'completed' };
       const terminal = persistRunCompletion({ file, receipt, result, observed, done, code, failure, remembered, commit, baseCommit, harvested,
         cleanup: () => { /* Completed work alone is eligible for cleanup, after the result is durable. */
+          if (write && (harvested?.review_ref || receipt.source_review)) saveConversationHead(base, receipt.run_id);
           fs.rmSync(write ? workspace : base, { recursive: true, force: true });
           if (!write && receipt.logs.status === 'recorded') {
             const terminal = read(file);
@@ -391,6 +409,11 @@ export class DevelopmentSessions extends RecoveryHost {
           }
         } });
       if (!done) {
+        if (retryableModelFailure(terminal)) {
+          const lifecycleFile = path.join(recoveryDir, 'lifecycle.json');
+          const lifecycle = fs.existsSync(lifecycleFile) ? read(lifecycleFile) : {};
+          save(lifecycleFile, { ...lifecycle, automatic_eligible: true });
+        }
         const info = this.recoveryInfo(receipt.run_id).info;
         // Failed model turns are terminal unless a command or process interruption needs reconciliation.
         const interrupted = !result.error || info.state === 'awaiting_review' || ['Runner stopped', 'Pi process exited', 'Invalid Pi result', 'Run state persistence failed'].includes(failure);
@@ -408,6 +431,12 @@ export class DevelopmentSessions extends RecoveryHost {
         baseCommit = setup.baseCommit; commit = setup.commit; agent = setup.agent;
         save(configFile, setup.config);
       } else {
+      if (receipt.source_review) {
+        let savedHead;
+        try { savedHead = io.execFileSync('git', ['--git-dir', repository, 'rev-parse', '--verify', receipt.source_review.review_ref], { env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
+        catch { throw Error('Saved review ref unavailable; import the original Hub artifact'); }
+        verifyContinuationHead(receipt.source_review, savedHead);
+      }
       fs.mkdirSync(base, { recursive: true, mode: 0o700 });
       fs.rmSync(workspace, { recursive: true, force: true });
       // Source is the supervisor-owned bare repository; checkout runs inside the sandbox.
@@ -417,6 +446,7 @@ export class DevelopmentSessions extends RecoveryHost {
       await io.sandboxExecute(checkout, 'bash', { command: write ? `git -c core.hooksPath=/dev/null checkout -q -b agent-run origin/${branch}` : 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
       // Read before the agent can touch the checkout; later git calls on it run only inside the sandbox.
       baseCommit = commit = io.execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
+      if (receipt.source_review) verifyContinuationHead(receipt.source_review, commit);
       // Observe after checkout, before Pi can modify Git configuration or the tree.
       Object.assign(receipt, captureRunContext(workspace), { repo, base_commit: baseCommit });
       save(file, { ...receipt, commit });
@@ -450,7 +480,8 @@ export class DevelopmentSessions extends RecoveryHost {
         : `You run on dok, the always-on Linux runner, over a read-only clone of ${repo} (${branch} at ${commit.slice(0, 12)}). Mac paths in notes describe the Mac; files outside this clone are not available.`;
       const prompt = buildSystemPrompt({ ...agent, workspace }, memory)
         + (skills.length ? '\n\n' + skills.map(dir => fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8')).join('\n\n') : '')
-        + `\n\n## Current host boundary (dok)\n${boundary}`;
+        + `\n\n## Current host boundary (dok)\n${boundary}`
+        + (receipt.source_review ? `\nSaved review source: ${JSON.stringify(receipt.source_review)}. Review the original patch against its recorded base; this checkout starts at its saved commit. A no-edit review preserves that artifact and does not create a new one.` : '');
       const manifest = { host: DEVELOPMENT.host, project: repo, agent: agent.name, run_id: receipt.run_id, commit,
         implementation_revision: this.revision, knowledge_revision: read(path.join(this.knowledge, 'RELEASE.json')).source_revision,
         policy_digest: await digest({ policy, prompt, runtime, revision: this.revision }) };
