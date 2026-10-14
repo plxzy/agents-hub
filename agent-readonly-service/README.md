@@ -5,7 +5,7 @@ starts the user's agents on dok (outbound WebSocket to a Durable Object), stores
 definitions in D1, serves the review panel, and gives the Mac a limited principal (`/relay/mac/*`). Decisions are only the user's
 panel clicks. See `../agent-workflow/RUNNERS.md`.
 
-Live: `https://YOUR-HUB.workers.dev`
+Live: your deployment's `workers.dev` URL (or a custom domain).
 
 | Endpoint | Auth | What |
 |---|---|---|

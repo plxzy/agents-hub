@@ -367,7 +367,7 @@ test('publication view links only GitHub PRs and retries the saved run', async (
   assert.equal(view.children.some(c => c?.tag === 'a'), false);
   await view.children.find(c => c?.tag === 'button').attrs.onclick();
   assert.equal(calls[0][0], 'publish_review'); assert.equal(calls[0][1].run_id, 'saved-run');
-  r.publication = { status: 'published', pr_url: 'https://github.com/plxzy/vm/pull/123' };
+  r.publication = { status: 'published', pr_url: 'https://github.com/example/vm/pull/123' };
   view = context.publicationView(r);
   assert.equal(view.children.find(c => c?.tag === 'a').attrs.rel, 'noopener noreferrer');
   assert.equal(view.children.some(c => c?.tag === 'button'), false);

@@ -25,7 +25,7 @@ The Durable Object class is unchanged (it still serves dok); the `owner-mac` ins
 
 ## Rollback
 
-The last commit with the Mac relay is `c91c008`, Worker version `WORKER-VERSION-ID` (secrets
+The last commit with the Mac relay is `c91c008`, the Worker version deployed from it (secrets
 `RELAY_TOKEN` and `PUBLISH_TOKEN` were deleted afterwards: recreate `RELAY_TOKEN` and `~/.config/agent-readonly/link.json` before
 using `agent link serve` from that commit). Never roll back across the Durable Object lifecycle change recorded in
 `../archive/2026-10-12-mac-relay/LINK.md`.

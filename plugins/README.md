@@ -92,7 +92,7 @@ visible **Source: Agents Hub** / **Agents** tab establish that the new panel loa
 
 ## Hosted Agents Hub (account App)
 
-ChatGPT, Dots and claude.ai connect to `https://YOUR-HUB.workers.dev/mcp` as an account App /
+ChatGPT, Dots and claude.ai connect to the Hub's `/mcp` URL as an account App /
 custom connector with OAuth (Cloudflare Access Managed OAuth). dok runs agents; the Hub's D1 holds runs,
 ratings, memory and agent definitions. See `../agent-workflow/RUNNERS.md`.
 The former `agents-hub` plugin package (read-only remote plugin) was removed on 2026-10-09; the user uninstalled it.
