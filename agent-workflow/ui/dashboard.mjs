@@ -40,7 +40,7 @@ export function dashboardHtml({ bridge } = {}) {
   const health = fs.readFileSync(path.join(DIR, '../health.mjs'), 'utf8').replace(/^export /gm, '');
   const shared = name => fs.readFileSync(path.join(DIR, '../' + name + '.mjs'), 'utf8').replace(/^export /gm, '');
   const recovery = `const { recoveryAction } = (() => { ${shared('recovery-contract')}\nreturn { recoveryAction }; })();`;
-  const continuation = `const { publicSourceReview, reviewSource } = (() => { ${shared('run-continuation')}\nreturn { publicSourceReview, reviewSource }; })();`;
+  const continuation = `const { publicSourceReview, reviewSource, publicSourcePr, publicReview } = (() => { ${shared('run-continuation')}\nreturn { publicSourceReview, reviewSource, publicSourcePr, publicReview }; })();`;
   const trace = shared('run-trace').replace(/^import .*;\n/gm, '');
   if (!page.includes('/*__HEALTH_BUNDLE__*/')) throw new Error('dashboard.html has no health placeholder');
   return page.replace(PLACEHOLDER, () => bridge ?? (cached ??= bridgeScript()))

@@ -1,3 +1,4 @@
+import { publicReview } from './run-continuation.mjs';
 import { publicPublication } from './review-publication-contract.mjs';
 // The data contract every Agents Hub surface shares: the read operations' names, descriptions and input schemas,
 // and the shapes their results have. The local catalog (ops.mjs) answers them from this Mac; the hosted hub
@@ -53,6 +54,7 @@ export function titleOf(text) {
 export function runBrief(r) {
   const rating = typeof r.feedback === 'string' ? r.feedback : r.feedback?.rating;
   return {
+    ...(publicReview(r.review) ? { review: publicReview(r.review) } : {}),
     ...(publicPublication(r.publication) ? { publication: publicPublication(r.publication) } : {}),
     run_id: r.run_id, agent: r.agent, kind: r.kind ?? 'task', status: r.status, title: r.title ?? titleOf(r.task),
     started: r.started, ended: r.ended, model: r.model, tool_calls: count(r.tool_calls), blocked: count(r.blocked),

@@ -68,7 +68,7 @@ test('run trace shows exact receipt facts, distinguishing review ref from checko
   const trace = Object.fromEntries(runTrace(receipt));
   assert.equal(trace.Repository, receipt.repo);
   assert.equal(trace.Workspace, receipt.workspace);
-  assert.equal(trace['Review branch'], receipt.review_ref);
+  assert.equal(trace['Saved run snapshot'], receipt.review_ref);
   assert.equal(trace['Base commit'], receipt.base_commit);
   assert.equal(trace['Recorded commit'], receipt.commit);
   assert.equal(trace['Checkout branch'], receipt.checkout_branch);

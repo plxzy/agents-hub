@@ -15,7 +15,7 @@ retries/backfills the saved artifact without running Pi again. No merge is perfo
 
 Independent runs ask the publisher to fetch GitHub main into an immutable per-run
 ref before checkout. Failure stops setup; it cannot silently use stale main.
-Continuations and interrupted-run recovery retain their original saved commits.
+Published continuations fetch the current PR head; internal continuations and interrupted-run recovery retain their saved commits.
 The receipt records the fetched commit and observation time. Publication of an
 older saved result does not establish acceptance against today's main.
 
@@ -77,3 +77,19 @@ stop this Compose project and remove the trusted repository rows to stop automat
 queueing. Retain queue tables, R2 bundles, state volumes and GitHub branches/PRs for
 recovery. Never delete review work to roll back a service. Restoring an older runner
 also restores its earlier base-selection behavior.
+
+## PR continuation and merge cleanup
+
+Apply additive migration `0009_review_state.sql` before deploying the updated Hub, publisher and runner.
+`review_threads.observation` stores dated PR state independently of the last published run commit.
+The existing publisher polls linked PRs every minute, and `/prepare-review` always checks GitHub again.
+Preparation records under the private `bases/` directory bind the run to its fetched PR head; publication
+checks that trusted record and fast-forward ancestry. Read tokens for PR observation additionally request
+Pull requests read. Pi still has no GitHub credential.
+
+Automatic remote deletion defaults off. After live acceptance set `cleanupMergedBranches: true` in the
+private publisher configuration. Only Hub branch names with a verified merged PR are eligible. The
+merge commit must be reachable from freshly fetched main, the tip must equal the merged PR head, and no
+open PR may still use it. Deletion uses an exact-head lease; changed branches are preserved. Private
+`cleanup/` records retain the proof. Already deleted branches and retries after merge are idempotent.
+Rollback can disable this flag and restore the previous release; retain all DB rows, pinned refs and bundles.

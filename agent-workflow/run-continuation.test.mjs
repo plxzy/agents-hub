@@ -113,3 +113,33 @@ test('independent runs fail before Pi when fresh GitHub base is unavailable', as
   assert.equal(requested, true); assert.notEqual(final.status, 'completed');
   assert.match(final.error, /Fresh GitHub base unavailable/); assert.equal(f.starts(), 0);
 });
+
+test('PR selection and subsequent no-edit continuation use the reviewer head, not the old run', async t => {
+  const f = fixture(t);
+  f.git(f.repo, 'checkout', 'review/runs/' + f.original.run_id);
+  fs.writeFileSync(path.join(f.repo, 'reviewer-fix'), 'human fix');
+  f.git(f.repo, 'add', '.'); f.git(f.repo, 'commit', '-m', 'reviewer fix');
+  const head = f.git(f.repo, 'rev-parse', 'HEAD'); f.git(f.repo, 'checkout', 'main');
+  const oldSpawn = f.host.runIO.spawn;
+  f.host.runIO.spawn = (...args) => { assert.equal(fs.readFileSync(path.join(f.workspace, 'reviewer-fix'), 'utf8'), 'human fix'); return oldSpawn(...args); };
+  f.host.prepareReview = async (repo, id, selection) => {
+    assert.equal(repo, 'demo'); assert.ok(selection.pr_number === 75 || selection.root === f.original.root);
+    const ref = `refs/heads/base/runs/${id}`; f.git(f.repo, 'update-ref', ref, head);
+    return { ref, commit: head, source_pr: { root: f.original.root, github: 'owner/demo', pr_number: 75,
+      branch: `review/agents/${f.original.root}`, commit: head, observed_at: new Date().toISOString() } };
+  };
+  const first = await f.host.runStart({ request_id: 'pr-review-start', agent: 'demo', task: 'Review PR', pr_number: 75 });
+  const result = await f.finish(first.run_id);
+  assert.equal(result.status, 'completed'); assert.equal(result.commit, head);
+  assert.equal(result.source_pr.commit, head); assert.equal(result.source_review, undefined);
+  const next = await f.host.runStart({ request_id: 'pr-review-next', agent: 'demo', task: 'Review again', continue_from: result.run_id });
+  assert.equal((await f.finish(next.run_id)).commit, head);
+  await assert.rejects(f.host.runStart({ request_id: 'pr-double-selector', agent: 'demo', task: 'Review', continue_from: result.run_id, pr_number: 75 }), /Invalid PR selection/);
+});
+
+test('unavailable PR preparation cannot fall back to main or replace retained files', async t => {
+  const f = fixture(t); fs.mkdirSync(f.workspace); fs.writeFileSync(path.join(f.workspace, 'keep'), 'unfinished');
+  f.host.prepareReview = async () => { throw Error('PR closed or publication pending'); };
+  await assert.rejects(f.host.runStart({ request_id: 'closed-pr-test', agent: 'demo', task: 'Review', pr_number: 75 }), /PR closed/);
+  assert.equal(f.starts(), 0); assert.equal(fs.readFileSync(path.join(f.workspace, 'keep'), 'utf8'), 'unfinished');
+});

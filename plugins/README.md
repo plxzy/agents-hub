@@ -112,3 +112,8 @@ Runner health is one line (`dok online · runs: helper, tikkytracker, vm, workfl
 diagnostics inside a collapsible disclosure. Missing observations are labelled unknown.
 
 Specification: https://github.com/openai/mcp-extensions/blob/main/docs/spec.md#mcp-app-entrypoints
+
+PR reviews use the actual GitHub PR branch. Version 0.4.7 adds local `checkout_review`, `finish_review` and
+`cleanup_reviews` operations; hosted `start_run` accepts `pr_number`. See the workflow README for the
+proof requirements and cleanup activation after live acceptance. Ratings and memory decisions
+remain unrelated to GitHub PR review.

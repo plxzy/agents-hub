@@ -21,16 +21,16 @@ export function githubClient(config, fetchImpl = fetch) {
     }
     return response.status === 204 ? null : response.json();
   }
-  async function token(repository, { readOnly = false } = {}) {
+  async function token(repository, { readOnly = false, reviewRead = false } = {}) {
     if (!/^[\w.-]+\/[\w.-]+$/.test(repository)) throw new PublicationError('rejected');
-    const key = repository + ':' + readOnly, old = cache.get(key);
+    const key = repository + ':' + readOnly + ':' + reviewRead, old = cache.get(key);
     if (old && old.until > Date.now() + 120000) return old.value;
     const now = Math.floor(Date.now() / 1000), encode = v => Buffer.from(JSON.stringify(v)).toString('base64url');
     const unsigned = `${encode({ alg: 'RS256', typ: 'JWT' })}.${encode({ iat: now - 60, exp: now + 540, iss: String(config.app_id) })}`;
     let jwt;
     try { jwt = unsigned + '.' + createSign('RSA-SHA256').update(unsigned).sign(fs.readFileSync(config.private_key_file), 'base64url'); }
     catch { throw new PublicationError('authentication'); }
-    const permissions = readOnly ? { contents: 'read' } : { contents: 'write', pull_requests: 'write', workflows: 'write' };
+    const permissions = readOnly ? { contents: 'read', ...(reviewRead ? { pull_requests: 'read' } : {}) } : { contents: 'write', pull_requests: 'write', workflows: 'write' };
     const result = await request(`/app/installations/${config.installation_id}/access_tokens`, { method: 'POST', token: jwt,
       body: { repositories: [repository.split('/')[1]], permissions } });
     if (!result.token || !Number.isFinite(Date.parse(result.expires_at))) throw new PublicationError('authentication');

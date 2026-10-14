@@ -1,3 +1,4 @@
+import { publicReview } from '../../agent-workflow/run-continuation.mjs';
 import { artifactIdentity, ARTIFACT_RUN_ID } from '../../agent-workflow/run-artifact-contract.mjs';
 import { publicPublication } from '../../agent-workflow/review-publication-contract.mjs';
 import { readArtifact, downloadArtifact } from './run-artifacts.mjs';
@@ -58,6 +59,23 @@ export async function readPublication(env, r) {
   if (r.source_review && r.commit === r.source_review.commit) return readPublication(env, { run_id: r.source_review.run_id });
   if (r.status === 'completed' && !r.review_ref) return { status: 'not_applicable' };
   return undefined;
+}
+export async function readReview(env, r) {
+  if (!env.REVIEW_PUBLISHER_TOKEN) return undefined;
+  const root = await rootOf(env, r);
+  const row = await env.DB.prepare('SELECT observation FROM review_threads WHERE root=?').bind(root).first();
+  return row?.observation ? publicReview(JSON.parse(row.observation)) : undefined;
+}
+export async function resolveReview(env, { repo, root, pr_number }) {
+  const target = await repository(env, repo);
+  if (!target || (root ? !ARTIFACT_RUN_ID.test(root) || pr_number !== undefined : !Number.isSafeInteger(pr_number) || pr_number < 1)) throw Error('Invalid review selection');
+  const thread = root
+    ? await env.DB.prepare('SELECT * FROM review_threads WHERE repo=? AND root=?').bind(repo, root).first()
+    : await env.DB.prepare('SELECT * FROM review_threads WHERE repo=? AND pr_number=?').bind(repo, pr_number).first();
+  if (!thread) throw Error('PR has not been published by Hub');
+  const pending = await env.DB.prepare("SELECT run_id FROM review_publications WHERE root=? AND status<>'published' LIMIT 1").bind(thread.root).first();
+  if (pending) throw Error('Resolve unpublished work before continuing');
+  return { ...thread, github: target.github, base: target.base };
 }
 export async function publicationHealth(env) {
   if (!env.REVIEW_PUBLISHER_TOKEN) return { enabled: false };
@@ -124,7 +142,21 @@ export async function publisherFetch(request, env) {
   if (!crypto.subtle.timingSafeEqual(a, b)) return json({ error: 'unauthorized' }, 401);
   const p = new URL(request.url).pathname;
   try {
-    if (p === '/relay/publisher/heartbeat' && request.method === 'POST') {
+    if (p === '/relay/publisher/resolve-review' && request.method === 'POST') return json(await resolveReview(env, await request.json()));
+    if (p === '/relay/publisher/threads' && request.method === 'GET') {
+      const { results } = await env.DB.prepare('SELECT t.*,r.github,r.base FROM review_threads t JOIN review_repositories r ON r.repo=t.repo ORDER BY t.root').all();
+      return json({ threads: results });
+    }
+    if (p === '/relay/publisher/observe-review' && request.method === 'POST') {
+      const value = publicReview(await request.json());
+      if (!value) throw Error('Invalid observation');
+      const updated = await env.DB.prepare(`UPDATE review_threads SET observation=? WHERE root=? AND branch=? AND pr_number=?
+        AND repo IN (SELECT repo FROM review_repositories WHERE github=?) RETURNING root`)
+        .bind(JSON.stringify(value), value.root, value.branch, value.pr_number, value.github).first();
+      if (!updated) throw Error('Unknown review');
+      return json({ ok: true });
+    }
+    if (p === '/relay/publisher/heartbeat'  && request.method === 'POST') {
       const value = await request.json();
       await env.DB.prepare('INSERT INTO review_publisher_health(id,observed_at) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET observed_at=excluded.observed_at')
         .bind(new Date().toISOString()).run();

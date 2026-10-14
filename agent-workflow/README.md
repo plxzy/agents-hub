@@ -401,3 +401,37 @@ attempts remain capped at two. Original failed receipts stay failed and link to 
 Hosted discovery must expose `start_run`, `resume_run` and `get_start_status`. Refresh client discovery after changing tool
 metadata; server-side advertisement alone does not prove a previously connected Dots session has refreshed its tools.
 For enabled repositories, the separate [dok review publisher](../tools/review-publisher/README.md) automatically publishes changed reviews as GitHub draft PRs. Follow-ups update the same PR. `publish_review` retries or explicitly backfills a saved run; `get_run` exposes its publication state and PR URL. Private Hub refs remain usable before publication completes.
+
+## One PR throughout review (2026-10-14)
+
+For GitHub-enabled repositories, `start_run` accepts `pr_number` with the existing repository selection.
+It is mutually exclusive with `continue_from`; both resolve a published review to its current open PR head.
+The publisher fetches that head into a per-run pinned ref. The receipt's `source_pr` records the input;
+`review` is a separate dated GitHub observation. Historical `commit`, `base_commit` and `publication`
+remain unchanged. No-edit runs retain their PR identity. Internal reviews retain `source_review` behavior.
+
+Unpublished work blocks another PR continuation. Concurrent branch changes block publication unless the
+exact saved result is already included. Reconcile the saved artifact into the PR branch and test before
+retrying `publish_review`; retry alone does not merge a divergent patch. Merged/closed PRs reject new work.
+Failed attempts keep their original checkpoint recovery. Expired conversation history can be restarted
+from an open linked PR with `pr_number`, never by silently substituting main.
+
+Local operations (via `agent call`, also exposed by the local MCP):
+
+```sh
+agent call checkout_review '{"cwd":"/absolute/primary/repository","pr_number":123}'
+agent call finish_review '{"cwd":"/absolute/primary/repository","pr_number":123}'
+agent call cleanup_reviews '{"cwd":"/absolute/primary/repository"}'
+```
+
+Checkout uses the actual PR branch in one worktree. Existing occupied branches are reported for reuse,
+not reset. Finish releases the session but never pushes or merges. Cleanup previews by default;
+`apply:true` removes verified merged reviews, including older review aliases. It fetches PR/base evidence,
+proves the local tip belongs to the merged PR and the merge result is reachable from the base, and uses
+compare-and-delete. Dirty/ignored files, locked or active worktrees, primary checkouts and unpublished
+commits are preserved. Activity inspection failure preserves the worktree. Stashes and run snapshots
+are never pruned. Proof/deletion journals are private under the workflow state directory.
+
+After live acceptance, set `STATE/review-cleanup.json` to `{"enabled":true}` (mode 600) to run cleanup on
+checkout/finish. There is no new background service. A stale operation lock is preserved for operator
+inspection rather than guessed safe to remove.

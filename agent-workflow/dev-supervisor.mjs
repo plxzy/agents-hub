@@ -94,6 +94,8 @@ try {
 } catch { /* frozen release */ }
 const processSession = randomUUID();
 const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts, knowledgeHub,
+  prepareReview: config.reviewPublisher ? (repo, id, selection) => config.reviewPublisher.repositories.includes(repo)
+    ? prepareReviewBase(config.reviewPublisher.socket, repo, id, selection) : null : null,
   prepareBase: config.reviewPublisher ? (repo, id) => config.reviewPublisher.repositories.includes(repo)
     ? prepareReviewBase(config.reviewPublisher.socket, repo, id) : null : null, hub_agents: hubAgents });
 // The knowledge release is frozen, so the runnable list is computed once per supervisor boot.
@@ -158,7 +160,7 @@ const controlServer = net.createServer({ allowHalfOpen: true }, socket => {
   socket.on('end', () => {
     if (request === 'drain') sessions.draining = true;
     else if (request === 'undrain') sessions.draining = false;
-    socket.end(JSON.stringify({ idle: !sessions.active && sessions.runs.size === 0 && !sessions.recoveryScanning, draining: sessions.draining === true }));
+    socket.end(JSON.stringify({ idle: !sessions.active && sessions.runs.size === 0 && !sessions.preparingStarts && !sessions.recoveryScanning, draining: sessions.draining === true }));
   });
 });
 await new Promise((resolve, reject) => { controlServer.once('error', reject); controlServer.listen(controlPath, resolve); });
@@ -171,7 +173,7 @@ try {
       last_pong_at: last_pong_at ?? null, fatal: fatal === true }) });
 } finally {
   sessions.stop();
-  for (let n = 0; n < 60 && (sessions.active || sessions.runs.size); n++) await new Promise(r => setTimeout(r, 100));
+  for (let n = 0; n < 60 && (sessions.active || sessions.runs.size || sessions.preparingStarts); n++) await new Promise(r => setTimeout(r, 100));
   sessions.active?.child?.kill('SIGKILL');
   controlServer.close();
   try { fs.unlinkSync(controlPath); } catch {}

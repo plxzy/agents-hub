@@ -5,7 +5,7 @@ import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { boundedBytes, artifactManifest } from '../../agent-workflow/run-artifact-contract.mjs';
 import { githubClient, PublicationError } from './github.mjs';
-import { prepareBase, publishJob } from './publisher.mjs';
+import { prepareBase, prepareReview, observeReview, cleanupMergedReview, publishJob } from './publisher.mjs';
 
 export function serializeByKey() {
   const jobs = new Map();
@@ -29,7 +29,7 @@ export async function serve(config) {
     if (!r.ok) throw new PublicationError('unavailable', true);
     return r;
   };
-  let stopping = false, active = false, currentJob = null, heartbeating = false;
+  let stopping = false, active = false, currentJob = null, heartbeating = false, lastReviewPoll = 0;
   const heartbeat = async () => {
     if (heartbeating) return;
     heartbeating = true;
@@ -43,11 +43,19 @@ export async function serve(config) {
     res.setHeader('content-type', 'application/json');
     try {
       if (req.method === 'GET' && req.url === '/health') return res.end(JSON.stringify({ ok: !stopping, active }));
-      if (stopping || req.method !== 'POST' || req.url !== '/prepare-base') throw Error('Unsupported request');
+      if (stopping || req.method !== 'POST' || !['/prepare-base', '/prepare-review'].includes(req.url)) throw Error('Unsupported request');
       let text = ''; for await (const b of req) { text += b; if (text.length > 2048) throw Error('Request too large'); }
       const args = JSON.parse(text);
-      if (Object.keys(args).some(k => !['repo', 'run_id'].includes(k))) throw Error('Invalid request');
-      const result = await serial(args.repo, () => prepareBase(config, github, args));
+      if (Object.keys(args).some(k => !['repo', 'run_id', 'selection'].includes(k))) throw Error('Invalid request');
+      const result = await serial(args.repo, async () => {
+        if (req.url === '/prepare-base') return prepareBase(config, github, args);
+        const selection = args.selection;
+        if (!selection || Object.keys(selection).some(k => !['root', 'pr_number'].includes(k))) throw Error('Invalid selection');
+        const thread = await (await hub('resolve-review', { repo: args.repo, ...selection })).json();
+        const value = await prepareReview(config, github, args, thread);
+        await hub('observe-review', { ...value.source_pr, state: 'open' });
+        return value;
+      });
       res.end(JSON.stringify(result));
     } catch { res.statusCode = 503; res.end(JSON.stringify({ error: 'Fresh GitHub base unavailable; check review publisher' })); }
   });
@@ -72,6 +80,18 @@ export async function serve(config) {
     while (!stopping) {
       let job;
       try {
+        if (Date.now() - lastReviewPoll >= 60000) {
+          lastReviewPoll = Date.now();
+          const { threads } = await (await hub('threads')).json();
+          for (const thread of threads) {
+            try { await serial(thread.repo, async () => {
+              const observed = await observeReview(config, github, thread);
+              await hub('observe-review', observed);
+              if (observed.state === 'merged') await cleanupMergedReview(config, github, thread);
+            }); }
+            catch { /* Keep the last dated observation; preparation still requires fresh GitHub access. */ }
+          }
+        }
         job = (await (await hub('claim', {})).json()).job;
         fs.writeFileSync(config.state + '/heartbeat.json', JSON.stringify({ at: Date.now() }), { mode: 0o600 });
         if (job) {

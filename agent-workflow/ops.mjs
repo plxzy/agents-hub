@@ -1,3 +1,4 @@
+import { checkoutReview, finishReview, cleanupReviews } from './pr-checkouts.mjs';
 import { PUBLISH_REVIEW } from './review-publication-contract.mjs';
 import { SELECTED_START_INPUT, SELECTION_VERSION, dokTarget } from './run-selection.mjs';
 import { startSelected, selectedStartStatus, selectedStarts } from './selected-starts.mjs';
@@ -73,7 +74,19 @@ const AGENT_ARGS = {
   continue: { type: 'boolean', description: 'Continue the agent\'s previous conversation', default: false },
 };
 
+const reviewInput = { type: 'object', required: ['cwd', 'pr_number'], additionalProperties: false,
+  properties: { cwd: { type: 'string', description: 'Absolute root of the primary local repository checkout.' }, pr_number: { type: 'integer', minimum: 1 } } };
 export const OPS = [
+  { name: 'checkout_review', title: 'Check out a PR', access: 'run', input: reviewInput,
+    description: 'Use one local worktree tracking the actual PR branch. Reuses occupied branch locations without resetting them. Performs enabled cleanup of proven merged reviews first.',
+    annotations: { readOnlyHint: false }, run: (args, ctx) => checkoutReview(args, ctx.state ?? STATE) },
+  { name: 'finish_review', title: 'Finish a local review', access: 'run', input: reviewInput,
+    description: 'Release the local review session and clean proven merged reviews when cleanup is enabled. Does not push or merge.',
+    annotations: { readOnlyHint: false }, run: (args, ctx) => finishReview(args, ctx.state ?? STATE) },
+  { name: 'cleanup_reviews', title: 'Clean merged review branches', access: 'run',
+    input: { type: 'object', required: ['cwd'], additionalProperties: false, properties: { cwd: reviewInput.properties.cwd, apply: { type: 'boolean', default: false } } },
+    description: 'Audit local review branches against GitHub merge evidence. apply=true removes only proven merged, inactive, clean reviews; primary checkout and unpublished work are preserved.',
+    annotations: { readOnlyHint: false }, run: (args, ctx) => cleanupReviews(args, ctx.state ?? STATE) },
   { name: 'publish_review', ...PUBLISH_REVIEW, access: 'run', annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
     run: (args, ctx) => hubPublishReview(args, hubOptions(ctx)) },
   // Read operations: names, descriptions, schemas and result shapes are shared with the hosted hub (contract.mjs).

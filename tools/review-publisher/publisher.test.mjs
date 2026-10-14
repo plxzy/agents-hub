@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, generateKeyPairSync } from 'node:crypto';
-import { git, prepareBase, publishJob, verifiedRepository, reviewBody } from './publisher.mjs';
+import { git, prepareBase, prepareReview, cleanupMergedReview, publishJob, verifiedRepository, reviewBody } from './publisher.mjs';
 import { githubClient, PublicationError } from './github.mjs';
 import { serializeByKey } from './server.mjs';
 
@@ -111,4 +111,67 @@ test('per-repository operations serialize, while different repositories can prog
 test('PR report omits prompts and obvious private material', () => {
   const j = job(); j.receipt.task = 'private task'; j.receipt.output = '17 tests passed\n/home/agent/private\nBearer secret\nhttps://host/path?token=secret';
   const body = reviewBody(j); assert.match(body, /17 tests passed/); assert.doesNotMatch(body, /private task|\/home|Bearer|token=/);
+});
+
+test('publication adopts a trusted pinned reviewer head and blocks later concurrent changes', async t => {
+  const state = await fs.mkdtemp(path.join(os.tmpdir(), 'publisher-review-')); t.after(() => fs.rm(state, { recursive: true, force: true }));
+  const f = fake(); await publishJob(config, f.gh, job(), new Uint8Array(), f.io);
+  const human = 'd'.repeat(40), next = job(); next.run_id = NEXT;
+  next.receipt = { ...next.receipt, run_id: NEXT, commit: C, base_commit: human,
+    source_pr: { root: RUN, github: 'owner/vm', pr_number: 17, branch: next.branch, commit: human, observed_at: '2026-10-14T12:00:00Z' } };
+  next.thread = { repo: 'vm', branch: next.branch, commit_sha: B, pr_number: 17 };
+  await fs.mkdir(path.join(state, 'bases'));
+  await fs.writeFile(path.join(state, 'bases', NEXT + '.json'), JSON.stringify({ repo: 'vm', commit: human, source_pr: next.receipt.source_pr }));
+  f.head = human;
+  await publishJob({ ...config, state }, f.gh, next, new Uint8Array(), f.io);
+  assert.equal(f.creates, 1); assert.equal(f.pushes, 2);
+  f.head = A;
+  await assert.rejects(publishJob({ ...config, state }, f.gh, next, new Uint8Array(), f.io), /conflict/);
+  assert.equal(f.pushes, 2);
+});
+
+test('a retry after merge and branch deletion never recreates the branch', async () => {
+  const f = fake(); await publishJob(config, f.gh, job(), new Uint8Array(), f.io);
+  f.pr.state = 'closed'; f.pr.merged_at = '2026-10-14T12:00:00Z';
+  const real = f.gh.request;
+  f.gh.request = async (url, options) => {
+    if (url.endsWith('/pulls/17')) return { ...f.pr, head: { ...f.pr.head, sha: B } };
+    return real(url, options);
+  };
+  f.head = null;
+  const j = job(); j.thread = { repo: 'vm', branch: j.branch, commit_sha: B, pr_number: 17 };
+  assert.equal((await publishJob(config, f.gh, j, new Uint8Array(), f.io)).status, 'published');
+  assert.equal(f.pushes, 1);
+});
+
+test('PR preparation pins a fetched reviewer head and rejects closed PRs', async t => {
+  const state = await fs.mkdtemp(path.join(os.tmpdir(), 'prepare-pr-')); t.after(() => fs.rm(state, { recursive: true, force: true }));
+  const f = fake(); await publishJob(config, f.gh, job(), new Uint8Array(), f.io); f.head = C;
+  let ref, fetches = 0;
+  const gitImpl = async (_repo, args) => {
+    if (args[0] === 'fetch') { ref = C; fetches++; }
+    if (args[0] === 'rev-parse') { if (!ref) throw Error('missing'); return ref; }
+  };
+  const thread = { root: RUN, repo: 'vm', github: 'owner/vm', branch: job().branch, base: 'main', commit_sha: B, pr_number: 17 };
+  const value = await prepareReview({ ...config, state }, f.gh, { repo: 'vm', run_id: NEXT }, thread, gitImpl);
+  assert.equal(value.source_pr.commit, C); assert.equal(value.source_pr.root, RUN);
+  assert.deepEqual(await prepareReview({ ...config, state }, f.gh, { repo: 'vm', run_id: NEXT }, thread, gitImpl), value);
+  assert.equal(fetches, 1);
+  f.pr.state = 'closed';
+  await assert.rejects(prepareReview({ ...config, state }, f.gh, { repo: 'vm', run_id: NEXT }, thread, gitImpl), /conflict/);
+});
+test('remote cleanup uses a compare-and-delete lease and preserves changed tips', async t => {
+  const state = await fs.mkdtemp(path.join(os.tmpdir(), 'cleanup-pr-')); t.after(() => fs.rm(state, { recursive: true, force: true }));
+  const f = fake(); await publishJob(config, f.gh, job(), new Uint8Array(), f.io);
+  f.pr.state = 'closed'; f.pr.merged_at = '2026-10-14T12:00:00Z'; f.pr.merge_commit_sha = C;
+  const request = f.gh.request; f.gh.request = (url, options) => url.includes('state=open') ? [] : request(url, options);
+  const thread = { root: RUN, repo: 'vm', github: 'owner/vm', branch: job().branch, base: 'main', pr_number: 17 };
+  const calls = [], gitImpl = async (_repo, args) => { calls.push(args); };
+  assert.equal((await cleanupMergedReview({ ...config, state }, f.gh, thread, gitImpl)).status, 'disabled');
+  assert.equal((await cleanupMergedReview({ ...config, state, cleanupMergedBranches: true }, f.gh, thread, gitImpl)).status, 'deleted');
+  assert.ok(calls.some(args => args.includes(`--force-with-lease=refs/heads/${thread.branch}:${B}`)));
+  f.head = A;
+  // Keep the PR's final merge head at B while the branch has changed.
+  f.gh.request = (url, options) => url.endsWith('/pulls/17') ? { ...f.pr, head: { ...f.pr.head, sha: B } } : request(url, options);
+  assert.equal((await cleanupMergedReview({ ...config, state, cleanupMergedBranches: true }, f.gh, thread, gitImpl)).status, 'preserved');
 });

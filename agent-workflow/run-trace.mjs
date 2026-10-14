@@ -1,7 +1,7 @@
 // Presentation shared by local operations and the bundled HTML dashboard.
 // Only receipt facts: never resolve today's checkout or infer a branch from an agent default.
 import { recoveryAction } from './recovery-contract.mjs';
-import { publicSourceReview, reviewSource } from './run-continuation.mjs';
+import { publicSourceReview, reviewSource, publicSourcePr, publicReview } from './run-continuation.mjs';
 export function publicRunContext(r = {}) {
   const text = v => typeof v === 'string' && v.length <= 200 && !/[\x00-\x1f\x7f]|Bearer\s|\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}/i.test(v);
   const sha = v => typeof v === 'string' && /^[a-f0-9]{40,64}$/.test(v);
@@ -31,7 +31,8 @@ export function runTrace(r = {}) {
     ['Repository', recorded(r.repo)],
     ['Workspace', recorded(r.workspace)],
     ['Checkout branch', r.checkout_detached === true ? 'Detached HEAD (at start)' : recorded(r.checkout_branch)],
-    ['Review branch', recorded(r.review_ref)],
+    ['Saved run snapshot', recorded(r.review_ref)],
+    ...(publicSourcePr(r.source_pr) ? [['PR at start', `#${r.source_pr.pr_number} (${r.source_pr.branch})`], ['PR starting commit', r.source_pr.commit]] : []),
     ['Base commit', recorded(r.base_commit)],
     ['Recorded commit', recorded(r.commit)],
     ...(publicSourceReview(r.source_review) ? [['Source review run', r.source_review.run_id], ['Source review commit', r.source_review.commit], ['Source review base', r.source_review.base_commit]] : []),
@@ -91,12 +92,21 @@ export function withFailureGuidance(r) {
   const { failure_guidance: _ignored, next_action: _action, ...receipt } = r;
   const guidance = failureGuidance(receipt);
   const source = reviewSource(receipt), action = recoveryAction(receipt);
-  const next_action = source ? { tool: 'start_run', continue_from: receipt.run_id, source_review: source,
+  let next_action = source ? { tool: 'start_run', continue_from: receipt.run_id, source_review: source,
     note: 'Use continue_from explicitly. If the conversation expired, import the source artifact; never substitute a fresh main checkout.' }
     : action === 'decide_recovery' ? { tool: 'open_dashboard', run_id: receipt.run_id,
       note: 'The user must approve continuation from inspected files in the Hub recovery card. Models cannot approve recovery.' }
     : action ? { tool: action, run_id: receipt.run_id, checkpoint_version: receipt.recovery.checkpoint_version }
     : receipt.recovery?.resumed_by ? { tool: 'get_run', run_id: receipt.recovery.resumed_by } : undefined;
+  const pr = publicReview(receipt.review), input = publicSourcePr(receipt.source_pr);
+  if (receipt.status === 'completed') {
+    if (pr?.state === 'merged' || pr?.state === 'closed') next_action = { note: `PR #${pr.pr_number} is ${pr.state}. New work requires a new PR from current main.` };
+    else if (['waiting_artifact', 'queued', 'publishing', 'retrying', 'blocked'].includes(receipt.publication?.status))
+      next_action = { tool: receipt.publication.status === 'blocked' ? 'publish_review' : 'get_run', run_id: receipt.run_id,
+        note: 'Resolve publication of the saved result before starting further work. A conflict requires reconciliation; retrying alone does not integrate changes.' };
+    else if (pr || input) next_action = { tool: 'start_run', repo: receipt.repo, pr_number: (pr ?? input).pr_number,
+      note: 'Continue the current PR head, including reviewer fixes. Preparation checks GitHub again; this observation is historical.' };
+  }
   return { ...receipt, ...(guidance ? { failure_guidance: guidance } : {}), ...(next_action ? { next_action } : {}) };
 }
 

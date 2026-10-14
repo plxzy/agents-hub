@@ -86,3 +86,27 @@ test('auth boundaries, activation cutoff, unchanged runs and explicit backfills'
   const counts = await db.prepare('SELECT COUNT(*) AS n FROM review_publications').first(); assert.equal(counts.n, 1);
   assert.equal((await tool('publish_review', { run_id: NEXT })).isError, true);
 });
+
+test('PR observations remain separate from historical publication and pending work blocks selection', async t => {
+  const { call, post, upload, read } = await runtime(t), r = receipt();
+  await post(r); await upload(r);
+  const job = (await (await call('/relay/publisher/claim', {})).json()).job;
+  await call('/relay/publisher/finish', { run_id: RUN, lease: job.lease, status: 'published', commit: r.commit, pr_number: 5, pr_url: 'https://github.com/owner/vm/pull/5' });
+  const selected = await (await call('/relay/publisher/resolve-review', { repo: 'vm', pr_number: 5 })).json();
+  assert.equal(selected.root, RUN);
+  const review = { root: RUN, github: 'owner/vm', pr_number: 5, branch: `review/agents/${RUN}`, commit: 'd'.repeat(40), observed_at: '2026-10-14T12:00:00Z', state: 'open' };
+  assert.equal((await call('/relay/publisher/observe-review', review)).status, 200);
+  let current = await read(RUN);
+  assert.equal(current.commit, r.commit); assert.equal(current.publication.commit, r.commit);
+  assert.equal(current.review.commit, review.commit); assert.equal(current.next_action.pr_number, 5);
+  const noEdit = { ...receipt(NEXT), review_conversation_id: RUN, continued_from: RUN, source_pr: review,
+    review_ref: undefined, base_commit: review.commit, commit: review.commit, changed_files: [] };
+  await post(noEdit); current = await read(NEXT);
+  assert.equal(current.source_pr.commit, review.commit); assert.equal(current.review.pr_number, 5); assert.equal(current.next_action.pr_number, 5);
+  await call('/relay/publisher/observe-review', { ...review, state: 'merged' });
+  assert.equal((await read(NEXT)).next_action.tool, undefined);
+  const blocked = { ...receipt(NEXT), review_conversation_id: RUN, base_commit: review.commit, commit: 'e'.repeat(40) };
+  await post(blocked);
+  assert.equal((await call('/relay/publisher/resolve-review', { repo: 'vm', root: RUN })).status, 409);
+  assert.equal((await call('/relay/publisher/observe-review', { ...review, github: 'foreign/repo' })).status, 409);
+});

@@ -1,4 +1,4 @@
-import { ensurePublication, readPublication } from './review-publications.mjs';
+import { ensurePublication, readPublication, readReview } from './review-publications.mjs';
 // Run receipts in D1: written by authenticated runners, read by the Hub's MCP tools.
 import { publicRecovery } from '../../agent-workflow/recovery-contract.mjs';
 import { containsSecret } from './snapshot.mjs';
@@ -10,7 +10,7 @@ import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
 import { withFailureGuidance, publicRunContext } from '../../agent-workflow/run-trace.mjs';
 import { runConfiguration, runtimeConfig } from '../../agent-workflow/run-config.mjs';
 import { readArtifact } from './run-artifacts.mjs';
-import { publicSourceReview } from '../../agent-workflow/run-continuation.mjs';
+import { publicSourceReview, publicSourcePr } from '../../agent-workflow/run-continuation.mjs';
 
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
@@ -54,6 +54,7 @@ export function sanitizeReceipt(r, runner) {
     review_conversation_id: runner === 'dok' && RUN_ID.test(r.review_conversation_id ?? r.root ?? '') ? (r.review_conversation_id ?? r.root) : undefined,
     continued_from: RUN_ID.test(r.continued_from ?? '') ? r.continued_from : undefined,
     source_review: publicSourceReview(r.source_review),
+    source_pr: publicSourcePr(r.source_pr),
     changed_files: Array.isArray(r.changed_files) ? r.changed_files.filter((f) => typeof f === 'string' && f.length <= 300 && !/[\r\n]/.test(f)).slice(0, 200) : undefined,
     memory_proposed: Number.isInteger(r.memory_proposed) && r.memory_proposed >= 0 && r.memory_proposed <= 20 ? r.memory_proposed : undefined,
     memory_source: ['hub', 'frozen-release'].includes(r.memory_source) ? r.memory_source : undefined,
@@ -106,6 +107,8 @@ export async function readRun(env, runId) {
   catch { /* Run receipts remain readable during artifact-store outages. */ }
   const publication = await readPublication(env, receipt);
   if (publication) receipt.publication = publication;
+  const review = await readReview(env, receipt);
+  if (review) receipt.review = review;
   return withFailureGuidance(rating ? { ...receipt, feedback: rating } : receipt);
 }
 
@@ -118,7 +121,7 @@ export async function recentRuns(env, { agent, limit = 50 } = {}) {
       : env.DB.prepare('SELECT receipt, updated_at FROM runs ORDER BY started DESC LIMIT ?').bind(n);
     const { results } = await stmt.all();
     const receipts = results.map((x) => observedRun(x)).reverse(), ratings = await ratingsFor(env, receipts.map((r) => r.run_id));
-    return Promise.all(receipts.map(async r => ({ ...runBrief({ ...r, publication: await readPublication(env, r), feedback: ratings.get(r.run_id) }), runner: r.runner })));
+    return Promise.all(receipts.map(async r => ({ ...runBrief({ ...r, publication: await readPublication(env, r), review: await readReview(env, r), feedback: ratings.get(r.run_id) }), runner: r.runner })));
   } catch { return []; } // table missing before migration: behave as before
 }
 

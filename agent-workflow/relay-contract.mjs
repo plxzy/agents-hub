@@ -31,7 +31,8 @@ export const RELAY_OPS = {
       agent: { type: 'string', maxLength: 100 }, task: { type: 'string', minLength: 1, maxLength: 16000 },
       continue: { type: 'boolean' }, request_id: requestId,
       repo: { type: 'string', pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$', description: 'Repository on dok for agents that are not tied to one (e.g. workflow). Defaults to the agent\u2019s own repository.' },
-      continue_from: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$', description: 'Latest completed run of this agent on the same review conversation, including a no-edit review. Reads its saved review commit, never main. Failed work requires resume_run.' },
+      pr_number: { type: 'integer', minimum: 1, description: 'Existing Hub-linked PR in repo. Continue its current GitHub head, including reviewer fixes. Mutually exclusive with continue_from.' },
+      continue_from: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$', description: 'Latest completed run of this agent on the same review conversation, including a no-edit review. Published reviews start from the current PR head; internal reviews use their saved commit. Failed work requires resume_run.' },
       model: { ...{ type: 'string', pattern: '^[a-z0-9-]{1,40}/[A-Za-z0-9._:-]{1,80}$' }, description: 'Optional per-run model override as provider/model, e.g. openai/gpt-6.1-sol. Defaults to the agent definition.' },
       thinking: { ...{ type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] }, description: 'Optional per-run thinking level. Defaults to the agent definition.' },
     } }, description: 'Start one of the user\u2019s own Pi agents. Runs on dok, the always-on Linux runner. Read-only agents (helper) get a read-only clone. Agents that change files (see get_status, start_run.runners.dok: e.g. workflow, vm, tikkytracker) work in an isolated writable clone with no network; their changes come back as a saved review, never merged. Configured repositories automatically publish GitHub draft PRs; poll get_run.publication for the URL or blocker. Read get_run first. Follow its next_action: pass continue_from for a completed patch or review, or resume_run for eligible failed work. A run id mentioned only in task text does not attach its files. Never inspect another run by starting a fresh clone; never recreate a saved patch because it is absent from a fresh workspace. Use this (e.g. agent helper) for questions about the user\u2019s repositories instead of delegating to Codex cloud tasks or operating the user\u2019s Mac. Returns run_id at once; poll get_run until the status is no longer running. Optional model (provider/model, e.g. openai/gpt-6.1-sol) and thinking override the agent defaults for this run only. Supply a unique request_id; reuse it only for the exact same request.' },
@@ -47,6 +48,7 @@ export const RELAY_OPS = {
 export function validateRelay(name, args) {
   const op = Object.hasOwn(RELAY_OPS, name) ? RELAY_OPS[name] : undefined;
   if (!op || !args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Invalid relay operation');
+  if (name === 'start_run' && args.pr_number !== undefined && args.continue_from !== undefined) throw Error('Select pr_number or continue_from');
   for (const key of op.input.required ?? []) if (!(key in args)) throw new Error(`Missing ${key}`);
   for (const [key, value] of Object.entries(args)) {
     const rule = op.input.properties[key];

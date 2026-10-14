@@ -13,3 +13,15 @@ export function reviewSource(r) {
 export function verifyContinuationHead(source, actual) {
   if (!publicSourceReview(source) || actual !== source.commit) throw Error('Saved review commit mismatch; preserve the original artifact');
 }
+
+export function publicSourcePr(v) {
+  if (!v || !run(v.root) || !sha(v.commit) || !/^[\w.-]+\/[\w.-]+$/.test(v.github ?? '')
+    || !Number.isSafeInteger(v.pr_number) || v.pr_number < 1 || v.branch !== `review/agents/${v.root}`
+    || !Number.isFinite(Date.parse(v.observed_at))) return undefined;
+  return { root: v.root, github: v.github, pr_number: v.pr_number, branch: v.branch, commit: v.commit, observed_at: v.observed_at };
+}
+export function publicReview(v) {
+  const source = publicSourcePr(v);
+  if (!source || !['open', 'closed', 'merged'].includes(v.state)) return undefined;
+  return { ...source, state: v.state, pr_url: `https://github.com/${source.github}/pull/${source.pr_number}` };
+}
