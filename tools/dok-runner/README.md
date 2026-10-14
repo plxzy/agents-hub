@@ -7,9 +7,15 @@ cutover happened on 2026-10-12 17:01 UTC. The old `dok-agent` unit is disabled a
 the old `dok-dev` container and Codex image were removed on 2026-10-12. Its named volumes remain preserved.
 
 The image selected by Compose is `agents-runner:pi-1.2.0-tools-20261014`, based on the digest-pinned Node 26.11.1 Debian 13 Trixie slim
-image. It contains Pi 1.2.0 (from the lockfile), `pi-openai-accounts`, bubblewrap, Git, Python 3, procps, mawk, CA certificates
+image. It contains Pi 1.2.0 (from the lockfile), bubblewrap, Git, Python 3, procps, mawk, CA certificates
 and tini. It has no standalone `codex` executable, SSH daemon or editor. The image strips Pi's unused OpenAI Codex
-provider and OAuth/API modules; the ordinary OpenAI provider remains for `pi-openai-accounts`.
+provider and OAuth/API modules; the ordinary OpenAI provider remains.
+
+Private Pi extensions are not part of this repo. Compose passes the folder named by `AGENTS_EXTENSIONS` (in
+`~/agents-runner/.env`; default the empty `./extensions`) as the `extensions` build context, and the image copies it to
+`/opt/pi-extensions/`. An accounts module there that exports `accountProvider(slot, name, catalog)` adds extra provider
+logins: name it as `accounts_module` in the runner config and list the slots in `limits.slots` (default: one slot,
+`openai`).
 
 | What | Where (inside the `agents-home` volume) |
 |---|---|

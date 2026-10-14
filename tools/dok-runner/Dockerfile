@@ -15,10 +15,10 @@ RUN cd /opt/pi && npm ci --ignore-scripts --no-audit --no-fund && npm cache clea
     && ln -s /opt/pi/node_modules/.bin/pi /usr/local/bin/pi \
     && chmod 755 /usr/local/bin/agent-healthcheck \
     && test "$(pi --version)" = 1.2.0
-# OpenAI account slots (openai-2, openai-3, ...): loaded by interactive Pi for /login and by the run worker.
-COPY pi-openai-accounts /opt/pi-openai-accounts
-RUN ln -s /opt/pi/node_modules /opt/pi-openai-accounts/node_modules \
-    && node -e "import('/opt/pi-openai-accounts/index.ts').then(m => { if (typeof m.accountProvider !== 'function') process.exit(1); })"
+# Optional private Pi extensions (named build context "extensions"; the default ./extensions is empty), e.g. an
+# accounts module for extra provider logins that the runner config names as accounts_module.
+COPY --from=extensions / /opt/pi-extensions/
+RUN for d in /opt/pi-extensions/*/; do if test -f "$d/package.json"; then ln -s /opt/pi/node_modules "$d/node_modules"; fi; done
 USER agent
 WORKDIR /home/agent
 ENV PATH=/home/agent/.local/bin:/usr/local/bin:/usr/bin:/bin

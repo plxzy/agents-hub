@@ -81,7 +81,7 @@ export class DevelopmentSessions extends RecoveryHost {
     // Two independent clones may run at once. A repository lock below still serializes work aimed at
     // the same project; these limits bound model, disk and account pressure.
     this.limits = { diskBytes: 4 * 1024 ** 3, freeBytes: 20 * 1024 ** 3, taskMs: 30 * 60000, runs: 2, runMs: 15 * 60000, writeRuns: 2, writeMs: 30 * 60000, keepConversations: 20, keepMs: 7 * 24 * 3600000,
-      autoRecovery: false, slots: ['openai', 'openai-2', 'openai-3'], cooldownMs: 60 * 60000, disableMs: 24 * 60 * 60000, ...limits };
+      autoRecovery: false, slots: ['openai'], cooldownMs: 60 * 60000, disableMs: 24 * 60 * 60000, ...limits };
     this.active = null;
     this.runs = new Map();
     fs.mkdirSync(this.state, { recursive: true, mode: 0o700 });

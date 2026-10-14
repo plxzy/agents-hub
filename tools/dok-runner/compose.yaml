@@ -2,7 +2,11 @@ name: agents
 services:
   runner:
     image: agents-runner:pi-1.2.0-tools-20261014
-    build: .
+    build:
+      context: .
+      # Private Pi extensions kept outside this repo; set AGENTS_EXTENSIONS in ~/agents-runner/.env.
+      additional_contexts:
+        extensions: ${AGENTS_EXTENSIONS:-./extensions}
     container_name: agents
     restart: unless-stopped
     stop_grace_period: 15s
