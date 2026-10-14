@@ -11,8 +11,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const secrets = /(auth\.json|\.credentials|credentials\.json|\.npmrc|\.netrc|\.claude\.json|\.ssh\b|\.aws\b|\.gnupg\b|Keychains|Cookies\b|(^|[\s/'"])\.env(\.|\b)|link\.json|publish\.env|\.pem$|\.key$|id_(rsa|ed25519))/;
 
-const real = (p: string) => {
-	try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+// A path that does not exist yet resolves through its nearest existing parent, and a dangling symlink through its
+// target, so a link inside the workspace cannot point a not-yet-existing name outside it.
+const real = (p: string, depth = 0): string => {
+	const abs = path.resolve(p);
+	try { return fs.realpathSync(abs); } catch { /* resolve below */ }
+	const parent = path.dirname(abs);
+	if (parent === abs || depth > 40) return abs;
+	try { return real(path.resolve(parent, fs.readlinkSync(abs)), depth + 1); } catch { /* not a link */ }
+	return path.join(real(parent, depth + 1), path.basename(abs));
 };
 
 /** Why a tool call is blocked in a remote run, or undefined. */

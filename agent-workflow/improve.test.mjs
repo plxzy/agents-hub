@@ -17,6 +17,9 @@ function home() {
   return { root, state: path.join(root, '.state') };
 }
 
+// Commits made by the code under test need an identity on machines without a git config (CI).
+for (const k of ['GIT_AUTHOR', 'GIT_COMMITTER']) { process.env[`${k}_NAME`] ??= 'test'; process.env[`${k}_EMAIL`] ??= 'test@example.invalid'; }
+
 test('regex flags repeat and preserve commas, with single-value legacy compatibility', (t) => {
   const { root } = home();
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
