@@ -180,7 +180,7 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
   const html = dashboardHtml(), refreshed = [];
   const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null,
     S: { detail: { run_id: 'mac-run', agent: 'helper', status: 'unknown', error: 'Mac heartbeat expired' }, busy: new Set() },
-    canDecide: () => true, list: () => null, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
+    canDecide: () => true, canArchive: () => false, list: () => null, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
     h: (tag, attrs, ...children) => ({ tag, attrs, children }),
   });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
@@ -197,7 +197,7 @@ test('run details render shared historical context as text and label absent fiel
   const html = dashboardHtml({ bridge: '' });
   const receipt = { run_id: 'r-demo', agent: 'demo', repo: '<script>not executable</script>', commit: 'a'.repeat(40), status: 'failed', error: 'model turn failed' };
   const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
-    canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+    canDecide: () => false, canArchive: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.detailView());
@@ -216,7 +216,7 @@ test('failed detail shows its error alongside labelled partial output and record
   const receipt = { run_id: 'r-failed', agent: 'helper', status: 'failed', error: 'model turn failed', output: 'Useful partial answer', output_partial: true,
     failure_context: { phase: 'model', last_tool: 'read', provider: 'openai', model: 'gpt-6-luna', message: '503 upstream disconnected' } };
   const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
-    canDecide: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+    canDecide: () => false, canArchive: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.detailView());
@@ -232,14 +232,52 @@ test('run list and detail expose live progress, stale checkpoints and missing ol
   const receipt = { run_id: 'live', agent: 'helper', status: 'running', progress: { phase: 'tool', action: 'tool_started',
     observed_at: time, last_tool: 'read', checkpoint: 'tool_error', checkpoint_tool: 'ls', checkpoint_at: time, blocker: 'tool_error' } };
   const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S: { detail: receipt, data: { runs: [receipt] }, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
-    canDecide: () => false, list: () => null, ago: () => '1m', firstLine: x => x, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+    canDecide: () => false, canArchive: () => false, list: () => null, ago: () => '1m', firstLine: x => x, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
-  for (const name of ['detailView', 'runsView']) vm.runInContext(html.match(new RegExp(`function ${name}\\(\\) \\{[\\s\\S]*?\\n\\}`))[0], context);
+  vm.runInContext(html.match(new RegExp(`function detailView\\(\\) \\{[\\s\\S]*?\\n\\}`))[0], context);
+  loadRunList(html, context);
   const detail = JSON.stringify(context.detailView());
   for (const text of ['Run progress', 'Last reported phase', 'Latest checkpoint', 'ls reported an error', 'Last tool', 'read', 'Blocker', 'stale observation']) assert.ok(detail.includes(text), text);
   assert.match(JSON.stringify(context.runsView()), /read started.*stale observation/);
   delete receipt.progress;
   assert.match(JSON.stringify(context.detailView()), /not published telemetry/);
+});
+
+// The run list's functions, from runRow up to recoveryView, in one script so their helpers resolve.
+function loadRunList(html, context) {
+  context.hubPanel ??= () => false; context.progressSummary ??= progressSummary;
+  vm.runInContext(html.slice(html.indexOf('function runRow('), html.indexOf('function recoveryView(r) {')).replace(/^const /gm, 'var '), context);
+}
+
+test('run list groups review conversations, filters runs and offers archiving only with codes', () => {
+  const html = dashboardHtml(), calls = [], plain = (x) => JSON.parse(JSON.stringify(x));
+  const run = (id, extra) => ({ run_id: id, agent: 'vm', kind: 'task', status: 'completed', started: `2026-10-14T0${id.at(-1)}:00:00Z`, tool_calls: 1, ...extra });
+  const runs = [run('r-1', { conversation_id: 'r-1', review: { pr_number: 4, state: 'merged' } }), run('r-2', { conversation_id: 'r-1', continued_from: 'r-1', review: { pr_number: 4, state: 'merged' } }),
+    run('r-3', { agent: 'helper', status: 'failed', tool_calls: 0 }), run('r-4', { agent: 'helper', feedback: 'good' })];
+  const context = vm.createContext({ S: { data: { hub_panel: true, runs, capabilities: { mutate: true },
+      archive_suggestions: [{ run_id: 'r-1', reason: 'PR #4 merged' }, { run_id: 'r-2', reason: 'PR #4 merged' }, { run_id: 'r-3', reason: 'stopped before doing anything' }] },
+    busy: new Set(), confirm: { archive: { 'r-1': 'c'.repeat(24), 'r-2': 'd'.repeat(24) } } },
+    canDecide: () => true, hubPanel: () => true, ago: () => 'now', firstLine: (x) => x, render() {}, loadDetail() {}, refresh: async () => {},
+    act: async (_key, fn) => fn(), call: async (name, args) => { calls.push({ name, ...args }); return {}; }, crypto: { randomUUID: () => 'req-00000001' },
+    h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  loadRunList(html, context);
+  const groups = context.conversations(runs);
+  assert.deepEqual(plain(groups.map((g) => g.members.map((r) => r.run_id))), [['r-4'], ['r-3'], ['r-2', 'r-1']], 'newest first, continuations folded under their newest run');
+  const view = JSON.stringify(context.runsView());
+  assert.match(view, /1 earlier run\(s\) in this review/);
+  assert.match(view, /2 finished run\(s\) can be archived/, 'a suggestion without a code is not offered');
+  context.S.filter = { agent: 'helper', status: '', pr: false, unrated: true };
+  assert.deepEqual(plain(runs.filter((r) => context.matches(r, context.S.filter)).map((r) => r.run_id)), ['r-3']);
+  context.S.filter = { agent: '', status: '', pr: true, unrated: false };
+  assert.deepEqual(plain(runs.filter((r) => context.matches(r, context.S.filter)).map((r) => r.run_id)), ['r-1', 'r-2']);
+  assert.deepEqual(plain(context.conversationOf('r-1').map((r) => r.run_id)), ['r-1', 'r-2'], 'archiving from a detail covers the whole review');
+  return context.archiveRuns(['r-1', 'r-2'], true).then(() => {
+    assert.deepEqual(plain(calls[0]), { name: 'archive_runs', items: [{ run_id: 'r-1', confirm: 'c'.repeat(24) }, { run_id: 'r-2', confirm: 'd'.repeat(24) }], archived: true, request_id: 'req-00000001' });
+    return assert.rejects(context.archiveRuns(['r-3'], true), /no confirmation code/);
+  }).then(() => {
+    context.hubPanel = () => false;
+    assert.doesNotMatch(JSON.stringify(context.runsView()), /can be archived|Archived runs/, 'the Mac panel has no archive controls');
+  });
 });
 
 test('development task shows error and diagnostics alongside partial output', () => {

@@ -7,10 +7,11 @@ CREATE TABLE IF NOT EXISTS snapshots (
 CREATE INDEX IF NOT EXISTS snapshots_published_at ON snapshots(published_at);
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY, agent TEXT NOT NULL, runner TEXT NOT NULL, status TEXT NOT NULL,
-  started TEXT NOT NULL, ended TEXT, updated_at TEXT NOT NULL, receipt TEXT NOT NULL
+  started TEXT NOT NULL, ended TEXT, updated_at TEXT NOT NULL, receipt TEXT NOT NULL, archived_at TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_started ON runs(started);
 CREATE INDEX IF NOT EXISTS runs_updated_at ON runs(updated_at);
+CREATE INDEX IF NOT EXISTS runs_archived_started ON runs(archived_at, started);
 CREATE TABLE IF NOT EXISTS accounts (
   slot TEXT PRIMARY KEY, state TEXT NOT NULL, until TEXT, last_error_kind TEXT, host TEXT NOT NULL, updated_at TEXT NOT NULL
 );

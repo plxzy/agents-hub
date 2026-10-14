@@ -38,6 +38,8 @@ Legacy snapshot fallback readers still exist, but their timestamps are no longer
 only on change (and once a minute). Per-run publication/review lookups and confirmation codes are batched. The Worker uses smart
 placement near D1. Measured: a new run appears in about 2–4 s (was 60–80 s); see `evidence/2026-10-14-dashboard-latency-after/`.
 
+**Archive (2026-10-14).** The panel reads only unarchived runs (`runs.archived_at IS NULL`, migration 0011), so archived runs cost nothing on each refresh; `get_run` still reads them. Archiving and restoring are the user's clicks (`archive_runs`, one-time `archive` codes per run; `panel_archived` lists archived runs with restore codes). The panel offers suggestions with a reason (merged or closed PR, stopped before doing anything, resumed later, rated and over 7 days old), always for a whole review conversation, groups continuations under their newest run, and filters by agent, status, PR and rating. Status counts and `list_runs` cover unarchived runs.
+
 **Snapshots are retired (2026-10-12).** `agent` no longer publishes snapshots and `publisher.mjs` is gone; the Hub reads runs,
 ratings, memory notes, agent definitions and counts from D1. `POST /v1/snapshots` and the snapshot readers remain only as a
 fallback for the old data; delete the `PUBLISH_TOKEN` secret to close the endpoint (done after this change), then the

@@ -14,6 +14,14 @@ export const RELAY_OPS = {
   panel_run: { title: 'Run details for the panel', appOnly: true, read: true,
     input: { type: 'object', required: ['run_id'], additionalProperties: false, properties: { run_id: { type: 'string', maxLength: 100 } } },
     description: 'Read a run’s full output in the user’s panel.' },
+  panel_archived: { title: 'Archived runs for the panel', appOnly: true, read: true, input: empty,
+    description: 'Runs the user archived from the panel, newest first, so the panel can list and restore them.' },
+  archive_runs: { title: 'Archive or restore runs', appOnly: true, read: false,
+    input: { type: 'object', required: ['items', 'archived', 'request_id'], additionalProperties: false, properties: {
+      items: { type: 'array', minItems: 1, maxItems: 100, items: { type: 'object', required: ['run_id', 'confirm'], additionalProperties: false,
+        properties: { run_id: { type: 'string', pattern: '^[rc]-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' }, confirm } } },
+      archived: { type: 'boolean', description: 'true hides the runs from the panel; false restores them.' }, request_id: requestId,
+    } }, description: 'Archive or restore finished runs only from the user’s explicit click in the panel. Archived runs stay readable with get_run.' },
   get_start_status: { title: 'Reconcile a start request', read: true,
     input: { type: 'object', required: ['request_id'], additionalProperties: false, properties: { request_id: requestId } },
     description: 'Read whether the original request reached the runner, without starting work. Unknown does not mean safe to duplicate. After an automatic permission-review timeout, reconcile first; retry the identical request once only if the caller permits it, then ask for guidance. A model change is a different request.' },
@@ -56,6 +64,16 @@ export function validateRelay(name, args) {
     // The local Mac adapter may attach a bounded initialize observation to a dok start.
     // It is internal metadata, never part of the public start_run tool schema.
     if (name === 'start_run' && key === 'mcp_connection' && value && typeof value === 'object' && !Array.isArray(value)) continue;
+    if (rule?.type === 'array') {
+      if (!Array.isArray(value) || value.length < (rule.minItems ?? 0) || value.length > (rule.maxItems ?? Infinity)) throw new Error(`Invalid ${key}`);
+      for (const item of value) {
+        if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some((k) => !Object.hasOwn(rule.items.properties, k))) throw new Error(`Invalid ${key}`);
+        for (const [k, rule2] of Object.entries(rule.items.properties)) {
+          if (typeof item[k] !== rule2.type || (rule2.pattern && !new RegExp(rule2.pattern).test(item[k]))) throw new Error(`Invalid ${key}`);
+        }
+      }
+      continue;
+    }
     if (!rule || (rule.type === 'integer' ? !Number.isSafeInteger(value) || value < (rule.minimum ?? 0) : typeof value !== rule.type) || (rule.enum && !rule.enum.includes(value))
       || (rule.minLength && value.trim().length < rule.minLength) || (rule.maxLength && value.length > rule.maxLength)
       || (rule.pattern && !new RegExp(rule.pattern).test(value))) throw new Error(`Invalid ${key}`);

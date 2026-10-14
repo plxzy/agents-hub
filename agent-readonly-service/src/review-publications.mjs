@@ -109,7 +109,7 @@ export async function publicationsAndReviews(env, runs) {
   }))).filter(Boolean));
   const threads = new Map((await inChunks([...new Set(roots.values())], async (part, marks) =>
     (await env.DB.prepare(`SELECT root, observation FROM review_threads WHERE root IN (${marks})`).bind(...part).all()).results)).map(t => [t.root, t.observation]));
-  for (const [id, root] of roots) { const o = threads.get(root); if (o) out.get(id).review = publicReview(JSON.parse(o)); }
+  for (const [id, root] of roots) { out.get(id).conversation_id = root; const o = threads.get(root); if (o) out.get(id).review = publicReview(JSON.parse(o)); }
   return out;
 }
 export async function resolveReview(env, { repo, root, pr_number }) {

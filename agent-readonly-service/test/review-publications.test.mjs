@@ -149,3 +149,29 @@ test('panel_data carries health and answers a poll with an unchanged version unt
   const changed = JSON.parse((await tool('panel_data', { since: first.version })).content[0].text);
   assert.notEqual(changed.version, first.version); assert.ok(changed.runs.some((x) => x.run_id === NEXT));
 });
+
+test('archive_runs needs the panel code, refuses running runs, hides runs from the panel and restores them', async t => {
+  const { post, tool, read } = await runtime(t);
+  await post(receipt()); await post({ ...receipt(NEXT), status: 'running', review_ref: undefined, commit: undefined });
+  const text = (r) => r.content[0].text;
+  const first = await tool('panel_data'), panel = JSON.parse(text(first)), codes = first._meta['agents-hub/confirm'].archive;
+  assert.ok(codes[RUN], 'finished runs get an archive code'); assert.equal(codes[NEXT], undefined, 'running runs do not');
+  const refused = await tool('archive_runs', { items: [{ run_id: RUN, confirm: 'x'.repeat(24) }], archived: true, request_id: 'req-archive-1' });
+  assert.equal(refused.isError, true); assert.match(text(refused), /click in the Agents Hub panel/);
+  const running = await tool('archive_runs', { items: [{ run_id: NEXT, confirm: codes[RUN] }], archived: true, request_id: 'req-archive-2' });
+  assert.match(text(running), /after it finishes/);
+  const done = await tool('archive_runs', { items: [{ run_id: RUN, confirm: codes[RUN] }], archived: true, request_id: 'req-archive-3' });
+  assert.deepEqual(JSON.parse(text(done)), { archived: true, run_ids: [RUN] });
+  const again = await tool('archive_runs', { items: [{ run_id: RUN, confirm: codes[RUN] }], archived: true, request_id: 'req-archive-4' });
+  assert.equal(again.isError, true, 'a code works once');
+  const changed = JSON.parse(text(await tool('panel_data', { since: panel.version })));
+  assert.notEqual(changed.version, panel.version, 'archiving changes the panel version');
+  assert.ok(!changed.runs.some((r) => r.run_id === RUN), 'archived runs leave the panel');
+  assert.ok((await read(RUN)).archived_at, 'get_run still reads an archived run');
+  const archived = await tool('panel_archived');
+  assert.deepEqual(JSON.parse(text(archived)).runs.map((r) => r.run_id), [RUN]);
+  const restore = archived._meta['agents-hub/archived-confirm'][RUN];
+  await tool('archive_runs', { items: [{ run_id: RUN, confirm: restore }], archived: false, request_id: 'req-archive-5' });
+  const back = JSON.parse(text(await tool('panel_data', { since: changed.version })));
+  assert.ok(back.runs.some((r) => r.run_id === RUN && !r.archived_at), 'restored runs come back');
+});

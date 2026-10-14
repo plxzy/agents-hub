@@ -79,6 +79,15 @@
   #agents-hub-ui .empty { color: var(--color-text-tertiary); padding: 18px 4px; text-align: center; }
   #agents-hub-ui .note { font-size: 12px; color: var(--color-text-danger); margin-top: 8px; }
   #agents-hub-ui .back { margin-bottom: 8px; }
+  #agents-hub-ui .filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 8px; }
+  #agents-hub-ui .filters select { width: auto; padding: 3px 6px; font-size: 12px; }
+  #agents-hub-ui .check { display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--color-text-secondary); }
+  #agents-hub-ui .check input { width: auto; margin: 0; }
+  #agents-hub-ui .earlier { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 0 14px; }
+  #agents-hub-ui .fold { background: none; border: none; padding: 2px 0; font-size: 12px; color: var(--color-text-secondary); }
+  #agents-hub-ui .suggest { border: 1px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 8px 11px; margin: 0 0 8px; font-size: 13px; }
+  #agents-hub-ui .suggest summary { cursor: pointer; }
+  #agents-hub-ui .suggest .row { display: flex; gap: 8px; align-items: center; padding: 6px 9px; }
   #agents-hub-ui dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 8px 0 0; font-size: 12px; }
   #agents-hub-ui dt { color: var(--color-text-tertiary); } #agents-hub-ui dd { margin: 0; overflow-wrap: anywhere; }
   #agents-hub-ui .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: agents-hub-spin .8s linear infinite; }
@@ -145,6 +154,7 @@ async function call(name, args = {}) {
   // One-time codes the Mac requires for the user's decisions (hosted relay only); the model never sees them.
   if (r?._meta?.['agents-hub/confirm']) S.confirm = r._meta['agents-hub/confirm'];
   if (r?._meta?.['agents-hub/development-confirm']) S.devConfirm = r._meta['agents-hub/development-confirm'];
+  if (r?._meta?.['agents-hub/archived-confirm']) S.archivedConfirm = r._meta['agents-hub/archived-confirm'];
   const text = r?.content?.find((c) => c.type === 'text')?.text ?? '';
   if (r?.isError) throw new Error(text.replace(/^error: /, ''));
   if (r?.structuredContent) return r.structuredContent;
@@ -312,12 +322,10 @@ function agentsView() {
       a.tools?.length ? `tools: ${a.tools.join(', ')}` : 'no tools', a.last_run && `last run ${ago(a.last_run.started)}`].filter(Boolean).join(' · ')))));
 }
 
-function runsView() {
-  const runs = [...S.data.runs].reverse();
-  if (!runs.length) return h('div', { class: 'empty' }, 'No runs yet.');
-  return h('div', { class: 'list' }, runs.map((r) => h('div', { class: 'row click', tabindex: 0,
+function runRow(r, extra = null) {
+  return h('div', { class: 'row click', tabindex: 0,
     onclick: () => { S.detail = { run_id: r.run_id, status: r.status }; loadDetail(r.run_id); render(); },
-    onkeydown: (e) => e.key === 'Enter' && e.currentTarget.click() },
+    onkeydown: (e) => e.key === 'Enter' && e.target === e.currentTarget && e.currentTarget.click() },
     h('div', { class: 'line' },
       h('span', { class: `pill ${r.status}` }, r.status === 'running' ? [h('span', { class: 'spin' }), ' running'] : r.status),
       h('span', { class: 'name' }, r.agent), h('span', { class: 'grow ell' }, r.title ?? firstLine(r.task)),
@@ -325,7 +333,94 @@ function runsView() {
     r.review ? h('div', { class: 'small' }, `GitHub PR #${r.review.pr_number} · ${r.review.state}`) : r.publication && r.publication.status !== 'not_applicable' ? h('div', { class: 'small' }, r.publication.status === 'published' ? `GitHub PR #${r.publication.pr_number}` : r.publication.status === 'blocked' ? 'GitHub publication needs attention' : 'Publishing to GitHub') : null,
     progressSummary(r) ? h('div', { class: 'small', role: 'status' }, progressSummary(r)) : null,
     h('div', { class: 'meta' }, [r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null), r.kind !== 'task' && r.kind, ago(r.started), r.status !== 'running' && `${r.tool_calls} tool call(s)`,
-      r.blocked > 0 && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')))));
+      r.blocked > 0 && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')),
+    extra);
+}
+
+// ---------- run list: filters, one row per review conversation, archive ----------
+// Archiving hides finished runs from the panel (get_run still reads them). Only the hosted Hub has it, and only by click.
+const canArchive = () => hubPanel() && canDecide();
+const finished = (r) => ['completed', 'failed', 'interrupted'].includes(r.status);
+const filters = () => (S.filter ??= { agent: '', status: '', pr: false, unrated: false });
+const matches = (r, f) => (!f.agent || r.agent === f.agent) && (!f.status || r.status === f.status)
+  && (!f.pr || Boolean(r.review ?? r.publication?.pr_number)) && (!f.unrated || finished(r) && !r.feedback && ['task', 'chat'].includes(r.kind ?? 'task'));
+// Continuations of one review share a conversation: its newest run leads, the earlier ones fold under it.
+function conversations(runs) {
+  const groups = new Map();
+  for (const r of runs) { const key = r.conversation_id ?? r.run_id; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(r); }
+  const newest = (a, b) => String(b.started).localeCompare(String(a.started));
+  return [...groups].map(([key, members]) => ({ key, members: members.sort(newest) })).sort((a, b) => newest(a.members[0], b.members[0]));
+}
+const conversationOf = (id) => { const r = S.data?.runs?.find((x) => x.run_id === id); return r ? S.data.runs.filter((x) => (x.conversation_id ?? x.run_id) === (r.conversation_id ?? r.run_id)) : []; };
+
+async function archiveRuns(ids, archived) {
+  const codes = archived ? S.confirm?.archive : S.archivedConfirm;
+  const items = ids.map((run_id) => ({ run_id, confirm: codes?.[run_id] }));
+  await act('archive', async () => {
+    if (!items.length || items.some((i) => !i.confirm)) throw new Error('This panel has no confirmation code for that run yet. Press Refresh and try again.');
+    try { await call('archive_runs', { items, archived, request_id: crypto.randomUUID() }); }
+    // A host keeps the tool list from when the panel opened; panels opened before archiving existed cannot call it.
+    catch (e) { throw /unknown tool|not found|not available|no such tool/i.test(e.message) ? new Error(`${e.message} — open a fresh Agents Hub dashboard to use archiving.`) : e; }
+    S.archiveSkip?.clear();
+    if (S.detail && ids.includes(S.detail.run_id)) await loadDetail(S.detail.run_id);
+    if (S.showArchived) await loadArchived();
+    await refresh();
+  });
+}
+async function loadArchived() { S.archived = (await call('panel_archived')).runs ?? []; }
+
+function filtersBar(runs) {
+  const f = filters(), set = (key, value) => { f[key] = value; render(); };
+  const agents = [...new Set(runs.map((r) => r.agent))].sort();
+  const statuses = [...new Set(runs.map((r) => r.status))].sort();
+  const box = (key, label) => h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: f[key], onchange: (e) => set(key, e.currentTarget.checked) }), label);
+  return h('div', { class: 'filters' },
+    h('select', { 'aria-label': 'Agent', onchange: (e) => set('agent', e.currentTarget.value) },
+      h('option', { value: '' }, 'All agents'), ...agents.map((a) => h('option', { value: a, selected: f.agent === a }, a))),
+    h('select', { 'aria-label': 'Status', onchange: (e) => set('status', e.currentTarget.value) },
+      h('option', { value: '' }, 'Any status'), ...statuses.map((x) => h('option', { value: x, selected: f.status === x }, x))),
+    box('pr', 'Has PR'), box('unrated', 'Not rated yet'));
+}
+
+function suggestionsView() {
+  const all = canArchive() ? (S.data.archive_suggestions ?? []).filter((x) => S.confirm?.archive?.[x.run_id]) : [];
+  if (!all.length) return null;
+  const skip = (S.archiveSkip ??= new Set()), byId = new Map(S.data.runs.map((r) => [r.run_id, r]));
+  const chosen = all.filter((x) => !skip.has(x.run_id)).map((x) => x.run_id);
+  return h('details', { class: 'suggest', open: S.suggestOpen, ontoggle: (e) => { S.suggestOpen = e.currentTarget.open; } },
+    h('summary', {}, `${all.length} finished run(s) can be archived`),
+    h('p', { class: 'small muted' }, 'Archived runs leave this list but stay readable. Restore them any time under Archived runs.'),
+    h('div', { class: 'list' }, all.map((x) => h('label', { class: 'row' },
+      h('input', { type: 'checkbox', style: 'width:auto', checked: !skip.has(x.run_id), onchange: (e) => { if (e.currentTarget.checked) skip.delete(x.run_id); else skip.add(x.run_id); render(); } }),
+      h('span', { class: 'name' }, byId.get(x.run_id)?.agent ?? ''), h('span', { class: 'grow ell' }, byId.get(x.run_id)?.title ?? x.run_id),
+      h('span', { class: 'small muted' }, x.reason)))),
+    h('div', { class: 'actions' }, h('button', { disabled: !chosen.length || S.busy.has('archive'), onclick: () => archiveRuns(chosen, true) }, `Archive ${chosen.length} selected`)));
+}
+
+function archivedView() {
+  if (!S.archived) return h('div', { class: 'empty' }, 'Loading…');
+  if (!S.archived.length) return h('div', { class: 'empty' }, 'No archived runs.');
+  return h('div', { class: 'list' }, S.archived.map((r) => runRow(r, h('div', { class: 'actions' },
+    h('span', { class: 'small muted grow' }, `archived ${ago(r.archived_at)}`),
+    h('button', { disabled: S.busy.has('archive'), onclick: (e) => { e.stopPropagation(); archiveRuns([r.run_id], false); } }, 'Restore')))));
+}
+
+function runsView() {
+  const all = S.data.runs;
+  const toggleArchived = canArchive() ? h('button', { class: 'fold', onclick: () => act('archived', async () => {
+    S.showArchived = !S.showArchived; S.archived = null; render(); if (S.showArchived) await loadArchived();
+  }) }, S.showArchived ? '← Back to runs' : 'Archived runs') : null;
+  if (S.showArchived) return h('div', {}, toggleArchived, archivedView());
+  if (!all.length) return h('div', {}, h('div', { class: 'empty' }, 'No runs yet.'), toggleArchived);
+  const f = filters(), shown = all.filter((r) => matches(r, f));
+  const open = (S.openGroups ??= new Set());
+  return h('div', {}, suggestionsView(), filtersBar(all),
+    shown.length ? h('div', { class: 'list' }, conversations(shown).map(({ key, members: [lead, ...earlier] }) => runRow(lead, earlier.length
+      ? h('div', {}, h('button', { class: 'fold', 'aria-expanded': String(open.has(key)), onclick: (e) => { e.stopPropagation(); if (open.has(key)) open.delete(key); else open.add(key); render(); } },
+        `${open.has(key) ? '▾' : '▸'} ${earlier.length} earlier run(s) in this review`),
+        open.has(key) ? h('div', { class: 'earlier', onclick: (e) => e.stopPropagation() }, earlier.map((r) => runRow(r))) : null)
+      : null))) : h('div', { class: 'empty' }, 'No runs match these filters.'),
+    toggleArchived);
 }
 
 function recoveryView(r) {
@@ -406,10 +501,22 @@ function detailView() {
     ].filter(([, v]) => v !== null && v !== undefined && v !== '').flatMap(([k, v]) => [h('dt', {}, k), h('dd', { style: k === 'commands' || k === 'blocked' ? 'white-space:pre-wrap;font-family:var(--font-mono)' : null }, v)])),
     h('details', { open: S.traceOpen === r.run_id, ontoggle: (e) => { S.traceOpen = e.currentTarget.open ? r.run_id : null; } }, h('summary', {}, 'Technical details and saved run evidence'),
       h('dl', {}, ...runTrace(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)]))),
+    canArchive() && finished(r) ? archiveControl(r) : null,
     rateable ? h('div', { class: 'actions' },
       h('input', { id: 'rate-why', placeholder: 'Why (optional, your words)', 'aria-label': 'Reason for rating' }),
       h('button', { class: 'ok', disabled: S.busy.has(`rate-${r.run_id}`), onclick: () => rate('good') }, 'Good'),
       h('button', { class: 'no', disabled: S.busy.has(`rate-${r.run_id}`), onclick: () => rate('bad') }, 'Bad')) : null));
+}
+
+function archiveControl(r) {
+  if (r.archived_at) return h('div', { class: 'actions' }, h('span', { class: 'small muted grow' }, `Archived ${ago(r.archived_at)}`),
+    h('button', { disabled: S.busy.has('archive') || !S.archivedConfirm?.[r.run_id], onclick: () => archiveRuns([r.run_id], false) }, 'Restore'));
+  // The whole review conversation is archived together, so a continuation never loses its parent.
+  const members = conversationOf(r.run_id), ids = (members.length ? members : [r]).map((x) => x.run_id);
+  const busy = members.some((x) => !finished(x));
+  return h('div', { class: 'actions' },
+    h('button', { disabled: busy || S.busy.has('archive'), onclick: () => archiveRuns(ids, true) }, ids.length > 1 ? `Archive this review (${ids.length} runs)` : 'Archive'),
+    busy ? h('span', { class: 'small muted' }, 'A run in this review is still active.') : null);
 }
 
 function reviewView() {

@@ -3,7 +3,7 @@ import { ensurePublication, readPublication, readReview, publicationsAndReviews 
 import { publicRecovery } from '../../agent-workflow/recovery-contract.mjs';
 import { containsSecret } from './snapshot.mjs';
 import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
-import { ratingsFor } from './decisions.mjs';
+import { ratingsFor, redeemCodes } from './decisions.mjs';
 import { proposeMemory } from './memory.mjs';
 import { sanitizeFailureContext } from '../../agent-workflow/failure-telemetry.mjs';
 import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
@@ -100,7 +100,7 @@ export function observedRun(row, now = Date.now()) {
 
 export async function readRun(env, runId) {
   if (!env.DB || !RUN_ID.test(runId ?? '')) return null;
-  const row = await env.DB.prepare('SELECT receipt, updated_at FROM runs WHERE run_id = ?').bind(runId).first();
+  const row = await env.DB.prepare('SELECT receipt, updated_at, archived_at FROM runs WHERE run_id = ?').bind(runId).first();
   if (!row) return null;
   const receipt = observedRun(row), rating = (await ratingsFor(env, [runId])).get(runId);
   try { const artifact = await readArtifact(env, receipt); if (artifact) receipt.artifact = artifact; }
@@ -109,21 +109,73 @@ export async function readRun(env, runId) {
   if (publication) receipt.publication = publication;
   const review = await readReview(env, receipt);
   if (review) receipt.review = review;
+  if (row.archived_at) receipt.archived_at = row.archived_at;
   return withFailureGuidance(rating ? { ...receipt, feedback: rating } : receipt);
 }
 
-/** Newest `limit` receipts as briefs (oldest first, like the snapshot's run list). */
-export async function recentRuns(env, { agent, limit = 50 } = {}) {
+/**
+ * Newest `limit` receipts as briefs (oldest first, like the snapshot's run list). Archived runs are left out unless
+ * `archived` asks for them alone (newest archived first); get_run still reads any run.
+ */
+export async function recentRuns(env, { agent, limit = 50, archived = false } = {}) {
   if (!env.DB) return [];
   try {
     const n = Math.min(Math.max(Number(limit) || 50, 1), 200);
-    const stmt = agent ? env.DB.prepare('SELECT receipt, updated_at FROM runs WHERE agent = ? ORDER BY started DESC LIMIT ?').bind(agent, n)
-      : env.DB.prepare('SELECT receipt, updated_at FROM runs ORDER BY started DESC LIMIT ?').bind(n);
-    const { results } = await stmt.all();
+    const where = [archived ? 'archived_at IS NOT NULL' : 'archived_at IS NULL', ...(agent ? ['agent = ?'] : [])].join(' AND ');
+    const { results } = await env.DB.prepare(`SELECT receipt, updated_at, archived_at FROM runs WHERE ${where} ORDER BY ${archived ? 'archived_at' : 'started'} DESC LIMIT ?`)
+      .bind(...(agent ? [agent] : []), n).all();
+    const rows = new Map(results.map((x) => [JSON.parse(x.receipt).run_id, x.archived_at]));
     const receipts = results.map((x) => observedRun(x)).reverse();
     const [ratings, extra] = await Promise.all([ratingsFor(env, receipts.map((r) => r.run_id)), publicationsAndReviews(env, receipts)]);
-    return receipts.map(r => ({ ...runBrief({ ...r, ...extra.get(r.run_id), feedback: ratings.get(r.run_id) }), runner: r.runner }));
+    return receipts.map((r) => {
+      const { conversation_id, ...more } = extra.get(r.run_id);
+      return { ...runBrief({ ...r, ...more, feedback: ratings.get(r.run_id) }), runner: r.runner,
+        ...(conversation_id ? { conversation_id } : {}), ...(rows.get(r.run_id) ? { archived_at: rows.get(r.run_id) } : {}) };
+    });
   } catch { return []; } // table missing before migration: behave as before
+}
+
+const DAY = 86400000;
+/**
+ * Finished runs worth archiving, each with the reason shown to the user. Only suggestions: archiving needs the user's
+ * click. A whole review conversation is suggested together, so a continuation is never left without its parent.
+ */
+export function archiveSuggestions(runs, now = Date.now()) {
+  const reasons = new Map();
+  for (const r of runs) {
+    if (['running', 'unknown'].includes(r.status) || r.recovery?.state === 'awaiting_review') continue;
+    const reason = ['merged', 'closed'].includes(r.review?.state) ? `PR #${r.review.pr_number} ${r.review.state}`
+      : r.recovery?.resumed_by ? 'resumed in a later run'
+      : ['failed', 'interrupted'].includes(r.status) && !r.tool_calls ? 'stopped before doing anything'
+      : r.feedback && now - Date.parse(r.ended ?? r.started) > 7 * DAY ? 'rated, finished over 7 days ago' : null;
+    if (reason) reasons.set(r.run_id, reason);
+  }
+  const groups = Map.groupBy(runs, (r) => r.conversation_id ?? r.run_id);
+  const out = [];
+  for (const members of groups.values()) {
+    const why = members.map((r) => reasons.get(r.run_id)).find(Boolean);
+    // A conversation with active work, or one where only an old member qualifies by age, stays.
+    if (!why || members.some((r) => ['running', 'unknown'].includes(r.status) || r.recovery?.state === 'awaiting_review')) continue;
+    if (!members.every((r) => reasons.has(r.run_id)) && !/^PR #/.test(why)) continue;
+    for (const r of members) out.push({ run_id: r.run_id, reason: reasons.get(r.run_id) ?? why });
+  }
+  return out;
+}
+
+/** Archive or restore finished runs; each item carries the panel's one-time code for that run. */
+export async function setArchived(env, { items, archived }, now = new Date()) {
+  const ids = [...new Set(items.map((i) => i.run_id))];
+  const { results } = await env.DB.prepare(`SELECT run_id, status FROM runs WHERE run_id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all();
+  const status = new Map(results.map((r) => [r.run_id, r.status]));
+  const missing = ids.find((id) => !status.has(id));
+  if (missing) throw new Error('Unknown run ' + missing);
+  if (ids.some((id) => status.get(id) === 'running')) throw new Error('Archive a run after it finishes');
+  const done = await redeemCodes(env, 'archive', items.map((i) => [i.confirm, i.run_id]));
+  // updated_at moves so the panel's change check notices at once.
+  const at = now.toISOString();
+  if (done.length) await env.DB.batch(done.map((id) => env.DB.prepare('UPDATE runs SET archived_at = ?, updated_at = ? WHERE run_id = ?').bind(archived ? at : null, at, id)));
+  if (done.length < ids.length) throw new Error(`${done.length ? `Updated ${done.length} of ${ids.length} runs. ` : ''}This needs a click in the Agents Hub panel (refresh the panel and try again).`);
+  return { archived, run_ids: done };
 }
 
 /** Snapshot runs plus Hub runs, deduplicated by id, oldest first. */

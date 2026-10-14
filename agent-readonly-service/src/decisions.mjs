@@ -32,6 +32,15 @@ export async function redeemCode(env, value, kind, target, now = Date.now()) {
   if (done?.meta?.changes !== 1) throw new Error('This decision needs a click in the Agents Hub panel (refresh the panel and try again).');
 }
 
+/** Spends several codes in one batch; returns the targets whose code was valid (each code still works only once). */
+export async function redeemCodes(env, kind, pairs, now = Date.now()) {
+  const valid = pairs.filter(([value]) => typeof value === 'string' && value.length <= 64);
+  if (!valid.length) return [];
+  const results = await env.DB.batch(valid.map(([value, target]) =>
+    env.DB.prepare('DELETE FROM confirmations WHERE code = ? AND kind = ? AND target = ? AND expires > ?').bind(value, kind, target, now)));
+  return valid.filter((_, i) => results[i]?.meta?.changes === 1).map(([, target]) => target);
+}
+
 export async function rateRun(env, { run_id, rating, comment }, now = new Date()) {
   if (!RUN_ID.test(run_id ?? '') || !['good', 'bad'].includes(rating)) throw new Error('Invalid rating');
   const run = await env.DB.prepare('SELECT status FROM runs WHERE run_id = ?').bind(run_id).first();

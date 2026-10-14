@@ -13,7 +13,7 @@ test('hosted recovery reconciles identities and requires checkpoint-bound privat
     bindings: { DOK_RELAY_TOKEN: 'dok-test', DEVELOPMENT_ENABLED: 'true' } }] }));
   t.after(() => mf.dispose());
   const db = await mf.getD1Database('DB');
-  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql', '0005_decisions.sql', '0006_memory.sql', '0007_knowledge.sql']) {
+  for (const file of ['0001_snapshots.sql', '0003_runs.sql', '0004_accounts.sql', '0005_decisions.sql', '0006_memory.sql', '0007_knowledge.sql', '0011_runs_archived.sql']) {
     for (const sql of fs.readFileSync(new URL('../migrations/' + file, import.meta.url), 'utf8').replace(/--.*$/gm, '').split(';').map(x => x.trim()).filter(Boolean)) await db.prepare(sql).run();
   }
   const tool = async (name, args = {}) => (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST',

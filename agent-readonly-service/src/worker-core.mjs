@@ -5,7 +5,7 @@ import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { relayFetch, startRun, getRun, getStartStatus, resumeRun, dokEnabled, dokStatus } from './relay.mjs';
-import { readRun, recentRuns, mergeRuns } from './runs.mjs';
+import { readRun, recentRuns, mergeRuns, archiveSuggestions, setArchived } from './runs.mjs';
 import { readAccounts } from './accounts.mjs';
 import { issueCodes, redeemCode, rateRun } from './decisions.mjs';
 import { agentSummaries } from './knowledge.mjs';
@@ -95,12 +95,14 @@ async function nativePanel(env, { withConfirm = false } = {}) {
     ...dok.agents.filter((n) => !known.has(n)).map((name) => ({ name, description: 'Runs on dok.', remote_allowed: true, last_run: null }))];
   const runs = mergeRuns(base.runs, hubRuns).slice(-50);
   // Only the authenticated Hub widget requests codes. Mac reads do not even issue them.
-  const [rate, review, recovery] = withConfirm ? await Promise.all([
-    issueCodes(env, 'rate', hubRuns.filter((r) => ['completed', 'failed', 'interrupted'].includes(r.status)).map((r) => r.run_id)),
+  const finished = hubRuns.filter((r) => ['completed', 'failed', 'interrupted'].includes(r.status)).map((r) => r.run_id);
+  const [rate, review, recovery, archive] = withConfirm ? await Promise.all([
+    issueCodes(env, 'rate', finished),
     issueCodes(env, 'review', notes.map((n) => n.id)),
     issueCodes(env, 'recovery', hubRuns.filter(r => r.recovery?.state === 'awaiting_review' && r.recovery?.checkpoint_version).map(r => `${r.run_id}:${r.recovery.checkpoint_version}`)),
+    issueCodes(env, 'archive', finished),
   ]) : [];
-  const confirm = withConfirm ? { rate, review, recovery } : null;
+  const confirm = withConfirm ? { rate, review, recovery, archive } : null;
   const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
   const relay = { ...dok, runner: 'dok' };
   // The same health report open_dashboard gives, so the panel can poll this one call alone.
@@ -109,6 +111,8 @@ async function nativePanel(env, { withConfirm = false } = {}) {
   return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending, health, hub_panel: true,
     development_available: Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true'),
     publication_health: publicationHealthNow,
+    // Archiving is the user's click; these are only offered, with the reason for each run.
+    ...(withConfirm ? { archive_suggestions: archiveSuggestions(hubRuns) } : {}),
     run_targets: [dokTarget(dok, agents)],
     status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
     capabilities: { ...base.capabilities, run: withConfirm && dok.online && dok.agents.length > 0, mutate: withConfirm },
@@ -134,7 +138,7 @@ async function panelVersion(env, owner) {
         q("SELECT COUNT(*) AS n, MAX(created) AS c, MAX(decided) AS d FROM memory WHERE status = 'candidate' OR decided IS NOT NULL"),
         q('SELECT COUNT(*) AS n, MAX(rated_at) AS v FROM ratings'),
         q(`SELECT group_concat(run_id || ':' || status || ':' || attempts || ':' || COALESCE(pr_url, '') || ':' || COALESCE(error, ''), '|') AS v
-          FROM review_publications WHERE run_id IN (SELECT run_id FROM runs ORDER BY started DESC LIMIT 50)`),
+          FROM review_publications WHERE run_id IN (SELECT run_id FROM runs WHERE archived_at IS NULL ORDER BY started DESC LIMIT 50)`),
         q("SELECT group_concat(root || ':' || COALESCE(observation, ''), '|') AS v FROM review_threads"),
         q("SELECT group_concat(slot || ':' || state || ':' || updated_at, '|') AS v FROM accounts"),
         q("SELECT value AS v FROM knowledge_state WHERE key = 'revision'"),
@@ -177,7 +181,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: [...(dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The panel shows runs, agents and the review queue held by the Hub.' } : t),
-      ...relayToolList().filter((t) => ['publish_review', 'start_run', 'get_start_status', 'resume_run', 'decide_recovery', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
+      ...relayToolList().filter((t) => ['publish_review', 'start_run', 'get_start_status', 'resume_run', 'decide_recovery', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide', 'panel_archived', 'archive_runs'].includes(t.name)),
     ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
@@ -199,7 +203,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
       // The panel, ratings and review decisions are served by the Hub from D1.
-      if (dokEnabled(env) && ['panel_data', 'panel_run', 'rate_run', 'review_decide', 'decide_recovery'].includes(params?.name)) {
+      if (dokEnabled(env) && ['panel_data', 'panel_run', 'rate_run', 'review_decide', 'decide_recovery', 'panel_archived', 'archive_runs'].includes(params?.name)) {
         try {
           const args = params.arguments ?? {};
           if (params.name === 'panel_data') {
@@ -214,6 +218,15 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
             }
             return reply({ content: [{ type: 'text', text: JSON.stringify({ ...value, ...(version ? { version } : {}) }) }],
               _meta: { 'agents-hub/confirm': confirm, ...(devConfirm ? { 'agents-hub/development-confirm': devConfirm } : {}) } });
+          }
+          if (params.name === 'panel_archived') {
+            const runs = await recentRuns(env, { archived: true, limit: 100 });
+            const codes = await issueCodes(env, 'archive', runs.map((r) => r.run_id));
+            return reply({ content: [{ type: 'text', text: JSON.stringify({ runs }) }], _meta: { 'agents-hub/archived-confirm': codes } });
+          }
+          if (params.name === 'archive_runs') {
+            validateRelay('archive_runs', args);
+            return reply({ content: [{ type: 'text', text: JSON.stringify(await setArchived(env, args)) }] });
           }
           if (params.name === 'panel_run') {
             const run = await readRun(env, args.run_id);
