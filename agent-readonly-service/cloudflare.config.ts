@@ -17,7 +17,6 @@ export default defineConfig({
 			RELAY: bindings.durableObject({ worker: name, exportName: "AgentRelay" }),
 			ACCESS_ISSUER: bindings.text("https://YOUR-TEAM.cloudflareaccess.com"),
 			ACCESS_AUD: bindings.text(accessAud),
-			STALE_AFTER_MS: bindings.text("900000"),
 			DEVELOPMENT_ENABLED: bindings.text(process.env.HUB_DEVELOPMENT_ENABLED ?? "true"),
 			DB: bindings.d1({
 				name: "agent-readonly",

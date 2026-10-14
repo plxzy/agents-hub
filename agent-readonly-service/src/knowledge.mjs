@@ -1,6 +1,6 @@
 // Agent definitions, skills and evals held in D1. The user's git (~/.agents) is the only writer (`agent sync push`);
 // a push is refused unless the Hub still holds the revision the pusher last published (no silent overwrites).
-import { containsSecret } from './snapshot.mjs';
+import { containsSecret } from './secrets.mjs';
 import { acceptedMemory } from './memory.mjs';
 
 const NAME = '[a-z0-9][a-z0-9_-]{0,63}';

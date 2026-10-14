@@ -10,7 +10,7 @@ import { hubFetch } from '../src/worker-core.mjs';
 import { dashboardHtml } from '../../agent-workflow/ui/dashboard.mjs';
 
 const plain = value => JSON.parse(JSON.stringify(value));
-async function host(t, { relay = true, snapshot = false } = {}) {
+async function host(t, { relay = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-connection-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const state = path.join(root, 'state'), journal = path.join(root, 'journal');
@@ -28,10 +28,10 @@ async function host(t, { relay = true, snapshot = false } = {}) {
   const f = { calls, reads, dispatches, completed, online: true, enabled: true, failPanel: false, changeHealth: h => h };
   const keys = await generateKeyPair('RS256');
   const stamp = new Date().toISOString();
-  const row = { id: 'fixture-snapshot', published_at: stamp, payload: JSON.stringify({ generated_at: stamp,
-    capabilities: { run: false, mutate: false }, agents: [{ name: 'helper' }], runs: [], pending: null }) };
+  // An empty Hub: every D1 read answers with nothing.
+  const statement = { bind: () => statement, all: async () => ({ results: [] }), first: async () => null };
   const env = { ACCESS_ISSUER: 'https://fixture.invalid', ACCESS_AUD: 'fixture-hub',
-    DB: { prepare(sql) { assert.match(sql, /^SELECT /); reads.push(sql); return { first: async () => snapshot ? row : null }; } } };
+    DB: { prepare(sql) { assert.match(sql, /^SELECT /); reads.push(sql); return statement; } } };
   if (relay) {
     // The runner (dok) is the only Durable Object the Hub talks to now.
     env.DOK_RELAY_TOKEN = 'fixture-only'; env.DEVELOPMENT_ENABLED = 'true';
@@ -74,27 +74,26 @@ async function host(t, { relay = true, snapshot = false } = {}) {
     assert.match(resource.mimeType, /mcp-app/); assert.match(resource.text, /<title>Agents Hub<\/title>/);
     const legacy = (await rpc('resources/read', { uri: 'ui://agents/dashboard.html' })).contents[0];
     assert.equal(legacy.uri, 'ui://agents/dashboard.html'); assert.equal(legacy.text, resource.text);
-    assert.equal(reads.length, 0, 'connection/discovery/resources do not depend on the snapshot DB');
+    assert.equal(reads.length, 0, 'connection/discovery/resources do not read D1');
     return resource.text;
   };
   return { ...f, send, rpc, env, keys, token, state, journal, controls: f };
 }
 
-for (const relay of [false, true]) test(`empty snapshot store supports authenticated connection, discovery and resources (relay=${relay})`, async t => {
+for (const relay of [false, true]) test(`an empty Hub supports authenticated connection, discovery and resources (relay=${relay})`, async t => {
   const f = await host(t, { relay }); await f.connect();
   const status = JSON.parse((await f.callTool('get_status')).content[0].text);
   const opened = (await f.callTool('open_dashboard')).structuredContent;
   assert.equal(status.agents, null); assert.equal(opened.status.running, null);
   assert.equal(opened.health.snapshot.state, 'unavailable'); assert.equal(opened.capabilities.run, false);
   assert.equal(opened.health.relay.state, relay ? 'connected' : 'unknown');
-  // Hub run receipts (D1) do not depend on a snapshot.
   assert.deepEqual(JSON.parse((await f.callTool('list_runs')).content[0].text).runs, []);
-  for (const name of ['list_agents', 'get_run', 'resolve_context']) {
-    const response = await f.send('tools/call', { name, arguments: {} });
-    assert.equal(response.status, 503); assert.equal((await response.json()).reason, 'no_snapshot');
-  }
+  assert.deepEqual(JSON.parse((await f.callTool('list_agents')).content[0].text).agents, []);
+  const missing = await f.callTool('get_run', { run_id: 'r-20261014T000000Z-abcdef' });
+  assert.equal(missing.isError, true); assert.match(missing.content[0].text, /no run/);
+  // The retired snapshot routes are gone.
   const rest = await hubFetch(new Request('https://fixture.invalid/mcp/v1/agents', { headers: { 'cf-access-jwt-assertion': f.token } }), f.env, '', f.keys.publicKey);
-  assert.equal(rest.status, 503); assert.deepEqual(f.dispatches, []);
+  assert.equal(rest.status, 404); assert.deepEqual(f.dispatches, []);
 });
 
 class Element {

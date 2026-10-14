@@ -1,11 +1,10 @@
 import { publishReview, publicationHealth } from './review-publications.mjs';
 import { dokTarget } from '../../agent-workflow/run-selection.mjs';
-import { withFailureGuidance } from '../../agent-workflow/run-trace.mjs';
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
 import { RELAY_OPS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { relayFetch, startRun, getRun, getStartStatus, resumeRun, dokEnabled, dokStatus } from './relay.mjs';
-import { readRun, recentRuns, mergeRuns, archiveSuggestions, setArchived } from './runs.mjs';
+import { readRun, recentRuns, archiveSuggestions, setArchived } from './runs.mjs';
 import { readAccounts } from './accounts.mjs';
 import { issueCodes, redeemCode, rateRun } from './decisions.mjs';
 import { agentSummaries } from './knowledge.mjs';
@@ -14,7 +13,6 @@ import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
 import { developmentCall } from './development.mjs';
 
-const KEEP_SNAPSHOTS = 20;
 const CAPABILITIES = { discovery: true, status: true, context: true, run: false, mutate: false };
 const MCP_MIME = 'text/html;profile=mcp-app';
 
@@ -23,77 +21,28 @@ const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(b
 });
 const unauthorized = () => json({ error: 'unauthorized' }, 401);
 
-async function latest(env) {
-  const row = await env.DB.prepare('SELECT id, published_at, payload FROM snapshots ORDER BY published_at DESC LIMIT 1').first();
-  return row ? { id: row.id, published_at: row.published_at, payload: JSON.parse(row.payload) } : null;
-}
+// The read tools the shared contract (agent-workflow/contract.mjs) defines; every answer comes from D1 and the runner's
+// live status, so the one dashboard reads local and hosted data alike.
+const TOOLS = ['open_dashboard', 'get_status', 'list_agents', 'list_runs', 'get_run'].map((name) => ({ name, ...READ_OPS[name] }));
 
-function meta(snap, env) {
-  const now = Date.now(), generated = healthTime(snap.payload.generated_at, now), published = healthTime(snap.published_at, now);
-  return { snapshot_id: snap.id, published_at: snap.published_at, generated_at: snap.payload.generated_at,
-    stale: generated.problem !== null || published.problem !== null || generated.age_ms > snapshotMaxAge(env), capabilities: snap.payload.capabilities ?? CAPABILITIES };
-}
-
-const snapshotMaxAge = (env) => Number.isFinite(Number(env.STALE_AFTER_MS)) && Number(env.STALE_AFTER_MS) >= 0 ? Number(env.STALE_AFTER_MS) : 900000;
-
-function page(items, cursor, limit = 20) {
-  const n = Math.min(Math.max(Number(limit) || 20, 1), 100);
-  const start = Number.isInteger(Number(cursor)) ? Number(cursor) : 0;
-  return { items: items.slice(start, start + n), next_cursor: start + n < items.length ? String(start + n) : null };
-}
-
-// Results follow the shared contract (agent-workflow/contract.mjs), so the one dashboard reads local and hosted data
-// alike. `snapshot` says how old the data is; pending is null when the snapshot did not carry review counts.
-const freshness = (m) => ({ published_at: m.published_at, generated_at: m.generated_at, stale: m.stale });
-
-function status(snap) {
-  const runs = snap.payload.runs;
+function hubCounts(runs) {
   const last = runs.filter((r) => r.status !== 'running').at(-1);
-  return { agents: snap.payload.agents.length, runs: runs.length, running: runs.filter((r) => r.status === 'running').length,
-    pending: snap.payload.pending ?? null, last_run: last ? { run_id: last.run_id, agent: last.agent, status: last.status, ended: last.ended } : null };
-}
-const agents = (snap) => snap.payload.agents.map((a) => ({ ...a, last_run: lastRunOf(a.name, snap.payload.runs) }));
-
-function snapshotData(snap, m) {
-  return { generated_at: m.generated_at, capabilities: m.capabilities, status: status(snap), agents: agents(snap),
-    runs: snap.payload.runs.slice(-50), pending: null, snapshot: freshness(m) };
-}
-
-const TOOLS = [
-  { name: 'open_dashboard', ...READ_OPS.open_dashboard,
-    description: READ_OPS.open_dashboard.description + ' Hosted: read-only, from the last published snapshot.', run: (p) => snapshotData(p.snap, p.meta) },
-  { name: 'get_status', ...READ_OPS.get_status, run: (p) => ({ ...status(p.snap), snapshot: freshness(p.meta), capabilities: p.meta.capabilities }) },
-  { name: 'list_agents', ...READ_OPS.list_agents, run: (p) => ({ snapshot: freshness(p.meta), agents: agents(p.snap) }) },
-  { name: 'list_runs', ...READ_OPS.list_runs,
-    run: (p, { agent, limit = 10 }) => ({ snapshot: freshness(p.meta), runs: p.snap.payload.runs.filter((r) => !agent || r.agent === agent).slice(-limit) }) },
-  { name: 'get_run', ...READ_OPS.get_run,
-    run: (p, { run_id }) => { const run = p.snap.payload.runs.find((r) => r.run_id === run_id); if (!run) throw new Error('no run ' + run_id); return { ...withFailureGuidance(run), snapshot: freshness(p.meta) }; } },
-  { name: 'resolve_context', title: 'Resolve context', description: 'List approved context metadata from the latest published snapshot.', annotations: { readOnlyHint: true },
-    input: { type: 'object', properties: { limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }, additionalProperties: false },
-    run: (p, { limit = 20 }) => ({ snapshot: freshness(p.meta), ...page(p.snap.payload.context ?? [], null, limit) }) },
-];
-
-// Counts must come from runs the Hub actually holds, not only from a snapshot the Mac last published.
-function hubCounts(snapRuns, hubRuns) {
-  const runs = mergeRuns(snapRuns ?? [], hubRuns), last = runs.filter((r) => r.status !== 'running').at(-1);
   return { runs: runs.length, running: runs.filter((r) => r.status === 'running').length,
     last_run: last ? { run_id: last.run_id, agent: last.agent, status: last.status, ended: last.ended } : null };
 }
+const withLast = (list, runs) => list.map((a) => ({ ...a, last_run: lastRunOf(a.name, runs) }));
+const relaySource = (dok) => dok.available === false ? 'Durable Object status unavailable' : 'Durable Object status';
 
-// Panel data without the Mac: runs from D1 (plus any snapshot runs), the dok runner's agents and one-time codes for
-// rating finished Hub runs. The dashboard treats `relay` as "a hosted runner is online", so dok presents itself there.
+// Panel data: runs from D1, the dok runner's agents and one-time codes for the user's decisions on Hub runs. The
+// dashboard treats `relay` as "a hosted runner is online", so dok presents itself there.
 async function nativePanel(env, { withConfirm = false } = {}) {
   // Independent reads run together: each D1 round trip can cost tens of milliseconds.
-  const [snap, hubRuns, dok, published, notes, publicationHealthNow] = await Promise.all([latest(env), recentRuns(env, { limit: 50 }), dokStatus(env),
+  const [hubRuns, dok, published, notes, publicationHealthNow] = await Promise.all([recentRuns(env, { limit: 50 }), dokStatus(env),
     agentSummaries(env), pendingMemory(env), publicationHealth(env)]);
-  const m = snap ? meta(snap, env) : null;
-  const base = snap ? snapshotData(snap, m) : { generated_at: null, capabilities: CAPABILITIES, status: { agents: null, runs: null, running: null, pending: null, last_run: null },
-    agents: [], runs: [], pending: null, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
-  if (published.length) base.agents = published.map((a) => ({ ...a, last_run: lastRunOf(a.name, mergeRuns(snap?.payload.runs ?? [], hubRuns)) }));
-  const known = new Set(base.agents.map((a) => a.name));
-  const agents = [...base.agents.map((a) => ({ ...a, remote_allowed: dok.agents.includes(a.name) })),
+  const known = new Set(published.map((a) => a.name));
+  const agents = [...withLast(published, hubRuns).map((a) => ({ ...a, remote_allowed: dok.agents.includes(a.name) })),
     ...dok.agents.filter((n) => !known.has(n)).map((name) => ({ name, description: 'Runs on dok.', remote_allowed: true, last_run: null }))];
-  const runs = mergeRuns(base.runs, hubRuns).slice(-50);
+  const runs = hubRuns;
   // Only the authenticated Hub widget requests codes. Mac reads do not even issue them.
   const finished = hubRuns.filter((r) => ['completed', 'failed', 'interrupted'].includes(r.status)).map((r) => r.run_id);
   const [rate, review, recovery, archive] = withConfirm ? await Promise.all([
@@ -103,19 +52,18 @@ async function nativePanel(env, { withConfirm = false } = {}) {
     issueCodes(env, 'archive', finished),
   ]) : [];
   const confirm = withConfirm ? { rate, review, recovery, archive } : null;
-  const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
+  const pending = notes;
   const relay = { ...dok, runner: 'dok' };
   // The same health report open_dashboard gives, so the panel can poll this one call alone.
-  const health = runnerHealth(healthOf({ ...base, relay, relay_source: dok.available === false ? 'Durable Object status unavailable' : 'Durable Object status' },
-    { snapshotMaxAge: snapshotMaxAge(env), expected: dok.agents }), dok);
-  return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending, health, hub_panel: true,
+  const health = runnerHealth(healthOf({ agents, runs, relay, relay_source: relaySource(dok) }, { expected: dok.agents }), dok);
+  return { source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending, health, hub_panel: true,
     development_available: Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true'),
     publication_health: publicationHealthNow,
     // Archiving is the user's click; these are only offered, with the reason for each run.
     ...(withConfirm ? { archive_suggestions: archiveSuggestions(hubRuns) } : {}),
     run_targets: [dokTarget(dok, agents)],
-    status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
-    capabilities: { ...base.capabilities, run: withConfirm && dok.online && dok.agents.length > 0, mutate: withConfirm },
+    status: { agents: agents.length, ...hubCounts(hubRuns), pending: { memory: notes.length, proposals: 0 } },
+    capabilities: { ...CAPABILITIES, run: withConfirm && dok.online && dok.agents.length > 0, mutate: withConfirm },
     ...(confirm ? { confirm } : {}), relay };
 }
 
@@ -163,14 +111,11 @@ const toolList = TOOLS.map(({ name, title, description, input, annotations, ui }
 
 export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
   const url = new URL(request.url);
-  if (url.pathname.startsWith('/mcp/v1/')) url.pathname = url.pathname.slice(4);
-  if (request.method !== 'POST' || url.pathname !== '/mcp') {
-    if (request.method !== 'GET' || !url.pathname.startsWith('/v1/')) return json({ error: 'not_found' }, 404);
-  }
-  if (url.pathname === '/mcp') {
+  if (request.method !== 'POST' || url.pathname !== '/mcp') return json({ error: 'not_found' }, 404);
+  {
     let msg; try { msg = await request.json(); } catch { return json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }, 400); }
     const { id, method, params } = msg ?? {};
-    // Connection, discovery and UI resources must work before the first snapshot is published.
+    // Connection, discovery and UI resources answer without any data.
     if (id === undefined || id === null) return new Response(null, { status: 202 });
     const reply = (result) => json({ jsonrpc: '2.0', id, result });
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
@@ -268,58 +213,34 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
       const tool = TOOLS.find((x) => x.name === params?.name);
       if (!tool) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown tool ' + params?.name } });
       try {
-        const healthRead = params.name === 'open_dashboard' || params.name === 'get_status';
         const args = params.arguments ?? {};
-        // Runner receipts live in the Hub (D1): readable without the Mac or a fresh snapshot.
+        const answer = (value) => reply({ content: [{ type: 'text', text: tool.ui ? tool.summary(value) : JSON.stringify(value, null, 2) }], ...(tool.ui ? { structuredContent: value } : {}) });
         if (params.name === 'get_run') {
-          const hub = await readRun(env, args.run_id);
-          if (hub) return reply({ content: [{ type: 'text', text: JSON.stringify(hub, null, 2) }] });
+          const run = await readRun(env, args.run_id);
+          if (!run) throw new Error('no run ' + args.run_id);
+          return answer(run);
         }
-        const hubRuns = ['list_runs', 'open_dashboard'].includes(params.name) ? await recentRuns(env, { agent: args.agent, limit: params.name === 'open_dashboard' ? 200 : 50 }) : [];
-        const snap = await latest(env), m = snap ? meta(snap, env) : null;
-        if (!snap && params.name === 'list_runs') return reply({ content: [{ type: 'text', text: JSON.stringify({ snapshot: null, runs: hubRuns.slice(-(args.limit ?? 10)) }, null, 2) }] });
-        const published = ['list_agents', 'open_dashboard', 'get_status'].includes(params.name) ? await agentSummaries(env) : [];
-        const withLast = (list, runs) => list.map((a) => ({ ...a, last_run: lastRunOf(a.name, runs) }));
-        if (!snap && params.name === 'list_agents' && published.length) {
-          return reply({ content: [{ type: 'text', text: JSON.stringify({ snapshot: null, agents: withLast(published, await recentRuns(env, { limit: 200 })) }, null, 2) }] });
-        }
-        if (!snap && !healthRead) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
-        const unknownStatus = { agents: null, runs: null, running: null, pending: null, last_run: null };
-        const unavailable = { generated_at: null, capabilities: CAPABILITIES, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
-        const value = snap ? tool.run({ snap, env, meta: m }, args)
-          : params.name === 'get_status' ? { ...unknownStatus, ...unavailable }
-          : { ...unavailable, status: unknownStatus, agents: [], runs: [], pending: null };
-        // Published definitions (from git, via agent sync push) win over the snapshot's agent list.
-        if (published.length) {
-          const runsNow = mergeRuns(snap?.payload.runs ?? [], params.name === 'list_agents' ? await recentRuns(env, { limit: 200 }) : hubRuns);
-          if (params.name === 'list_agents') value.agents = withLast(published, runsNow);
-          else if (params.name === 'open_dashboard') { value.agents = withLast(published, runsNow); value.status = { ...value.status, agents: published.length }; }
-          else value.agents = published.length;
-        }
-        if (healthRead) {
-          const hubAll = params.name === 'open_dashboard' ? hubRuns : await recentRuns(env, { limit: 200 });
-          // No snapshot and nothing in the Hub stays unknown, never zero.
-          if (snap || hubAll.length) {
-            const counts = hubCounts(snap?.payload.runs, hubAll), notes = await pendingCounts(env);
-            const target = params.name === 'get_status' ? value : value.status;
-            Object.assign(target, counts);
-            // Notes waiting in the Hub; instruction proposals still come from the (possibly stale) snapshot.
-            if (notes !== null) target.pending = { memory: notes, proposals: target.pending?.proposals ?? 0 };
-          }
-        }
-        if (params.name === 'list_runs' && snap) value.runs = mergeRuns(snap.payload.runs.filter((r) => !args.agent || r.agent === args.agent), hubRuns).slice(-(args.limit ?? 10));
-        if (params.name === 'open_dashboard') value.runs = mergeRuns(value.runs ?? [], hubRuns).slice(-50);
-        if (healthRead) {
+        if (params.name === 'list_runs') return answer({ runs: await recentRuns(env, { agent: args.agent, limit: args.limit ?? 10 }) });
+        const [hubRuns, published] = await Promise.all([recentRuns(env, { limit: 200 }), agentSummaries(env)]);
+        const agentList = withLast(published, hubRuns);
+        if (params.name === 'list_agents') return answer({ agents: agentList });
+        const [dok, accounts, publication_health, notes] = await Promise.all([dokStatus(env), readAccounts(env), publicationHealth(env), pendingCounts(env)]);
+        // An empty answer may be a failed read, so no runs and no agents stay unknown rather than zero.
+        const status = hubRuns.length || agentList.length ? { agents: agentList.length, ...hubCounts(hubRuns), pending: notes === null ? null : { memory: notes, proposals: 0 } }
+          : { agents: null, runs: null, running: null, last_run: null, pending: null };
+        const value = params.name === 'get_status' ? { ...status, capabilities: CAPABILITIES }
+          : { generated_at: new Date().toISOString(), capabilities: CAPABILITIES, status, agents: agentList, runs: hubRuns.slice(-50), pending: null };
+        {
           value.development_available = Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true');
           value.hub_panel = dokEnabled(env);
-          value.runners = { dok: await dokStatus(env) };
-          value.accounts = await readAccounts(env);
-          value.publication_health = await publicationHealth(env);
+          value.runners = { dok };
+          value.accounts = accounts;
+          value.publication_health = publication_health;
           // The runner (dok) is what the panel and the health report call "relay": the Mac no longer connects.
-          value.relay = { ...value.runners.dok, runner: 'dok' };
-          value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env), expected: value.runners.dok.agents });
+          value.relay = { ...dok, runner: 'dok' };
+          value.health = healthOf({ ...value, relay_source: relaySource(dok) }, { expected: dok.agents });
           // Callers decide from this summary whether start_run works.
-          const dok = value.runners.dok, dokAgents = dok.online ? dok.agents : [];
+          const dokAgents = dok.online ? dok.agents : [];
           value.start_run = dokAgents.length
             ? { available: true, runners: { dok: dokAgents }, note: 'start_run works now: it runs on dok, the always-on Linux runner. Poll get_run for the result.' }
             : { available: false, note: 'dok is offline, so no runner is available.' };
@@ -334,20 +255,6 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     }
     return json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found: ' + method } });
   }
-  const snap = await latest(env);
-  if (!snap) return json({ error: 'unavailable', reason: 'no_snapshot' }, 503);
-  const m = meta(snap, env);
-  if (url.pathname === '/v1/agents') return json({ ...m, ...page(snap.payload.agents, url.searchParams.get('cursor'), url.searchParams.get('limit')) });
-  if (url.pathname.startsWith('/v1/agents/')) {
-    const item = snap.payload.agents.find((x) => x.name === decodeURIComponent(url.pathname.slice('/v1/agents/'.length)));
-    return item ? json({ ...m, item }) : json({ error: 'not_found' }, 404);
-  }
-  if (url.pathname === '/v1/runs') return json({ ...m, ...page(snap.payload.runs, url.searchParams.get('cursor'), url.searchParams.get('limit')) });
-  if (url.pathname.startsWith('/v1/runs/')) {
-    const item = snap.payload.runs.find((x) => x.run_id === decodeURIComponent(url.pathname.slice('/v1/runs/'.length)));
-    return item ? json({ ...m, item: withFailureGuidance(item) }) : json({ error: 'not_found' }, 404);
-  }
-  if (url.pathname === '/v1/context') return json({ ...m, ...page(snap.payload.context ?? [], url.searchParams.get('cursor'), url.searchParams.get('limit')) });
   return json({ error: 'not_found' }, 404);
 }
 
@@ -358,17 +265,6 @@ export async function defaultFetch(request, env) {
   if (request.method === 'GET' && ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'].includes(url.pathname)) {
     return json({ resource: url.origin + '/mcp', authorization_servers: [env.ACCESS_ISSUER], bearer_methods_supported: ['header'], resource_name: 'Agents Hub' });
   }
-  if (request.method === 'POST' && url.pathname === '/v1/snapshots') {
-    const token = request.headers.get('authorization');
-    if (!env.PUBLISH_TOKEN || token !== 'Bearer ' + env.PUBLISH_TOKEN) return unauthorized();
-    let payload; try { payload = await request.json(); } catch { return json({ error: 'bad_json' }, 400); }
-    const { sanitizeSnapshot } = await import('./snapshot.mjs');
-    try { payload = sanitizeSnapshot(payload); } catch (e) { return json({ error: e.message }, 400); }
-    const id = crypto.randomUUID(); const publishedAt = new Date().toISOString();
-    await env.DB.prepare('INSERT INTO snapshots (id, published_at, payload) VALUES (?, ?, ?)').bind(id, publishedAt, JSON.stringify(payload)).run();
-    await env.DB.prepare('DELETE FROM snapshots WHERE id NOT IN (SELECT id FROM snapshots ORDER BY published_at DESC LIMIT ?)').bind(KEEP_SNAPSHOTS).run();
-    return json({ id, published_at: publishedAt, schema_version: payload.schema_version }, 201);
-  }
   return json({ error: 'not_found' }, 404);
 }
 
@@ -377,7 +273,7 @@ export async function defaultFetch(request, env) {
  * The whole Worker. Cloudflare Access (an Access application on /mcp with Managed OAuth) is the OAuth server: it
  * signs the user in, registers clients and issues tokens, then forwards each request with a signed
  * Cf-Access-Jwt-Assertion. The Worker checks that assertion itself too, so a request that reached it some other way
- * (a preview URL, a missing Access application) is refused. /health and the publisher's /v1/snapshots stay outside.
+ * (a preview URL, a missing Access application) is refused. /health stays outside.
  */
 export async function hubFetch(request, env, dashboardHtml = '', keys) {
   const { pathname } = new URL(request.url);

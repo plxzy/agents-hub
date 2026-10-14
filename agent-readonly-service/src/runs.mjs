@@ -1,7 +1,7 @@
 import { ensurePublication, readPublication, readReview, publicationsAndReviews } from './review-publications.mjs';
 // Run receipts in D1: written by authenticated runners, read by the Hub's MCP tools.
 import { publicRecovery } from '../../agent-workflow/recovery-contract.mjs';
-import { containsSecret } from './snapshot.mjs';
+import { containsSecret } from './secrets.mjs';
 import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
 import { ratingsFor, redeemCodes } from './decisions.mjs';
 import { proposeMemory } from './memory.mjs';
@@ -15,7 +15,8 @@ import { publicSourceReview, publicSourcePr } from '../../agent-workflow/run-con
 // r-… task runs and evals, c-… chats
 export const RUN_ID = /^[rc]-\d{8}T\d{6}Z-[a-f0-9]{6}$/;
 const STATUS = ['running', 'completed', 'failed', 'interrupted'];
-const KEEP = 1000;
+// Archiving keeps the panel fast; this caps what D1 holds (oldest runs are deleted first).
+const KEEP = 500;
 export const MAC_HEARTBEAT_TTL_MS = 90000;
 const iso = (v) => typeof v === 'string' && v.length <= 40 && !Number.isNaN(Date.parse(v)) ? v : undefined;
 const num = (v) => Number.isFinite(v) && v >= 0 ? v : undefined;
@@ -114,7 +115,7 @@ export async function readRun(env, runId) {
 }
 
 /**
- * Newest `limit` receipts as briefs (oldest first, like the snapshot's run list). Archived runs are left out unless
+ * Newest `limit` receipts as briefs (oldest first). Archived runs are left out unless
  * `archived` asks for them alone (newest archived first); get_run still reads any run.
  */
 export async function recentRuns(env, { agent, limit = 50, archived = false } = {}) {
@@ -176,12 +177,6 @@ export async function setArchived(env, { items, archived }, now = new Date()) {
   if (done.length) await env.DB.batch(done.map((id) => env.DB.prepare('UPDATE runs SET archived_at = ?, updated_at = ? WHERE run_id = ?').bind(archived ? at : null, at, id)));
   if (done.length < ids.length) throw new Error(`${done.length ? `Updated ${done.length} of ${ids.length} runs. ` : ''}This needs a click in the Agents Hub panel (refresh the panel and try again).`);
   return { archived, run_ids: done };
-}
-
-/** Snapshot runs plus Hub runs, deduplicated by id, oldest first. */
-export function mergeRuns(snapshotRuns = [], hubRuns = []) {
-  const ids = new Set(hubRuns.map((r) => r.run_id));
-  return [...snapshotRuns.filter((r) => !ids.has(r.run_id)), ...hubRuns].sort((a, b) => String(a.started).localeCompare(String(b.started)));
 }
 
 /** Recover a start independently of the short relay-response cache. */

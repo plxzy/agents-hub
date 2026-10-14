@@ -1,6 +1,6 @@
 // Memory notes in D1. A runner proposes candidates in its run receipt; only a panel click (with a one-time code)
 // accepts or rejects one. Accepted notes are what later runs load for their scopes.
-import { containsSecret } from './snapshot.mjs';
+import { containsSecret } from './secrets.mjs';
 import { RUN_ID } from './runs.mjs';
 
 export const SCOPE = /^(shared|project:[a-z0-9][a-z0-9_.-]{0,63}|agent:[a-z0-9][a-z0-9_-]{0,63})$/;

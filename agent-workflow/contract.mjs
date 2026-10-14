@@ -2,18 +2,17 @@ import { publicReview } from './run-continuation.mjs';
 import { publicPublication } from './review-publication-contract.mjs';
 // The data contract every Agents Hub surface shares: the read operations' names, descriptions and input schemas,
 // and the shapes their results have. The local catalog (ops.mjs) answers them from this Mac; the hosted hub
-// (agent-readonly-service) answers the same operations from the last published snapshot. Pure JavaScript, no Node
+// (agent-readonly-service) answers the same operations from its D1 store. Pure JavaScript, no Node
 // APIs, so the Worker bundles this file too.
 //
 // Shapes (both surfaces):
 //   run brief   { run_id, agent, kind, status, title, started, ended, model, tool_calls: n, blocked: n, tokens, cost_usd, feedback }
 //               local briefs add `task` (the full prompt); the hosted hub never has it.
-//   dashboard   { generated_at, capabilities, status, agents, runs: brief[], pending: item[] | null, snapshot? }
-//               status.pending is { memory, proposals } or null when unknown. `snapshot` is present only on the
-//               hosted hub: { published_at, generated_at, stale }; unavailable snapshots add available:false.
+//   dashboard   { generated_at, capabilities, status, agents, runs: brief[], pending: item[] | null }
+//               status.pending is { memory, proposals } or null when unknown.
 //   health      additive field on get_status/open_dashboard: health.mjs schema_version 1. Legacy fields and tool names
-//               remain unchanged. Snapshot capabilities describe the published surface, never live relay authority.
-//   get_run     the run itself (local: the full receipt; hosted: its brief), plus `snapshot` on the hosted hub.
+//               remain unchanged. `capabilities` describe the surface, never live relay authority.
+//   get_run     the run itself (local and hosted: the stored receipt).
 //               Hub completed review runs add `artifact` after private bundle publication, with version,
 //               run_id, repo, commit, base_commit, review_ref, bundle_ref, size and sha256.
 
