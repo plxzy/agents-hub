@@ -45,10 +45,13 @@ Configuration (replace placeholders; never commit real credentials):
 
 1. Apply Hub migration `0008_review_publications.sql`, set matching
    `REVIEW_PUBLISHER_TOKEN`, deploy Hub. Existing Mac and dok credentials are separate.
-2. Create external volumes `agents-review-state` and `agents-review-control`, owned
-   by UID 1000. Build from the repository root with this directory's Dockerfile.
-3. Run this directory's Compose project with `REVIEW_PUBLISHER_CONFIG_DIR` set to
-   the private directory. It uses volume subpaths of existing `agents-home`.
+2. Create external volumes `agents-review-state`, `agents-review-control` and
+   `agents-review-config`, owned by container UID 1000. Copy the private configuration
+   and PEM into the config volume, mode 600 (directory 700). Rootless Docker maps
+   host and container UIDs differently; do not relax file permissions to compensate.
+   Build from the repository root with this directory's Dockerfile.
+3. Run this directory's Compose project. It mounts configuration read-only and uses
+   volume subpaths of existing `agents-home`.
 4. Add `reviewPublisher: {socket: "/run/agents-review/publisher.sock",
    repositories: ["vm", "tikkytracker"]}` to the private runner config. Install the
    committed workflow revision using the runner's draining installer and updated

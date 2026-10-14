@@ -14,7 +14,7 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     volumes:
-      - ${REVIEW_PUBLISHER_CONFIG_DIR:?Set the private configuration directory}:/config:ro
+      - config:/config:ro
       - state:/state
       - control:/control
       - type: volume
@@ -34,6 +34,9 @@ services:
       retries: 3
       start_period: 30s
 volumes:
+  config:
+    external: true
+    name: agents-review-config
   runner_home:
     external: true
     name: agents-home
