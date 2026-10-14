@@ -1,11 +1,13 @@
 // Liveness is based on a fresh observation, never on historical success.
+const CLOCK_SKEW_MS = 5_000;
 export function healthTime(value, now = Date.now()) {
   if (value == null) return { at: null, age_ms: null, problem: 'missing' };
   if (typeof value !== 'string') return { at: null, age_ms: null, problem: 'malformed' };
   const time = Date.parse(value);
   if (!Number.isFinite(time) || new Date(time).toISOString() !== value) return { at: null, age_ms: null, problem: 'malformed' };
-  if (time > now) return { at: null, age_ms: null, problem: 'future' };
-  return { at: value, age_ms: now - time, problem: null };
+  // Runner and host read different clocks; a few seconds ahead is skew, not a bad timestamp.
+  if (time > now + CLOCK_SKEW_MS) return { at: null, age_ms: null, problem: 'future' };
+  return { at: value, age_ms: Math.max(0, now - time), problem: null };
 }
 
 export function healthOf(data = {}, { now = Date.now(), maxAge = 30_000 } = {}) {
