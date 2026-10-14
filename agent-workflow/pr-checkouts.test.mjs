@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { cleanupReviews } from './pr-checkouts.mjs';
+import { cleanupReviews, checkoutReview, finishReview } from './pr-checkouts.mjs';
 
 function fixture(t, mode = 'merge') {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-cleanup-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -22,8 +22,8 @@ function fixture(t, mode = 'merge') {
   git('clone', '--bare', cwd, remote); git('remote', 'add', 'origin', remote);
   git('--git-dir', remote, 'update-ref', 'refs/pull/1/head', head);
   const pr = { number: 1, merged_at: '2026-10-14T12:00:00Z', merge_commit_sha: merged,
-    head: { sha: head, ref: 'review/example', repo: { full_name: 'owner/repo' } }, base: { ref: 'main' } };
-  const deps = { git: (...args) => args.join(' ') === 'remote get-url origin' ? 'https://github.com/owner/repo.git' : git(...args), api: () => [pr], idle: () => true };
+    head: { sha: head, ref: 'review/example', repo: { full_name: 'owner/repo' } }, base: { ref: 'main', repo: { full_name: 'owner/repo' } }, html_url: 'https://github.com/owner/repo/pull/1', state: 'closed' };
+  const deps = { git: (...args) => args.join(' ') === 'remote get-url origin' ? 'https://github.com/owner/repo.git' : git(...args), api: route => route.endsWith('/pulls/1') ? pr : [pr], idle: () => true };
   return { cwd, state, git, pr, deps, dir, head };
 }
 for (const mode of ['merge', 'squash', 'rebase']) test(`cleanup proves ${mode} inclusion and is repeatable`, t => {
@@ -69,4 +69,19 @@ test('a branch moving after proof is not deleted', t => {
     return out;
   };
   assert.equal(cleanupReviews({ cwd: f.cwd, apply: true }, f.state, deps).results[0].status, 'preserved');
+});
+
+test('checkout uses the PR branch, reuses its worktree and finish releases it for enabled cleanup', t => {
+  const f = fixture(t); f.pr.state = 'open'; const mergedAt = f.pr.merged_at; f.pr.merged_at = null;
+  const args = { cwd: f.cwd, pr_number: 1 };
+  const first = checkoutReview(args, f.state, f.deps);
+  assert.equal(first.branch, 'review/example'); assert.equal(first.status, 'ready');
+  const again = checkoutReview(args, f.state, f.deps);
+  assert.equal(again.path, first.path); assert.equal(again.status, 'already_checked_out');
+  f.pr.state = 'closed'; f.pr.merged_at = mergedAt;
+  assert.equal(cleanupReviews({ cwd: f.cwd, apply: true }, f.state, f.deps).results[0].reason, 'active review session');
+  fs.writeFileSync(path.join(f.state, 'review-cleanup.json'), JSON.stringify({ enabled: true }));
+  const done = finishReview(args, f.state, f.deps);
+  assert.equal(done.cleanup.results[0].status, 'deleted'); assert.equal(fs.existsSync(first.path), false);
+  assert.equal(f.git('branch', '--show-current'), 'main');
 });

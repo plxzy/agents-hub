@@ -95,9 +95,9 @@ function cleanupUnlocked({ cwd, apply = false }, state, dependencies = {}) {
   }
   return { github, results };
 }
-function checkoutUnlocked({ cwd, pr_number }, state) {
-  if (enabled(state)) cleanupUnlocked({ cwd, apply: true }, state);
-  const c = context(cwd, state), pr = prFor(c, pr_number);
+function checkoutUnlocked({ cwd, pr_number }, state, dependencies) {
+  if (enabled(state)) cleanupUnlocked({ cwd, apply: true }, state, dependencies);
+  const c = context(cwd, state, dependencies), pr = prFor(c, pr_number);
   if (pr.state !== 'open') throw Error('PR is closed or merged; start new work from current main');
   const branch = pr.head.ref, attached = worktrees(c.git).find(w => w.branch === `refs/heads/${branch}`);
   if (attached) {
@@ -116,14 +116,15 @@ function checkoutUnlocked({ cwd, pr_number }, state) {
   const destination = path.join(c.dir, 'worktrees', String(pr_number));
   fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
   c.git('worktree', 'add', destination, branch);
-  const records = c.journal(); records[branch] = { pr_number, path: destination, active: true }; c.save(records);
-  return { path: destination, branch, pr_url: pr.html_url, head: remote, status: 'ready' };
+  const canonical = fs.realpathSync(destination);
+  const records = c.journal(); records[branch] = { pr_number, path: canonical, active: true }; c.save(records);
+  return { path: canonical, branch, pr_url: pr.html_url, head: remote, status: 'ready' };
 }
-function finishUnlocked({ cwd, pr_number }, state) {
-  const c = context(cwd, state), pr = prFor(c, pr_number), records = c.journal();
+function finishUnlocked({ cwd, pr_number }, state, dependencies) {
+  const c = context(cwd, state, dependencies), pr = prFor(c, pr_number), records = c.journal();
   if (records[pr.head.ref]) { records[pr.head.ref].active = false; c.save(records); }
   return { pr_url: pr.html_url, state: pr.merged_at ? 'merged' : pr.state,
-    cleanup: cleanupUnlocked({ cwd, apply: enabled(state) }, state) };
+    cleanup: cleanupUnlocked({ cwd, apply: enabled(state) }, state, dependencies) };
 }
 
 function locked(args, state, fn, dependencies) {
@@ -135,5 +136,5 @@ function locked(args, state, fn, dependencies) {
   finally { fs.rmSync(lock, { recursive: true }); }
 }
 export const cleanupReviews = (args, state, dependencies) => locked(args, state, cleanupUnlocked, dependencies);
-export const checkoutReview = (args, state) => locked(args, state, checkoutUnlocked);
-export const finishReview = (args, state) => locked(args, state, finishUnlocked);
+export const checkoutReview = (args, state, dependencies) => locked(args, state, checkoutUnlocked, dependencies);
+export const finishReview = (args, state, dependencies) => locked(args, state, finishUnlocked, dependencies);
