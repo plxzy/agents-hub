@@ -9,9 +9,9 @@ import type { EngineInterface as Engine, Register } from 'claude-code'
 import type { AgentInfo, Detail, Form, Pending, Run, Snapshot, Tab } from '../types'
 
 // Installed plugins are copied into a cache, so the CLI is found on PATH: link agent-workflow/agent.mjs as `agent`
-// (e.g. ~/.local/bin/agent); its shebang finds node on PATH too.
-const ENV = '/usr/bin/env'
-const AGENT = 'agent'
+// (e.g. ~/.local/bin/agent); its shebang finds node on PATH too. Apps started from the Dock get a minimal PATH,
+// so the usual user folders are added in front.
+const LAUNCH = ['/bin/sh', '-c', 'PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" exec agent "$@"', 'agent']
 const PANE = 'agents'
 const RECENT = 50
 const FAST_MS = 4000 // while something runs
@@ -30,7 +30,7 @@ let sessionCwd = ''
 let timer: { cancel(): void } | undefined
 
 async function call($: Engine, op: string, args: Record<string, unknown> = {}) {
-  const { exitCode, stdout, stderr } = await $.process.run([ENV, AGENT, 'call', op, JSON.stringify(args)], { timeoutMs: 40000 })
+  const { exitCode, stdout, stderr } = await $.process.run([...LAUNCH, 'call', op, JSON.stringify(args)], { timeoutMs: 40000 })
   if (exitCode !== 0) throw new Error((stderr || stdout).trim().split('\n').pop() || `agent call ${op} failed`)
   return JSON.parse(stdout)
 }

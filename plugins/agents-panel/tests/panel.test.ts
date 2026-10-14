@@ -22,7 +22,7 @@ for (const source of ['hub', 'local (Hub unreachable)']) {
     const calls: string[] = []
     const message = 'Decide this in the Agents Hub panel (the Hub keeps ratings and memory notes; the Mac cannot decide them).'
     on('process.run', async (_$, e) => {
-      calls.push(e.argv[3] ?? '')
+      calls.push(e.argv[e.argv.indexOf('call') + 1] ?? '')
       const data = { ...DASHBOARD, source, decision_message: message,
         runs: [{ ...DASHBOARD.runs[0], task: undefined, title: 'A dok receipt', runner: 'dok' }],
         pending: [{ ...DASHBOARD.pending[0], hub: true }] }
@@ -47,7 +47,7 @@ const PROPS = { title: 'Agents', isFocused: true, bodyColumns: 60, placement: 'd
 
 test('failure diagnostics and partial output are both visible', async ($, on) => {
   on('process.run', async (_$, e) => {
-    const data = e.argv[3] === 'open_dashboard' ? DASHBOARD : { run_id: 'r-1', agent: 'helper', status: 'failed',
+    const data = e.argv[e.argv.indexOf('call') + 1] === 'open_dashboard' ? DASHBOARD : { run_id: 'r-1', agent: 'helper', status: 'failed',
       output: 'Useful partial answer', output_partial: true, error: 'model turn failed', trace: [],
       failure_rows: [['Failure category (inferred)', 'Agent / model'], ['Next step', 'Check the recorded provider diagnostic.'], ['Last phase', 'model'], ['Last tool', 'read'], ['Diagnostic', '503 upstream disconnected']] }
     return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
@@ -63,7 +63,7 @@ test('failure diagnostics and partial output are both visible', async ($, on) =>
 
 test('active run shows catalog progress in its list and details', async ($, on) => {
   on('process.run', async (_$, e) => {
-    const data = e.argv[3] === 'open_dashboard' ? { ...DASHBOARD, runs: [{ ...DASHBOARD.runs[1], progress_summary: 'read started · 5s ago' }] }
+    const data = e.argv[e.argv.indexOf('call') + 1] === 'open_dashboard' ? { ...DASHBOARD, runs: [{ ...DASHBOARD.runs[1], progress_summary: 'read started · 5s ago' }] }
       : { run_id: 'r-2', agent: 'network', status: 'running', trace: [], progress_rows: [['Current phase', 'Tool execution'], ['Last tool', 'read'], ['Blocker', 'None reported'], ['Latest checkpoint', 'Model message completed']] }
     return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
@@ -80,7 +80,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
   test(`draws runs and review items, opens a run and decides on a click (${surface})`, async ($, on) => {
     const calls: string[][] = []
     on('process.run', async (_$, e) => {
-      const [, , , op, json] = e.argv
+      const [op, json] = e.argv.slice(e.argv.indexOf('call') + 1)
       calls.push([op ?? '', json ?? ''])
       const out = op === 'open_dashboard' ? DASHBOARD
         : op === 'list_agents' ? DASHBOARD.agents
@@ -148,7 +148,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
 test('dok is the default; offline stays selected and the Mac choice remains available', async ($, on) => {
   const calls: string[] = []
   on('process.run', async (_$, e) => {
-    const op = e.argv[3]; calls.push(op ?? '')
+    const op = e.argv[e.argv.indexOf('call') + 1]; calls.push(op ?? '')
     const data = { ...DASHBOARD, source: 'hub', run_targets: [
       { ...DASHBOARD.run_targets[0], available: false, reason: 'dok is offline.' }, DASHBOARD.run_targets[1]],
       start_requests: [{ request_id: 'request-lost', runner: 'dok', agent: 'helper', task: 'Old task', state: 'unknown' }] }
@@ -172,7 +172,7 @@ test('dok is the default; offline stays selected and the Mac choice remains avai
 test('a new panel blocks starts when local selection support is missing', async ($, on) => {
   const calls: string[] = []
   on('process.run', async (_$, e) => {
-    calls.push(e.argv[3] ?? '')
+    calls.push(e.argv[e.argv.indexOf('call') + 1] ?? '')
     return { value: { exitCode: 0, stdout: JSON.stringify({ ...DASHBOARD, runner_selection: undefined }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
   })
   on('clock.after', async () => ({ deny: 'no timers in this test' }) as never)
@@ -188,8 +188,8 @@ test('a new panel blocks starts when local selection support is missing', async 
 test('default dok submits only explicit remote arguments', async ($, on) => {
   let submitted: Record<string, unknown> | undefined
   on('process.run', async (_$, e) => {
-    const op = e.argv[3]
-    if (op === 'start_selected_run') submitted = JSON.parse(e.argv[4] ?? '{}')
+    const op = e.argv[e.argv.indexOf('call') + 1]
+    if (op === 'start_selected_run') submitted = JSON.parse(e.argv[e.argv.indexOf('call') + 2] ?? '{}')
     const data = op === 'open_dashboard' ? DASHBOARD : op === 'start_selected_run'
       ? { run_id: 'r-dok', status: 'running' } : { run_id: 'r-dok', status: 'running', agent: 'helper', runner: 'dok', task: 'Read only' }
     return { value: { exitCode: 0, stdout: JSON.stringify(data), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as never
