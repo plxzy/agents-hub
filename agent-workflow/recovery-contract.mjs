@@ -11,6 +11,9 @@ export const recoveryEligible = r => r?.status === 'interrupted' || (r?.status =
 export function recoveryAction(r = {}) {
   const v = r.recovery;
   if (!recoveryEligible(r) || !v?.retained || !Number.isSafeInteger(v.checkpoint_version) || v.checkpoint_version < 1) return null;
+  // A new Hub can be deployed before its runner. Old ready receipts do not establish
+  // that the connected supervisor supports failed-turn admission.
+  if (r.status === 'failed' && v.failed_resume_supported !== true) return null;
   if (v.state === 'ready') return 'resume_run';
   if (v.state === 'awaiting_review' && v.inspection) return 'decide_recovery';
   return null;
@@ -23,6 +26,7 @@ export function publicRecovery(v) {
     checkpoint_at: typeof v.checkpoint_at === 'string' && v.checkpoint_at.length < 40 && Number.isFinite(Date.parse(v.checkpoint_at)) ? v.checkpoint_at : undefined,
     resumed_from: run(v.resumed_from), resumed_by: run(v.resumed_by),
     retained: v.retained === true,
+    failed_resume_supported: v.failed_resume_supported === true ? true : undefined,
     reason: typeof v.reason === 'string' && /^[A-Za-z0-9 ;:.,_-]{1,180}$/.test(v.reason) ? v.reason : undefined,
     inspection: typeof v.inspection === 'string' ? v.inspection.slice(0, 12000) : undefined,
   }).filter(([, value]) => value !== undefined));

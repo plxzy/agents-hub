@@ -126,3 +126,7 @@ receipts or resume superseded work during deployment. Preserve all checkpoints a
 back up before installing; validate in isolated Linux state with no production configuration or second Hub connection.
 A missing review ref or mismatched saved head refuses before cloning. No-edit review continuations keep `source_review`
 and remain continuable; unresolved attempts in the same conversation block workspace replacement.
+
+During a mixed-version rollout the Hub only offers failed-turn recovery after the runner has published
+`recovery.failed_resume_supported: true`. Older ready receipts keep their evidence but do not advertise an action
+that the old supervisor would reject. Interrupted-run recovery remains compatible.

@@ -39,6 +39,7 @@ export class RecoveryHost {
       if (lifecycle.resumed_by) state = 'resumed';
       if (receipt.status === 'completed') state = 'completed';
       const info = publicRecovery({ state, reason, checkpoint_version: checkpoint?.version, checkpoint_at: checkpoint?.saved_at,
+        failed_resume_supported: true,
         retained: fs.existsSync(setup.config.policy.workspace), resumed_from: receipt.recovery?.resumed_from,
         resumed_by: lifecycle.resumed_by, inspection: lifecycle.inspection });
       return { setup, checkpoint, lifecycle, info };

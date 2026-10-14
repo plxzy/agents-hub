@@ -65,7 +65,7 @@ test('hosted recovery reconciles identities and requires checkpoint-bound privat
   await mf.dispatchFetch('https://test/relay/dok-dev/runs', { method: 'POST', headers: { authorization: 'Bearer dok-test' }, body: JSON.stringify({
     run_id: failedId, agent: 'workflow', status: 'failed', started: new Date().toISOString(), error: 'model turn failed',
     failure_context: { phase: 'model', message: 'OpenAI Responses stream ended before a terminal response event' },
-    recovery: { state: 'ready', checkpoint_version: 827, retained: true } }) });
+    recovery: { state: 'ready', checkpoint_version: 827, retained: true, failed_resume_supported: true } }) });
   assert.deepEqual(value(await tool('get_run', { run_id: failedId })).next_action,
     { tool: 'resume_run', run_id: failedId, checkpoint_version: 827 });
   const publish = revision => mf.dispatchFetch('https://test/relay/dok-dev/runs', { method: 'POST', headers: { authorization: 'Bearer dok-test' }, body: JSON.stringify({

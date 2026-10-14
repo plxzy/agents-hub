@@ -12,7 +12,7 @@ test('next actions retain original patch identity after a no-edit review and rou
   assert.equal(withFailureGuidance({ ...r, commit: 'c'.repeat(40) }).next_action, undefined);
   const failure = withFailureGuidance({ run_id: id, status: 'failed', error: 'model turn failed',
     failure_context: { phase: 'model', message: 'OpenAI Responses stream ended before a terminal response event' },
-    recovery: { state: 'ready', retained: true, checkpoint_version: 827 } });
+    recovery: { state: 'ready', retained: true, checkpoint_version: 827, failed_resume_supported: true } });
   assert.deepEqual(failure.next_action, { tool: 'resume_run', run_id: id, checkpoint_version: 827 });
 });
 

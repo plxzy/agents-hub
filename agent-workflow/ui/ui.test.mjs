@@ -18,8 +18,11 @@ test('recovery buttons use the same eligibility as the runner for failed and int
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   const r = { run_id: 'r-20261014T000000Z-abcdef', status: 'failed', error: 'model turn failed',
     failure_context: { phase: 'model', message: 'OpenAI Responses stream ended before a terminal response event' },
-    recovery: { state: 'ready', retained: true, checkpoint_version: 7 } };
+    recovery: { state: 'ready', retained: true, checkpoint_version: 7, failed_resume_supported: true } };
   assert.match(JSON.stringify(context.recoveryView(r)), /Resume saved work/);
+  delete r.recovery.failed_resume_supported;
+  assert.doesNotMatch(JSON.stringify(context.recoveryView(r)), /Resume saved work/);
+  r.recovery.failed_resume_supported = true;
   r.error = 'Execution lease refused';
   assert.doesNotMatch(JSON.stringify(context.recoveryView(r)), /Resume saved work/);
   r.status = 'interrupted';
