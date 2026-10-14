@@ -3,9 +3,9 @@
   "mcpServers": {
     "agents": {
       "type": "stdio",
-      "command": "/Users/you/.local/bin/node",
+      "command": "agent",
       "args": [
-        "/Users/you/Development/dev-workflow/agent-workflow/mcp.mjs"
+        "mcp"
       ]
     }
   }

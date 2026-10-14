@@ -13,8 +13,9 @@ One plugin folder, `agents/`, for every app that can load it. It holds no logic:
 The **Agents Hub** dashboard (`open_dashboard`) renders in hosts that support MCP Apps: Claude Desktop, claude.ai,
 ChatGPT and the Codex app. Claude Code and Pi get the same tools as text. Without any app: `agent ui`.
 
-Paths in `mcp.json` (Codex) are absolute because Claude Code and Codex copy installed plugins into a cache,
-from where `${CLAUDE_PLUGIN_ROOT}` cannot reach this repo. Pi loads the package in place, so `pi/agents.ts`
+Claude Code and Codex copy installed plugins into a cache, from where `${CLAUDE_PLUGIN_ROOT}` cannot reach this
+repo, so `mcp.json` (Codex) and the panel run the `agent` CLI from PATH: link `agent-workflow/agent.mjs` as `agent`
+in a PATH folder (e.g. `ln -s …/agent-workflow/agent.mjs ~/.local/bin/agent`) and keep `node` on PATH. Pi loads the package in place, so `pi/agents.ts`
 uses relative paths. In Pi processes that `agent` starts for an agent (`AGENT_RUN=1`) the extension does nothing.
 
 After changing the plugin: bump `version` in both manifests, then update it in each app
