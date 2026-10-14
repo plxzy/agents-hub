@@ -1,0 +1,24 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agents",
+  "version": "0.4.8",
+  "description": "Agents Hub: see, run and review your own Pi agents through one shared dashboard.",
+  "author": {
+    "name": "effeef"
+  },
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Agents Hub (this Mac)",
+        "shortDescription": "View Hub agents, choose dok or Mac",
+        "longDescription": "Opens the shared Agents Hub dashboard. New panel starts default to dok; explicitly select This Mac for local Pi execution. Hub reviews are decided in the hosted panel. Local data remains available when the Hub is unreachable.",
+        "developerName": "effeef",
+        "category": "Productivity",
+        "capabilities": [
+          "Interactive"
+        ],
+        "defaultPrompt": "Open my Agents Hub dashboard."
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "agent-readonly-service",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "cf:dev": "cf dev",
+    "cf:deploy": "cf deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^2.0.0-beta.sha-52b0dc0e9",
+    "cf": "^1.0.0-beta.13",
+    "esbuild": "^0.28.2",
+    "miniflare": "^5.20261006.0-alpha"
+  },
+  "dependencies": {
+    "jose": "^6.2.12"
+  }
+}

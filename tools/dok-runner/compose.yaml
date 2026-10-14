@@ -1,0 +1,42 @@
+name: agents
+services:
+  runner:
+    image: agents-runner:pi-1.2.0-tools-20261014
+    build:
+      context: .
+      # Private Pi extensions kept outside this repo; set AGENTS_EXTENSIONS in ~/agents-runner/.env.
+      additional_contexts:
+        extensions: ${AGENTS_EXTENSIONS:-./extensions}
+    container_name: agents
+    restart: unless-stopped
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/agent-healthcheck", "/home/agent/.config/agent-workflow/dok.json"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    cpus: 2
+    mem_limit: 3g
+    memswap_limit: 3g
+    pids_limit: 512
+    volumes:
+      - home:/home/agent
+      - review_control:/run/agents-review
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+      # Docker's default proc path masks prevent a nested user/PID namespace from
+      # mounting fresh procfs. The tool sandbox supplies its own --proc /proc;
+      # it never receives this container's procfs or PID namespace.
+      - systempaths=unconfined
+      # The existing profile allows bwrap's unprivileged user namespaces.
+      - seccomp=${AGENTS_SECCOMP_PROFILE:-${HOME}/.config/dok-dev/seccomp.json}
+volumes:
+  review_control:
+    name: agents-review-control
+    external: true
+  home:
+    # Created once with `docker volume create agents-home`; holds login, config, repos and state.
+    name: agents-home
+    external: true
