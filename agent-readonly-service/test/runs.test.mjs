@@ -279,6 +279,14 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.equal((await post({ ...wrun, run_id: 'r-20261012T121100Z-0a0b0d', status: 'completed', review_ref: 'refs/heads/main' })).status, 200);
   assert.equal(JSON.parse((await tool('get_run', { run_id: 'r-20261012T121100Z-0a0b0d' })).content[0].text).review_ref, undefined); // only a run's own review ref is kept
   assert.equal((await tool('start_run', { agent: 'workflow', task: 'x', request_id: 'request-0007', repo: 'Bad Repo' })).isError, true);
+  const prStart = tool('start_run', { agent: 'workflow', task: 'Address review', request_id: 'request-0008', repo: 'dev-workflow', pr_number: 12 });
+  const prSeen = await Promise.race([prStart.then((r) => ({ rejected: r })), (async () => { let m = await next(); while (m.type !== 'request') m = await next(); return { request: m }; })()]);
+  assert.ok(prSeen.request, `pr_number start was rejected before reaching dok: ${prSeen.rejected?.content?.[0]?.text}`);
+  const pr = prSeen.request;
+  assert.deepEqual(pr.args, { request_id: 'request-0008', agent: 'workflow', task: 'Address review', repo: 'dev-workflow', pr_number: 12 });
+  ws.send(encode({ v: 1, session: 'dok-session-1', socket: hello.socket, type: 'result', attempt: pr.attempt, id: pr.id, result: { ok: true, value: { ...wrun, run_id: 'r-20261012T121200Z-0a0b0e', task: 'Address review' } } }));
+  assert.equal(JSON.parse((await prStart).content[0].text).run_id, 'r-20261012T121200Z-0a0b0e');
+  assert.equal((await tool('start_run', { agent: 'workflow', task: 'x', request_id: 'request-0009', repo: 'dev-workflow', pr_number: 12, continue_from: PREV })).isError, true);
   assert.equal((await post({ run_id: 'bad' })).status, 400);
   const accounts = (body, method = 'POST', token = DOK) => mf.dispatchFetch('https://test/relay/dok-dev/accounts', { method, headers: { authorization: 'Bearer ' + token }, ...(body ? { body: JSON.stringify(body) } : {}) });
   assert.equal((await accounts({ slot: 'openai', state: 'cooldown', until: '2999-01-01T00:00:00.000Z', last_error_kind: 'usage limit reached' }, 'POST', 'wrong')).status, 401);
