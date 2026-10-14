@@ -120,10 +120,13 @@ test('panel briefs read publications and reviews in bulk with the same result as
   await call('/relay/publisher/observe-review', review);
   // A no-edit continuation (root from review_conversation_id) and a plain completed run without a review ref.
   await post({ ...receipt(NEXT), review_conversation_id: RUN, continued_from: RUN, source_pr: review, review_ref: undefined, base_commit: review.commit, commit: review.commit, changed_files: [] });
-  const PLAIN = 'r-20261014T040744Z-71aa48';
+  const PLAIN = 'r-20261014T040744Z-71aa48', CHAIN = 'r-20261014T050744Z-71aa49';
   await post({ run_id: PLAIN, agent: 'helper', status: 'completed', started: '2026-10-14T04:07:44Z', output: 'ok' });
+  // A continuation without a conversation id: its root comes from walking continued_from.
+  await post({ ...receipt(CHAIN), started: '2026-10-14T05:07:44Z', continued_from: NEXT, review_ref: undefined, commit: review.commit, base_commit: review.commit, changed_files: [] });
   const panel = JSON.parse((await tool('panel_data')).content[0].text);
-  for (const id of [RUN, NEXT, PLAIN]) {
+  assert.equal(panel.runs.find((x) => x.run_id === CHAIN).review?.pr_number, 5);
+  for (const id of [RUN, NEXT, PLAIN, CHAIN]) {
     const brief = panel.runs.find((x) => x.run_id === id), one = await read(id);
     assert.deepEqual(brief.publication, one.publication, `publication of ${id}`);
     assert.deepEqual(brief.review, one.review, `review of ${id}`);

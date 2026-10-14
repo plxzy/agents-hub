@@ -78,25 +78,35 @@ export async function publicationsAndReviews(env, runs) {
   const out = new Map(runs.map(r => [r.run_id, {}]));
   if (!env.REVIEW_PUBLISHER_TOKEN || !runs.length) return out;
   const ids = [...new Set(runs.flatMap(r => [r.run_id, r.source_review?.run_id].filter(Boolean)))];
+  const byId = new Map(runs.map(r => [r.run_id, r]));
   const rows = new Map((await inChunks(ids, async (part, marks) => (await env.DB.prepare(`SELECT p.run_id,p.root,p.status,p.commit_sha,p.pr_number,p.pr_url,
     p.published_at,p.error,p.due,t.github FROM review_publications p LEFT JOIN review_repositories t ON t.repo=p.repo WHERE p.run_id IN (${marks})`).bind(...part).all()).results))
     .map(row => [row.run_id, row]));
   const published = (row) => row?.github == null ? undefined : publicPublication({ status: row.status, github: row.github, branch: branch(row.root), commit: row.commit_sha,
     conversation_id: row.root, pr_number: row.pr_number, pr_url: row.pr_url, published_at: row.published_at,
     error: row.error, ...(row.due ? { next_retry_at: new Date(row.due).toISOString() } : {}) });
-  const roots = new Map();
-  for (const r of runs) {
+  const roots = new Map((await Promise.all(runs.map(async (r) => {
     const row = rows.get(r.run_id);
     // Same order as readPublication.
     out.get(r.run_id).publication = row?.github != null ? published(row)
       : r.source_review && r.commit === r.source_review.commit ? published(rows.get(r.source_review.run_id))
       : r.status === 'completed' && !r.review_ref ? { status: 'not_applicable' } : undefined;
-    // Same order as rootOf; only continuation chains without a stored root need the walk.
+    // Same steps as rootOf, walking parents already loaded here; only a parent outside this list needs D1.
     try {
-      roots.set(r.run_id, row ? row.root : ARTIFACT_RUN_ID.test(r.review_conversation_id ?? '') ? r.review_conversation_id
-        : !r.continued_from ? r.run_id : await rootOf(env, r));
-    } catch { /* ancestry unavailable: no review for this run */ }
-  }
+      let at = r;
+      for (let i = 0; i < 128; i++) {
+        const known = rows.get(at.run_id);
+        if (known) return [r.run_id, known.root];
+        if (ARTIFACT_RUN_ID.test(at.review_conversation_id ?? '')) return [r.run_id, at.review_conversation_id];
+        if (!at.continued_from) return [r.run_id, at.run_id];
+        const parent = byId.get(at.continued_from);
+        if (!parent) return [r.run_id, await rootOf(env, at)];
+        if (parent.repo !== at.repo) return null;
+        at = parent;
+      }
+      return null;
+    } catch { return null; } // ancestry unavailable: no review for this run
+  }))).filter(Boolean));
   const threads = new Map((await inChunks([...new Set(roots.values())], async (part, marks) =>
     (await env.DB.prepare(`SELECT root, observation FROM review_threads WHERE root IN (${marks})`).bind(...part).all()).results)).map(t => [t.root, t.observation]));
   for (const [id, root] of roots) { const o = threads.get(root); if (o) out.get(id).review = publicReview(JSON.parse(o)); }
