@@ -1,12 +1,12 @@
-# Curated history
+# History
 
-This public repository was extracted from a private development repository. The milestones below describe the actual progression without publishing private host names, credentials, personal state, or deployment identifiers.
+This repository has two lines of history, joined by a merge commit:
 
-- Agent launcher and reviewed-memory foundations
-- Workspace and command-boundary checks
-- Shared read contract and MCP dashboard
-- Remote-runner-neutral receipts and bounded progress
-- Failure, recovery, and traceability presentation
-- Fixture-only public demo and release boundary
+- **The development history (from 2026-10-09).** This is the real commit history of the agent system from the private
+  workspace where it was built. It was filtered to the paths published here, with deployment values replaced by
+  placeholders (for example `YOUR-HUB.workers.dev`). Docs sometimes cite `evidence/…` folders; those are private test
+  records and are not published.
+- **The first public release (2026-10-13).** Four curated milestone commits and a fixture-only demo, published before
+  the full system was. The demo is still here.
 
-A curated history is intentionally different from a full mirror: it shows how the reusable surface evolved while keeping the private operating environment private.
+After the merge, all development happens in this repository.

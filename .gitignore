@@ -6,3 +6,5 @@ node_modules/
 !.env.example
 cloudflare/public/
 .wrangler/
+dist/
+.agent-wf-test-*

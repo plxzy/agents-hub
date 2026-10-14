@@ -2,17 +2,19 @@
   "name": "agents-hub",
   "version": "0.1.0",
   "private": false,
-  "description": "A small read-only dashboard contract and fixture demo for agent runs.",
+  "description": "Agents Hub: run your own Pi agents on an always-on runner and review their work from ChatGPT, Claude or the browser.",
   "type": "module",
   "engines": {
-    "node": ">=22.18"
+    "node": ">=26"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "setup": "npm ci --prefix agent-workflow && npm ci --prefix agent-readonly-service",
+    "test": "node --test test/*.test.mjs agent-workflow/ tools/review-publisher/ && npm test --prefix agent-readonly-service",
+    "check:private": "node tools/public-check/check.mjs",
     "demo": "node demo/server.mjs",
     "demo:build": "node cloudflare/build.mjs",
-    "check": "npm test",
-    "demo:deploy": "npm run demo:build && cf deploy"
+    "demo:deploy": "npm run demo:build && cf deploy",
+    "check": "npm test"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^2.0.0-beta.sha-52b0dc0e9",
