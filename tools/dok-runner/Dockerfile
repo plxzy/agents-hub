@@ -14,7 +14,7 @@ RUN cd /opt/pi && npm ci --ignore-scripts --no-audit --no-fund && npm cache clea
     && node /opt/strip-codex-provider.mjs \
     && ln -s /opt/pi/node_modules/.bin/pi /usr/local/bin/pi \
     && chmod 755 /usr/local/bin/agent-healthcheck \
-    && test "$(pi --version)" = 1.1.0
+    && test "$(pi --version)" = 1.2.0
 # OpenAI account slots (openai-2, openai-3, ...): loaded by interactive Pi for /login and by the run worker.
 COPY pi-openai-accounts /opt/pi-openai-accounts
 RUN ln -s /opt/pi/node_modules /opt/pi-openai-accounts/node_modules \
