@@ -1,7 +1,8 @@
 node_modules/
-.wrangler/
+.cloudflare/
 .DS_Store
 .env
 .env.*
 !.env.example
 cloudflare/public/
+.wrangler/
