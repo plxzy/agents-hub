@@ -1,0 +1,8 @@
+{
+  "name": "agents-hub",
+  "accessIssuer": "https://<team>.cloudflareaccess.com",
+  "accessAud": "<Access application AUD tag>",
+  "d1": { "name": "agents-hub", "id": "<D1 database id>" },
+  "r2Bucket": "agents-hub-run-artifacts",
+  "developmentEnabled": true
+}

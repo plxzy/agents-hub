@@ -45,7 +45,7 @@ request (`src/access.mjs`), so preview URLs or a missing Access app fail closed.
 `/relay/*` routes are outside Access. Evidence: `evidence/2026-10-09-agents-hub-managed-oauth/`.
 The former OAuth KV namespace was deleted on 2026-10-09.
 
-Tests: `npm test`. Deploy: `cf deploy` (check with `cf deploy --dry-run` first).
+Tests: `npm test`. Deploy: `cf deploy` (check with `cf deploy --dry-run` first). Deployment values (Worker name, Access issuer and AUD, D1 and R2 names) are read from `HUB_CONFIG` (default `~/.config/agents-hub/hub.json`, shape in `hub.example.json`); `HUB_NAME`, `HUB_ACCESS_ISSUER` and `HUB_ACCESS_AUD` override single values.
 
 With the dok runner configured, MCP advertises hosted `start_run`, `get_remote_run` and app-only
 `panel_data`, `panel_run`, `rate_run`, `review_decide`. The Worker requires a verified Access assertion
