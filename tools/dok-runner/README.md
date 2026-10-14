@@ -130,3 +130,7 @@ and remain continuable; unresolved attempts in the same conversation block works
 During a mixed-version rollout the Hub only offers failed-turn recovery after the runner has published
 `recovery.failed_resume_supported: true`. Older ready receipts keep their evidence but do not advertise an action
 that the old supervisor would reject. Interrupted-run recovery remains compatible.
+
+## GitHub review publication (2026-10-14)
+
+The separate [review publisher](../review-publisher/README.md) automatically exports enabled repository reviews as draft PRs and supplies fresh GitHub bases for independent runs. Pi receives no GitHub credential. Follow-ups preserve their saved heads and update the same PR. Hub migration 0008, a dedicated publisher secret, an explicit repository activation cutoff and the runner socket configuration are required. `publish_review` retries publication without rerunning the agent.

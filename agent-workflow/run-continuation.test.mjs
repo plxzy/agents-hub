@@ -60,6 +60,7 @@ function fixture(t) {
 
 test('no-edit reviews preserve the exact source and can be continued again through production callbacks', async t => {
   const f = fixture(t); let prior = f.original;
+  f.host.prepareBase = async () => { assert.fail('continuation must never fetch a fresh base'); };
   for (let n = 0; n < 2; n++) {
     const started = await f.host.runStart({ request_id: 'continuation-' + n, agent: 'demo', task: 'Review the saved patch', continue_from: prior.run_id });
     const final = await f.finish(started.run_id);
@@ -99,4 +100,16 @@ test('expired, foreign and unfinished conversations cannot fall back to main', a
   fs.unlinkSync(path.join(f.host.state, 'run-work', f.original.run_id, 'head'));
   await assert.rejects(f.host.runStart(args), /expired.*artifact/);
   assert.equal(f.starts(), 0);
+});
+
+test('independent runs fail before Pi when fresh GitHub base is unavailable', async t => {
+  const f = fixture(t); let requested = false;
+  f.host.prepareBase = async (repo, runId) => {
+    requested = true; assert.equal(repo, 'demo'); assert.match(runId, /^r-/);
+    throw Error('Fresh GitHub base unavailable; check review publisher');
+  };
+  const started = await f.host.runStart({ request_id: 'fresh-base-required', agent: 'demo', task: 'Inspect main' });
+  const final = await f.finish(started.run_id);
+  assert.equal(requested, true); assert.notEqual(final.status, 'completed');
+  assert.match(final.error, /Fresh GitHub base unavailable/); assert.equal(f.starts(), 0);
 });

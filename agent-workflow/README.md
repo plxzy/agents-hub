@@ -126,7 +126,7 @@ usage-limit restart has only unit-test coverage so far.
 the same way, but in a *writable* clone inside the development-session sandbox (no network, no credentials, other runs
 invisible), with a 30-minute limit and a 4 GiB disk watchdog; one write run and one read run may run at a time.
 `workflow` takes an optional `repo` (default `dev-workflow`); fixed-workspace agents use the repo named like their
-workspace, from `repositories` in `dok.json` (bare repos `vm.git`, `tikkytracker.git` next to `dev-workflow.git`; they do not follow GitHub, refresh with `git push dok` from the Mac checkout, whose `remote.dok.push` is `refs/remotes/origin/main:refs/heads/main` after `git fetch origin`). When the agent stops, the harness commits any changes and builds the bundle
+workspace, from `repositories` in `dok.json` (bare repos `vm.git`, `tikkytracker.git` next to `dev-workflow.git`; configured GitHub repositories fetch fresh main through the separate review publisher before independent runs; continuations preserve their saved heads). When the agent stops, the harness commits any changes and builds the bundle
 *inside the sandbox* (the checkout's git config is agent-controlled), then the supervisor imports it into the bare repo as
 the append-only ref `refs/heads/review/runs/<run_id>`; nothing is merged. The receipt carries `review_ref`, `commit`,
 `base_commit`, `changed_files`, `repo`; fetch with `git fetch dok 'refs/heads/review/runs/*:refs/remotes/dok-review/runs/*'`.
@@ -400,4 +400,4 @@ attempts remain capped at two. Original failed receipts stay failed and link to 
 
 Hosted discovery must expose `start_run`, `resume_run` and `get_start_status`. Refresh client discovery after changing tool
 metadata; server-side advertisement alone does not prove a previously connected Dots session has refreshed its tools.
-A private Hub review ref/bundle is not a GitHub branch or PR; use the verified importer for that handoff.
+For enabled repositories, the separate [dok review publisher](../tools/review-publisher/README.md) automatically publishes changed reviews as GitHub draft PRs. Follow-ups update the same PR. `publish_review` retries or explicitly backfills a saved run; `get_run` exposes its publication state and PR URL. Private Hub refs remain usable before publication completes.

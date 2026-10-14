@@ -18,6 +18,7 @@ services:
     pids_limit: 512
     volumes:
       - home:/home/agent
+      - review_control:/run/agents-review
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
@@ -28,6 +29,9 @@ services:
       # The existing profile allows bwrap's unprivileged user namespaces.
       - seccomp=${AGENTS_SECCOMP_PROFILE:-${HOME}/.config/dok-dev/seccomp.json}
 volumes:
+  review_control:
+    name: agents-review-control
+    external: true
   home:
     # Created once with `docker volume create agents-home`; holds login, config, repos and state.
     name: agents-home

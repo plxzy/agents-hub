@@ -1,3 +1,4 @@
+import { PUBLISH_REVIEW } from './review-publication-contract.mjs';
 import { SELECTED_START_INPUT, SELECTION_VERSION, dokTarget } from './run-selection.mjs';
 import { startSelected, selectedStartStatus, selectedStarts } from './selected-starts.mjs';
 // The operations catalog: everything the agent system can do for another app, defined once. The local MCP
@@ -17,7 +18,7 @@ import {
 import { acceptProposal, pending, recordFeedback, rejectProposal, runEvals } from './improve.mjs';
 import { DASHBOARD_URI, READ_OPS, lastRunOf, runBrief } from './contract.mjs';
 import { runTrace, failureRows, progressRows, progressSummary, configurationRows, withFailureGuidance } from './run-trace.mjs';
-import { linkedHub, refreshHubCache, flushOutbox, hubPanel, hubRun, DECIDE_IN_HUB } from './hub.mjs';
+import { linkedHub, refreshHubCache, flushOutbox, hubPanel, hubRun, hubPublishReview, DECIDE_IN_HUB } from './hub.mjs';
 
 export { DASHBOARD_URI };
 const AGENT_CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent.mjs');
@@ -73,6 +74,8 @@ const AGENT_ARGS = {
 };
 
 export const OPS = [
+  { name: 'publish_review', ...PUBLISH_REVIEW, access: 'run', annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: true },
+    run: (args, ctx) => hubPublishReview(args, hubOptions(ctx)) },
   // Read operations: names, descriptions, schemas and result shapes are shared with the hosted hub (contract.mjs).
   { name: 'open_dashboard', access: 'read', ...READ_OPS.open_dashboard, run: (_, ctx) => openDashboard(ctx) },
   { name: 'get_status', access: 'read', ...READ_OPS.get_status, run: (_, ctx) => status(ctx) },

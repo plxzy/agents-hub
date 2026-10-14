@@ -1,3 +1,4 @@
+import { publicPublication } from './review-publication-contract.mjs';
 // The data contract every Agents Hub surface shares: the read operations' names, descriptions and input schemas,
 // and the shapes their results have. The local catalog (ops.mjs) answers them from this Mac; the hosted hub
 // (agent-readonly-service) answers the same operations from the last published snapshot. Pure JavaScript, no Node
@@ -18,7 +19,7 @@
 import { publicRecovery } from './recovery-contract.mjs';
 import { sanitizeProgress } from './run-progress.mjs';
 
-export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v12.html';
+export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v13.html';
 /** Any earlier dashboard URI a host may still have cached; it is answered with the current page. */
 export const isDashboardUri = (uri) => typeof uri === 'string' && /^ui:\/\/agents(-hub)?\/dashboard(-v\d+)?\.html$/.test(uri);
 
@@ -52,6 +53,7 @@ export function titleOf(text) {
 export function runBrief(r) {
   const rating = typeof r.feedback === 'string' ? r.feedback : r.feedback?.rating;
   return {
+    ...(publicPublication(r.publication) ? { publication: publicPublication(r.publication) } : {}),
     run_id: r.run_id, agent: r.agent, kind: r.kind ?? 'task', status: r.status, title: r.title ?? titleOf(r.task),
     started: r.started, ended: r.ended, model: r.model, tool_calls: count(r.tool_calls), blocked: count(r.blocked),
     tokens: num(r.usage?.totalTokens, r.tokens), cost_usd: num(r.usage?.cost, r.cost_usd),
@@ -104,7 +106,7 @@ export const READ_OPS = {
   },
   get_run: {
     title: 'Get a run', annotations: { readOnlyHint: true },
-    description: 'One run by id. A run still in progress has status running. Completed review runs may include artifact metadata for authenticated Mac import through tools/run-artifact/import.mjs; no GitHub publication is implied.',
+    description: 'One run by id. A run still in progress has status running. Completed review runs may include artifact metadata for authenticated Mac import through tools/run-artifact/import.mjs; publication reports GitHub draft PR delivery separately from coding completion. Poll publication until published or blocked.',
     input: { type: 'object', required: ['run_id'], additionalProperties: false, properties: { run_id: { type: 'string' } } },
   },
 };

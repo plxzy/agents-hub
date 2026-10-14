@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { prepareReviewBase } from './review-base.mjs';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -92,7 +93,9 @@ try {
   if (count) hubAgents = dir;
 } catch { /* frozen release */ }
 const processSession = randomUUID();
-const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts, knowledgeHub, hub_agents: hubAgents });
+const sessions = new DevelopmentSessions({ ...config, processSession, lease, report, accounts, knowledgeHub,
+  prepareBase: config.reviewPublisher ? (repo, id) => config.reviewPublisher.repositories.includes(repo)
+    ? prepareReviewBase(config.reviewPublisher.socket, repo, id) : null : null, hub_agents: hubAgents });
 // The knowledge release is frozen, so the runnable list is computed once per supervisor boot.
 const agents = [...new Set(['workflow', ...sessions.runnable().map(a => a.name)])];
 const started = identity(process.pid);

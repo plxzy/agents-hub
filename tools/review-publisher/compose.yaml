@@ -1,0 +1,45 @@
+name: agents-review
+services:
+  publisher:
+    image: ${REVIEW_PUBLISHER_IMAGE:-agents-review-publisher:latest}
+    container_name: agents-review-publisher
+    restart: unless-stopped
+    stop_grace_period: 3m
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - ${REVIEW_PUBLISHER_CONFIG_DIR:?Set the private configuration directory}:/config:ro
+      - state:/state
+      - control:/control
+      - type: volume
+        source: runner_home
+        target: /repos/vm.git
+        volume:
+          subpath: repos/vm.git
+      - type: volume
+        source: runner_home
+        target: /repos/tikkytracker.git
+        volume:
+          subpath: repos/tikkytracker.git
+    healthcheck:
+      test: [CMD, node, -e, "const f=require('fs');process.exit(Date.now()-JSON.parse(f.readFileSync('/state/heartbeat.json')).at<60000?0:1)"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+volumes:
+  runner_home:
+    external: true
+    name: agents-home
+  control:
+    external: true
+    name: agents-review-control
+  state:
+    external: true
+    name: agents-review-state

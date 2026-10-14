@@ -1,3 +1,4 @@
+import { ensurePublication, readPublication } from './review-publications.mjs';
 // Run receipts in D1: written by authenticated runners, read by the Hub's MCP tools.
 import { publicRecovery } from '../../agent-workflow/recovery-contract.mjs';
 import { containsSecret } from './snapshot.mjs';
@@ -46,8 +47,11 @@ export function sanitizeReceipt(r, runner) {
     accounts_used: Array.isArray(r.accounts_used) ? r.accounts_used.filter((x) => /^openai(-[1-9]\d*)?$/.test(x)).slice(0, 10) : undefined,
     repo: /^[a-z0-9][a-z0-9_.-]{0,63}$/.test(r.repo ?? '') ? r.repo : undefined,
     ...publicRunContext(r),
+    ...(r.github_base && /^[a-f0-9]{40}$/.test(r.github_base.commit) && iso(r.github_base.observed_at)
+      ? { github_base: { commit: r.github_base.commit, observed_at: iso(r.github_base.observed_at) } } : {}),
     base_commit: /^[a-f0-9]{40,64}$/.test(r.base_commit ?? '') ? r.base_commit : undefined,
     review_ref: new RegExp(`^refs/heads/review/runs/${r.run_id}$`).test(r.review_ref ?? '') ? r.review_ref : undefined,
+    review_conversation_id: runner === 'dok' && RUN_ID.test(r.review_conversation_id ?? r.root ?? '') ? (r.review_conversation_id ?? r.root) : undefined,
     continued_from: RUN_ID.test(r.continued_from ?? '') ? r.continued_from : undefined,
     source_review: publicSourceReview(r.source_review),
     changed_files: Array.isArray(r.changed_files) ? r.changed_files.filter((f) => typeof f === 'string' && f.length <= 300 && !/[\r\n]/.test(f)).slice(0, 200) : undefined,
@@ -79,6 +83,7 @@ export async function storeRun(env, receipt, runner) {
   if (r.status !== 'running' && Array.isArray(receipt.memory_proposals)) {
     try { await proposeMemory(env, { agent: r.agent, run_id: r.run_id, items: receipt.memory_proposals }); } catch { /* the receipt is stored; the runner retries unreported receipts */ }
   }
+  await ensurePublication(env, r);
   return r;
 }
 
@@ -99,6 +104,8 @@ export async function readRun(env, runId) {
   const receipt = observedRun(row), rating = (await ratingsFor(env, [runId])).get(runId);
   try { const artifact = await readArtifact(env, receipt); if (artifact) receipt.artifact = artifact; }
   catch { /* Run receipts remain readable during artifact-store outages. */ }
+  const publication = await readPublication(env, receipt);
+  if (publication) receipt.publication = publication;
   return withFailureGuidance(rating ? { ...receipt, feedback: rating } : receipt);
 }
 
@@ -111,7 +118,7 @@ export async function recentRuns(env, { agent, limit = 50 } = {}) {
       : env.DB.prepare('SELECT receipt, updated_at FROM runs ORDER BY started DESC LIMIT ?').bind(n);
     const { results } = await stmt.all();
     const receipts = results.map((x) => observedRun(x)).reverse(), ratings = await ratingsFor(env, receipts.map((r) => r.run_id));
-    return receipts.map((r) => ({ ...runBrief({ ...r, feedback: ratings.get(r.run_id) }), runner: r.runner }));
+    return Promise.all(receipts.map(async r => ({ ...runBrief({ ...r, publication: await readPublication(env, r), feedback: ratings.get(r.run_id) }), runner: r.runner })));
   } catch { return []; } // table missing before migration: behave as before
 }
 

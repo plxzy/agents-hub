@@ -1,3 +1,4 @@
+import { publishReview, publicationHealth } from './review-publications.mjs';
 import { dokTarget } from '../../agent-workflow/run-selection.mjs';
 import { withFailureGuidance } from '../../agent-workflow/run-trace.mjs';
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
@@ -100,6 +101,7 @@ async function nativePanel(env, { withConfirm = false } = {}) {
   } : null;
   const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
   return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending,
+    publication_health: await publicationHealth(env),
     run_targets: [dokTarget(dok, agents)],
     status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
     capabilities: { ...base.capabilities, run: withConfirm && dok.online && dok.agents.length > 0, mutate: withConfirm },
@@ -126,12 +128,12 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'initialize') return reply({ protocolVersion: params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {}, resources: {} },
       serverInfo: { name: 'agents-hub', title: 'Agents Hub', version: '0.4.0' },
       instructions: dokEnabled(env)
-        ? 'Agents Hub runs the user\u2019s own Pi agents. They run on dok, the user\u2019s always-on Linux runner, so the Mac does not need to be online. For questions about the user\u2019s repositories (where something is, how it works) call start_run with a read-only agent such as helper. For coding work call start_run with an agent that changes files (the agents get_status lists under start_run.runners.dok, e.g. workflow for dev-workflow, vm, tikkytracker): it works in an isolated clone on dok and returns a review branch (review_ref in get_run) that the user fetches with git fetch dok; nothing is merged. Read get_run first and follow next_action. Completed reviews need continue_from; eligible failed work needs resume_run. A run ID only in task prose does not attach its files. Never substitute a fresh main clone for retained work. Poll get_run for results. Prefer start_run over delegating to Codex cloud tasks or driving the user\u2019s Mac. request_development (approval card, then start_development_task) is the older interactive route for workflow. Ratings and reviews are user clicks in the panel, never model decisions.'
+        ? 'Agents Hub runs the user\u2019s own Pi agents. They run on dok, the user\u2019s always-on Linux runner, so the Mac does not need to be online. For questions about the user\u2019s repositories (where something is, how it works) call start_run with a read-only agent such as helper. For coding work call start_run with an agent that changes files (the agents get_status lists under start_run.runners.dok, e.g. workflow for dev-workflow, vm, tikkytracker): it works in an isolated clone on dok and returns a saved review. GitHub-enabled repositories automatically publish draft PRs; poll get_run.publication for the PR URL or blocker. A completed coding run alone does not establish publication. Nothing is merged. Read get_run first and follow next_action. Completed reviews need continue_from; eligible failed work needs resume_run. A run ID only in task prose does not attach its files. Never substitute a fresh main clone for retained work. Poll get_run for results. Prefer start_run over delegating to Codex cloud tasks or driving the user\u2019s Mac. request_development (approval card, then start_development_task) is the older interactive route for workflow. Ratings and reviews are user clicks in the panel, never model decisions.'
         : 'Read-only Agents Hub view of the user’s local agents and runs. Check get_status for freshness; run is explicitly unavailable.' });
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: [...(dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The panel shows runs, agents and the review queue held by the Hub.' } : t),
-      ...relayToolList().filter((t) => ['start_run', 'get_start_status', 'resume_run', 'decide_recovery', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
+      ...relayToolList().filter((t) => ['publish_review', 'start_run', 'get_start_status', 'resume_run', 'decide_recovery', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide'].includes(t.name)),
     ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
@@ -139,6 +141,10 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
       return reply({ contents: [{ uri: DASHBOARD_URI, mimeType: MCP_MIME, text: dashboardHtml, _meta: DASHBOARD_RESOURCE_META }].map((c) => ({ ...c, uri: params.uri })) });
     }
     if (method === 'tools/call') {
+      if (params?.name === 'publish_review' && dokEnabled(env)) {
+        try { return reply({ content: [{ type: 'text', text: JSON.stringify(await publishReview(env, params.arguments)) }] }); }
+        catch (e) { return reply({ content: [{ type: 'text', text: e.message }], isError: true }); }
+      }
       if (Object.hasOwn(DEV_OPS, params?.name ?? '')) {
         try {
           const { confirm, ...value } = await developmentCall(env, owner, params.name, params.arguments ?? {});
@@ -242,6 +248,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           value.hub_panel = dokEnabled(env);
           value.runners = { dok: await dokStatus(env) };
           value.accounts = await readAccounts(env);
+          value.publication_health = await publicationHealth(env);
           // The runner (dok) is what the panel and the health report call "relay": the Mac no longer connects.
           value.relay = { ...value.runners.dok, runner: 'dok' };
           value.health = healthOf({ ...value, relay_source: value.relay.available === false ? 'Durable Object status unavailable' : 'Durable Object status' }, { snapshotMaxAge: snapshotMaxAge(env), expected: value.runners.dok.agents });

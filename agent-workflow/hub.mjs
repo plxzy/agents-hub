@@ -46,6 +46,8 @@ export async function hubPanel(options = {}) {
   return panel;
 }
 
+export const hubPublishReview = (args, options = {}) => hubCall('publish-review', { ...options, method: 'POST', body: args });
+
 export const hubStart = (args, options = {}) => hubCall('start', { ...options, method: 'POST', body: args, timeoutMs: 30000 });
 export const hubStartStatus = (id, options = {}) => hubCall(`starts/${encodeURIComponent(id)}`, { ...options, timeoutMs: 30000 });
 

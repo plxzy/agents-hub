@@ -1,3 +1,4 @@
+import { publisherFetch, ensurePublication, publishReview } from './review-publications.mjs';
 import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { validateSelectedStart, REQUEST_ID, dokTarget } from '../../agent-workflow/run-selection.mjs';
 import { storeRun, readRun, runForRequest } from './runs.mjs';
@@ -11,6 +12,7 @@ import { ARTIFACT_RUN_ID } from '../../agent-workflow/run-artifact-contract.mjs'
 const json = (x, status) => Response.json(x, { status, headers: { 'cache-control': 'no-store' } });
 export async function relayFetch(request, env, readPanel) {
   const pathname = new URL(request.url).pathname;
+  if (pathname.startsWith('/relay/publisher/')) return publisherFetch(request, env);
   const dok = pathname.startsWith('/relay/dok-dev/'), mac = pathname.startsWith('/relay/mac/');
   if (!dok && !mac) return json({ error: 'not_found' }, 404); // the Mac no longer connects (retired 2026-10-12)
   const token = dok ? env.DOK_RELAY_TOKEN : env.MAC_TOKEN;
@@ -26,7 +28,9 @@ export async function relayFetch(request, env, readPanel) {
     try {
       const receipt = await readRun(env, id);
       if (!receipt) return json({ error: 'Unknown run' }, 404);
-      return dok ? await uploadArtifact(request, env, receipt) : await downloadArtifact(env, receipt);
+      const response = dok ? await uploadArtifact(request, env, receipt) : await downloadArtifact(env, receipt);
+      if (dok && response.ok) await ensurePublication(env, receipt);
+      return response;
     } catch { return json({ error: 'Artifact unavailable' }, 503); }
   }
   const target = dok ? env.RELAY.getByName('owner-dok-dev') : null;
@@ -140,6 +144,7 @@ async function macRoute(request, env, pathname, readPanel) {
       // Lookup runs through the same ordered command queue as start; it never executes work.
       return json(found.ok ? found.value : { state: 'unknown', reason: 'Request lookup unavailable.' });
     }
+    if (pathname === '/relay/mac/publish-review' && request.method === 'POST') return json(await publishReview(env, await request.json()));
     if (pathname === '/relay/mac/panel' && get) return readPanel
       ? json(await readPanel()) : json({ error: 'Panel unavailable' }, 503);
     if (pathname.startsWith('/relay/mac/runs/') && get) {

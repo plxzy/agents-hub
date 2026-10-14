@@ -175,7 +175,7 @@ function scheduleRefresh() {
   clearTimeout(S.poll);
   if (document.hidden || S.closed) return;
   // Follow active runs on either runner at the same interval.
-  const active = S.data?.runs?.some((r) => r.status === 'running');
+  const active = S.data?.runs?.some((r) => r.status === 'running' || publicationPending(r.publication));
   S.poll = setTimeout(refresh, active ? 4000 : 30000);
 }
 async function act(key, fn) {
@@ -188,7 +188,7 @@ async function act(key, fn) {
 
 function setData(data) {
   S.data = data;
-  if (['running', 'unknown'].includes(S.detail?.status)) loadDetail(S.detail.run_id);
+  if (['running', 'unknown'].includes(S.detail?.status) || publicationPending(S.detail?.publication)) loadDetail(S.detail.run_id);
   scheduleRefresh();
   render({ passive: true });
 }
@@ -199,6 +199,7 @@ async function loadDetail(id) {
 // ---------- views ----------
 function chips() {
   const st = S.data?.status; if (!st) return [];
+  const publisher = S.data?.publication_health;
   // Missing counts remain unknown rather than showing a zero.
   const review = Number.isInteger(st.pending?.memory) && st.pending.memory >= 0 && Number.isInteger(st.pending?.proposals) && st.pending.proposals >= 0
     ? st.pending.memory + st.pending.proposals : null;
@@ -207,6 +208,7 @@ function chips() {
   return [h('span', { class: 'chip' }, `${st.agents ?? 'unknown'} agents`),
     h('span', { class: `chip${st.running ? ' on' : ''}` }, `${st.running ?? 'unknown'} running`),
     h('span', { class: `chip${review ? ' attn' : ''}` }, review === null ? 'review: unknown' : `${review} to review`),
+    ...(publisher?.enabled ? [h('span', { class: `chip${publisher.online ? '' : ' attn'}` }, `GitHub publisher ${publisher.online ? 'online' : 'offline'}${publisher.counts?.blocked ? ` · ${publisher.counts.blocked} blocked` : ''}`)] : []),
     ...(S.data.source ? [h('span', { class: 'chip' }, S.data.source === 'hub' ? 'Agents Hub' : S.data.source)] : []),
     h('details', { class: 'runner-health', open: S.healthOpen, ontoggle: (e) => { S.healthOpen = e.currentTarget.open; } },
       h('summary', {}, runner), h('ul', {}, ...details.map((text) => h('li', {}, text))))];
@@ -291,6 +293,7 @@ function runsView() {
       h('span', { class: `pill ${r.status}` }, r.status === 'running' ? [h('span', { class: 'spin' }), ' running'] : r.status),
       h('span', { class: 'name' }, r.agent), h('span', { class: 'grow ell' }, r.title ?? firstLine(r.task)),
       r.feedback ? h('span', { class: 'small muted' }, r.feedback === 'good' ? '👍' : '👎') : null),
+    r.publication && r.publication.status !== 'not_applicable' ? h('div', { class: 'small' }, r.publication.status === 'published' ? `GitHub PR #${r.publication.pr_number}` : r.publication.status === 'blocked' ? 'GitHub publication needs attention' : 'Publishing to GitHub') : null,
     progressSummary(r) ? h('div', { class: 'small', role: 'status' }, progressSummary(r)) : null,
     h('div', { class: 'meta' }, [r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null), r.kind !== 'task' && r.kind, ago(r.started), r.status !== 'running' && `${r.tool_calls} tool call(s)`,
       r.blocked > 0 && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')))));
@@ -322,6 +325,20 @@ function recoveryView(r) {
         h('p', { class: 'small muted' }, 'Leave this run paused by taking no action.')) : null);
 }
 
+const publicationPending = p => ['waiting_artifact', 'queued', 'publishing', 'retrying'].includes(p?.status);
+function publicationView(r) {
+  const p = r.publication;
+  if (!p || p.status === 'not_applicable') return null;
+  const label = p.status === 'published' ? 'Published on GitHub' : p.status === 'blocked' ? 'Publication needs attention' : 'Publishing to GitHub';
+  const safeUrl = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(p.pr_url ?? '');
+  return h('section', {}, h('h3', {}, 'GitHub review'), h('p', { role: 'status', 'aria-live': 'polite' }, label),
+    safeUrl ? h('a', { href: p.pr_url, target: '_blank', rel: 'noopener noreferrer' }, 'Open pull request') : null,
+    p.error ? h('p', {}, p.error) : null,
+    p.commit ? h('p', { class: 'small muted' }, `Saved commit ${p.commit}`) : null,
+    ['blocked', 'retrying'].includes(p.status) ? h('button', { disabled: S.busy.has(`publish-${r.run_id}`), onclick: () => act(`publish-${r.run_id}`, async () => {
+      await call('publish_review', { run_id: r.run_id }); await loadDetail(r.run_id); await refresh();
+    }) }, 'Retry publication') : null);
+}
 function detailView() {
   const r = S.detail;
   const back = h('button', { class: 'back', onclick: () => { S.detail = null; render(); } }, '← All runs');
@@ -339,6 +356,7 @@ function detailView() {
     h('div', { class: 'body' }, r.task ?? r.title ?? ''),
     r.status === 'running' ? h('div', { class: 'meta' }, h('span', { class: 'spin' }), ` started ${ago(r.started)}; this updates on its own`) : null,
     r.error ? h('p', { class: 'error' }, `Error: ${r.error}`) : null,
+    publicationView(r),
     recoveryView(r),
     progressRows(r).length ? h('section', {}, h('h3', {}, ['running', 'unknown'].includes(r.status) ? 'Run progress' : 'Recorded progress'),
       h('dl', {}, ...progressRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)]))) : null,

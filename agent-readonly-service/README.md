@@ -58,3 +58,7 @@ The new Mac start route reserves a `mac-` request namespace, rejects model/repos
 and uses the same dispatcher and supervisor admission checks. Status includes pending start attempts;
 older retained operations without an operation label are counted conservatively. Existing decision checks
 and confirmation-code boundaries remain unchanged. See `../agent-workflow/README.md` for recovery semantics.
+
+## GitHub review publication (2026-10-14)
+
+The separate [review publisher](../tools/review-publisher/README.md) automatically exports enabled repository reviews as draft PRs and supplies fresh GitHub bases for independent runs. Pi receives no GitHub credential. Follow-ups preserve their saved heads and update the same PR. Hub migration 0008, a dedicated publisher secret, an explicit repository activation cutoff and the runner socket configuration are required. `publish_review` retries publication without rerunning the agent.

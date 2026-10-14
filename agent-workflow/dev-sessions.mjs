@@ -61,7 +61,7 @@ export function persistRunCompletion({ file, receipt, result, observed, done, co
 }
 
 export class DevelopmentSessions extends RecoveryHost {
-  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, knowledgeHub, hub_agents = null, accounts_module = null, limits = {} }) {
+  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, knowledgeHub, hub_agents = null, accounts_module = null, prepareBase = null, limits = {} }) {
     super();
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
@@ -69,6 +69,7 @@ export class DevelopmentSessions extends RecoveryHost {
       ...Object.fromEntries(Object.entries(repositories).map(([name, dir]) => [name, fs.realpathSync(dir)])) };
     this.context = context ? fs.realpathSync(context) : null;
     this.revision = revision; this.processSession = processSession; this.lease = lease; this.reporter = report;
+    this.prepareBase = prepareBase;
     this.accounts = accounts; this.accountsModule = accounts_module; this.knowledgeHub = knowledgeHub;
     // Agent definitions published to the Hub (a folder with agents/*.md written at boot); the frozen release is the fallback.
     this.hubAgents = hub_agents ? fs.realpathSync(hub_agents) : null;
@@ -298,7 +299,7 @@ export class DevelopmentSessions extends RecoveryHost {
     const file = path.join(this.state, 'agent-runs', runId + '.json');
     if (!fs.existsSync(file)) throw new Error('Unknown run');
     const { reported_at, root, ...receipt } = read(file);
-    return receipt;
+    return { ...receipt, review_conversation_id: root ?? receipt.run_id };
   }
   runSelection() {
     return { version: 1, agents: this.runnable().map(agent => {
@@ -380,7 +381,7 @@ export class DevelopmentSessions extends RecoveryHost {
     const entry = this.runs.get(receipt.run_id);
     const recoveryDir = this.recoveryDir(receipt.run_id);
     fs.mkdirSync(recoveryDir, { recursive: true, mode: 0o700 });
-    const branch = receipt.source_review ? receipt.source_review.review_ref.slice('refs/heads/'.length) : 'main';
+    let branch = receipt.source_review ? receipt.source_review.review_ref.slice('refs/heads/'.length) : 'main';
     let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer, policy, configFile, slots, checkpoint = {};
     const progress = progressPublisher(async update => {
       save(file, { ...receipt, ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}), progress: update });
@@ -431,6 +432,14 @@ export class DevelopmentSessions extends RecoveryHost {
         baseCommit = setup.baseCommit; commit = setup.commit; agent = setup.agent;
         save(configFile, setup.config);
       } else {
+      if (!receipt.source_review && this.prepareBase) {
+        const fresh = await this.prepareBase(repo, receipt.run_id);
+        if (fresh) {
+          branch = fresh.ref.slice('refs/heads/'.length);
+          receipt.github_base = { commit: fresh.commit, observed_at: fresh.observed_at };
+          save(file, receipt);
+        }
+      }
       if (receipt.source_review) {
         let savedHead;
         try { savedHead = io.execFileSync('git', ['--git-dir', repository, 'rev-parse', '--verify', receipt.source_review.review_ref], { env: gitEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim(); }
@@ -443,10 +452,11 @@ export class DevelopmentSessions extends RecoveryHost {
       io.execFileSync('git', ['-c', 'core.hooksPath=/dev/null', 'clone', '--no-checkout', '--no-tags', '--single-branch', '--branch', branch,
         ...(write ? [] : ['--depth', '1']), 'file://' + repository, workspace], { env: gitEnv, stdio: 'pipe', timeout: 120000 });
       const checkout = io.linuxPolicy({ ...agent, workspace, writePaths: [workspace], protectPaths: [], skills: [], context: null }, this.state);
-      await io.sandboxExecute(checkout, 'bash', { command: write ? `git -c core.hooksPath=/dev/null checkout -q -b agent-run origin/${branch}` : 'git -c core.hooksPath=/dev/null checkout -q --detach origin/main' });
+      await io.sandboxExecute(checkout, 'bash', { command: write ? `git -c core.hooksPath=/dev/null checkout -q -b agent-run origin/${branch}` : `git -c core.hooksPath=/dev/null checkout -q --detach origin/${branch}` });
       // Read before the agent can touch the checkout; later git calls on it run only inside the sandbox.
       baseCommit = commit = io.execFileSync('git', ['--git-dir', path.join(workspace, '.git'), 'rev-parse', 'HEAD'], { env: gitEnv, encoding: 'utf8' }).trim();
       if (receipt.source_review) verifyContinuationHead(receipt.source_review, commit);
+      if (receipt.github_base && receipt.github_base.commit !== commit) throw Error('Fresh GitHub base identity mismatch');
       // Observe after checkout, before Pi can modify Git configuration or the tree.
       Object.assign(receipt, captureRunContext(workspace), { repo, base_commit: baseCommit });
       save(file, { ...receipt, commit });
