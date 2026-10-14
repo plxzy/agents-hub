@@ -4,16 +4,19 @@ import path from "node:path";
 import { bindings, defineConfig, exports } from "cf/config";
 
 // Deployment values live outside the repo: HUB_CONFIG (default ~/.config/agents-hub/hub.json), see hub.example.json.
-// Without that file the placeholders below still build and run `cf dev`; Access then fails closed.
+// A missing file stops the build so a deploy can never bind placeholders; HUB_LOCAL=1 allows them for `cf dev`.
 const configPath = process.env.HUB_CONFIG ?? path.join(os.homedir(), ".config/agents-hub/hub.json");
-const file = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+const file = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : null;
+if (!file && process.env.HUB_LOCAL !== "1") {
+	throw new Error(`Hub config not found at ${configPath}: copy hub.example.json there (or set HUB_CONFIG), or set HUB_LOCAL=1 for local placeholders.`);
+}
 
 // HUB_NAME / HUB_ACCESS_AUD deploy a second copy (e.g. agents-hub-next) behind its own Access application.
-const name = process.env.HUB_NAME ?? file.name ?? "agents-hub";
-const accessIssuer = process.env.HUB_ACCESS_ISSUER ?? file.accessIssuer ?? "https://example.cloudflareaccess.com";
-const accessAud = process.env.HUB_ACCESS_AUD ?? file.accessAud ?? "";
-const d1 = { name: file.d1?.name ?? "agents-hub", id: file.d1?.id ?? "00000000-0000-0000-0000-000000000000" };
-const r2Bucket = file.r2Bucket ?? "agents-hub-run-artifacts";
+const name = process.env.HUB_NAME ?? file?.name ?? "agents-hub";
+const accessIssuer = process.env.HUB_ACCESS_ISSUER ?? file?.accessIssuer ?? "https://example.cloudflareaccess.com";
+const accessAud = process.env.HUB_ACCESS_AUD ?? file?.accessAud ?? "";
+const d1 = { name: file?.d1?.name ?? "agents-hub", id: file?.d1?.id ?? "00000000-0000-0000-0000-000000000000" };
+const r2Bucket = file?.r2Bucket ?? "agents-hub-run-artifacts";
 
 export default defineConfig({
 	worker: {
@@ -28,7 +31,7 @@ export default defineConfig({
 			RELAY: bindings.durableObject({ worker: name, exportName: "AgentRelay" }),
 			ACCESS_ISSUER: bindings.text(accessIssuer),
 			ACCESS_AUD: bindings.text(accessAud),
-			DEVELOPMENT_ENABLED: bindings.text(process.env.HUB_DEVELOPMENT_ENABLED ?? String(file.developmentEnabled ?? true)),
+			DEVELOPMENT_ENABLED: bindings.text(process.env.HUB_DEVELOPMENT_ENABLED ?? String(file?.developmentEnabled ?? true)),
 			DB: bindings.d1(d1),
 			RUN_ARTIFACTS: bindings.r2({ name: r2Bucket }),
 		},
