@@ -83,16 +83,17 @@ function hubCounts(snapRuns, hubRuns) {
 // Panel data without the Mac: runs from D1 (plus any snapshot runs), the dok runner's agents and one-time codes for
 // rating finished Hub runs. The dashboard treats `relay` as "a hosted runner is online", so dok presents itself there.
 async function nativePanel(env, { withConfirm = false } = {}) {
-  const snap = await latest(env), m = snap ? meta(snap, env) : null, hubRuns = await recentRuns(env, { limit: 50 }), dok = await dokStatus(env);
+  // Independent reads run together: each D1 round trip can cost tens of milliseconds.
+  const [snap, hubRuns, dok, published, notes, publicationHealthNow] = await Promise.all([latest(env), recentRuns(env, { limit: 50 }), dokStatus(env),
+    agentSummaries(env), pendingMemory(env), publicationHealth(env)]);
+  const m = snap ? meta(snap, env) : null;
   const base = snap ? snapshotData(snap, m) : { generated_at: null, capabilities: CAPABILITIES, status: { agents: null, runs: null, running: null, pending: null, last_run: null },
     agents: [], runs: [], pending: null, snapshot: { available: false, generated_at: null, published_at: null, stale: true } };
-  const published = await agentSummaries(env);
   if (published.length) base.agents = published.map((a) => ({ ...a, last_run: lastRunOf(a.name, mergeRuns(snap?.payload.runs ?? [], hubRuns)) }));
   const known = new Set(base.agents.map((a) => a.name));
   const agents = [...base.agents.map((a) => ({ ...a, remote_allowed: dok.agents.includes(a.name) })),
     ...dok.agents.filter((n) => !known.has(n)).map((name) => ({ name, description: 'Runs on dok.', remote_allowed: true, last_run: null }))];
   const runs = mergeRuns(base.runs, hubRuns).slice(-50);
-  const notes = await pendingMemory(env);
   // Only the authenticated Hub widget requests codes. Mac reads do not even issue them.
   const [rate, review, recovery] = withConfirm ? await Promise.all([
     issueCodes(env, 'rate', hubRuns.filter((r) => ['completed', 'failed', 'interrupted'].includes(r.status)).map((r) => r.run_id)),
@@ -107,7 +108,7 @@ async function nativePanel(env, { withConfirm = false } = {}) {
     { snapshotMaxAge: snapshotMaxAge(env), expected: dok.agents }), dok);
   return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending, health, hub_panel: true,
     development_available: Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true'),
-    publication_health: await publicationHealth(env),
+    publication_health: publicationHealthNow,
     run_targets: [dokTarget(dok, agents)],
     status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
     capabilities: { ...base.capabilities, run: withConfirm && dok.online && dok.agents.length > 0, mutate: withConfirm },
