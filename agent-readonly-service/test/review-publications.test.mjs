@@ -110,3 +110,39 @@ test('PR observations remain separate from historical publication and pending wo
   assert.equal((await call('/relay/publisher/resolve-review', { repo: 'vm', root: RUN })).status, 409);
   assert.equal((await call('/relay/publisher/observe-review', { ...review, github: 'foreign/repo' })).status, 409);
 });
+
+test('panel briefs read publications and reviews in bulk with the same result as one-run reads', async t => {
+  const { call, post, upload, read, tool } = await runtime(t), r = receipt();
+  await post(r); await upload(r);
+  const job = (await (await call('/relay/publisher/claim', {})).json()).job;
+  await call('/relay/publisher/finish', { run_id: RUN, lease: job.lease, status: 'published', commit: r.commit, pr_number: 5, pr_url: 'https://github.com/owner/vm/pull/5' });
+  const review = { root: RUN, github: 'owner/vm', pr_number: 5, branch: `review/agents/${RUN}`, commit: 'd'.repeat(40), observed_at: '2026-10-14T12:00:00Z', state: 'open' };
+  await call('/relay/publisher/observe-review', review);
+  // A no-edit continuation (root from review_conversation_id) and a plain completed run without a review ref.
+  await post({ ...receipt(NEXT), review_conversation_id: RUN, continued_from: RUN, source_pr: review, review_ref: undefined, base_commit: review.commit, commit: review.commit, changed_files: [] });
+  const PLAIN = 'r-20261014T040744Z-71aa48';
+  await post({ run_id: PLAIN, agent: 'helper', status: 'completed', started: '2026-10-14T04:07:44Z', output: 'ok' });
+  const panel = JSON.parse((await tool('panel_data')).content[0].text);
+  for (const id of [RUN, NEXT, PLAIN]) {
+    const brief = panel.runs.find((x) => x.run_id === id), one = await read(id);
+    assert.deepEqual(brief.publication, one.publication, `publication of ${id}`);
+    assert.deepEqual(brief.review, one.review, `review of ${id}`);
+  }
+  assert.equal(panel.runs.find((x) => x.run_id === RUN).publication.pr_number, 5);
+  assert.equal(panel.runs.find((x) => x.run_id === NEXT).review.pr_number, 5);
+  assert.equal(panel.runs.find((x) => x.run_id === PLAIN).publication.status, 'not_applicable');
+});
+
+test('panel_data carries health and answers a poll with an unchanged version until something changes', async t => {
+  const { post, tool } = await runtime(t);
+  await post(receipt());
+  const first = JSON.parse((await tool('panel_data')).content[0].text);
+  assert.match(first.version, /^[a-f0-9]{16}$/); assert.equal(first.hub_panel, true);
+  assert.ok(first.health?.relay && first.health?.execution, 'health comes with the panel');
+  const same = await tool('panel_data', { since: first.version });
+  assert.deepEqual(JSON.parse(same.content[0].text), { unchanged: true, version: first.version });
+  assert.equal(same._meta, undefined, 'an unchanged answer issues no codes');
+  await post({ ...receipt(NEXT), status: 'running', review_ref: undefined, commit: undefined });
+  const changed = JSON.parse((await tool('panel_data', { since: first.version })).content[0].text);
+  assert.notEqual(changed.version, first.version); assert.ok(changed.runs.some((x) => x.run_id === NEXT));
+});

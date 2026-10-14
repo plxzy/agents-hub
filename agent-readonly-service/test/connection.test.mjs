@@ -141,6 +141,11 @@ test('session request tool result opens Development without launching a task', a
     if (name === 'development_panel') return { structuredContent: { grants: [], host: { online: true } } };
     const result = await call(name,args);
     if (name === 'open_dashboard') result.structuredContent.development_available = true;
+    // Hosted polls read panel_data alone; it reports the same Development availability.
+    if (name === 'panel_data' && !result.isError) {
+      const v = JSON.parse(result.content[0].text);
+      if (!v.unchanged) { v.development_available = true; delete v.development; result.content[0].text = JSON.stringify(v); }
+    }
     return result;
   };
   const ui = await mount(t,f);

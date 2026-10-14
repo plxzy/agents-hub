@@ -66,6 +66,42 @@ export async function readReview(env, r) {
   const row = await env.DB.prepare('SELECT observation FROM review_threads WHERE root=?').bind(root).first();
   return row?.observation ? publicReview(JSON.parse(row.observation)) : undefined;
 }
+// D1 allows at most 100 bound parameters per statement.
+const CHUNK = 90;
+export async function inChunks(ids, read) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += CHUNK) out.push(...await read(ids.slice(i, i + CHUNK), ids.slice(i, i + CHUNK).map(() => '?').join(',')));
+  return out;
+}
+/** readPublication and readReview for many runs: a few IN queries instead of three lookups per run. Map of run_id → { publication, review }. */
+export async function publicationsAndReviews(env, runs) {
+  const out = new Map(runs.map(r => [r.run_id, {}]));
+  if (!env.REVIEW_PUBLISHER_TOKEN || !runs.length) return out;
+  const ids = [...new Set(runs.flatMap(r => [r.run_id, r.source_review?.run_id].filter(Boolean)))];
+  const rows = new Map((await inChunks(ids, async (part, marks) => (await env.DB.prepare(`SELECT p.run_id,p.root,p.status,p.commit_sha,p.pr_number,p.pr_url,
+    p.published_at,p.error,p.due,t.github FROM review_publications p LEFT JOIN review_repositories t ON t.repo=p.repo WHERE p.run_id IN (${marks})`).bind(...part).all()).results))
+    .map(row => [row.run_id, row]));
+  const published = (row) => row?.github == null ? undefined : publicPublication({ status: row.status, github: row.github, branch: branch(row.root), commit: row.commit_sha,
+    conversation_id: row.root, pr_number: row.pr_number, pr_url: row.pr_url, published_at: row.published_at,
+    error: row.error, ...(row.due ? { next_retry_at: new Date(row.due).toISOString() } : {}) });
+  const roots = new Map();
+  for (const r of runs) {
+    const row = rows.get(r.run_id);
+    // Same order as readPublication.
+    out.get(r.run_id).publication = row?.github != null ? published(row)
+      : r.source_review && r.commit === r.source_review.commit ? published(rows.get(r.source_review.run_id))
+      : r.status === 'completed' && !r.review_ref ? { status: 'not_applicable' } : undefined;
+    // Same order as rootOf; only continuation chains without a stored root need the walk.
+    try {
+      roots.set(r.run_id, row ? row.root : ARTIFACT_RUN_ID.test(r.review_conversation_id ?? '') ? r.review_conversation_id
+        : !r.continued_from ? r.run_id : await rootOf(env, r));
+    } catch { /* ancestry unavailable: no review for this run */ }
+  }
+  const threads = new Map((await inChunks([...new Set(roots.values())], async (part, marks) =>
+    (await env.DB.prepare(`SELECT root, observation FROM review_threads WHERE root IN (${marks})`).bind(...part).all()).results)).map(t => [t.root, t.observation]));
+  for (const [id, root] of roots) { const o = threads.get(root); if (o) out.get(id).review = publicReview(JSON.parse(o)); }
+  return out;
+}
 export async function resolveReview(env, { repo, root, pr_number }) {
   const target = await repository(env, repo);
   if (!target || (root ? !ARTIFACT_RUN_ID.test(root) || pr_number !== undefined : !Number.isSafeInteger(pr_number) || pr_number < 1)) throw Error('Invalid review selection');

@@ -1,4 +1,4 @@
-import { ensurePublication, readPublication, readReview } from './review-publications.mjs';
+import { ensurePublication, readPublication, readReview, publicationsAndReviews } from './review-publications.mjs';
 // Run receipts in D1: written by authenticated runners, read by the Hub's MCP tools.
 import { publicRecovery } from '../../agent-workflow/recovery-contract.mjs';
 import { containsSecret } from './snapshot.mjs';
@@ -120,8 +120,9 @@ export async function recentRuns(env, { agent, limit = 50 } = {}) {
     const stmt = agent ? env.DB.prepare('SELECT receipt, updated_at FROM runs WHERE agent = ? ORDER BY started DESC LIMIT ?').bind(agent, n)
       : env.DB.prepare('SELECT receipt, updated_at FROM runs ORDER BY started DESC LIMIT ?').bind(n);
     const { results } = await stmt.all();
-    const receipts = results.map((x) => observedRun(x)).reverse(), ratings = await ratingsFor(env, receipts.map((r) => r.run_id));
-    return Promise.all(receipts.map(async r => ({ ...runBrief({ ...r, publication: await readPublication(env, r), review: await readReview(env, r), feedback: ratings.get(r.run_id) }), runner: r.runner })));
+    const receipts = results.map((x) => observedRun(x)).reverse();
+    const [ratings, extra] = await Promise.all([ratingsFor(env, receipts.map((r) => r.run_id)), publicationsAndReviews(env, receipts)]);
+    return receipts.map(r => ({ ...runBrief({ ...r, ...extra.get(r.run_id), feedback: ratings.get(r.run_id) }), runner: r.runner }));
   } catch { return []; } // table missing before migration: behave as before
 }
 

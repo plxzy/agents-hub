@@ -94,18 +94,61 @@ async function nativePanel(env, { withConfirm = false } = {}) {
   const runs = mergeRuns(base.runs, hubRuns).slice(-50);
   const notes = await pendingMemory(env);
   // Only the authenticated Hub widget requests codes. Mac reads do not even issue them.
-  const confirm = withConfirm ? {
-    rate: await issueCodes(env, 'rate', hubRuns.filter((r) => ['completed', 'failed', 'interrupted'].includes(r.status)).map((r) => r.run_id)),
-    review: await issueCodes(env, 'review', notes.map((n) => n.id)),
-    recovery: await issueCodes(env, 'recovery', hubRuns.filter(r => r.recovery?.state === 'awaiting_review' && r.recovery?.checkpoint_version).map(r => `${r.run_id}:${r.recovery.checkpoint_version}`)),
-  } : null;
+  const [rate, review, recovery] = withConfirm ? await Promise.all([
+    issueCodes(env, 'rate', hubRuns.filter((r) => ['completed', 'failed', 'interrupted'].includes(r.status)).map((r) => r.run_id)),
+    issueCodes(env, 'review', notes.map((n) => n.id)),
+    issueCodes(env, 'recovery', hubRuns.filter(r => r.recovery?.state === 'awaiting_review' && r.recovery?.checkpoint_version).map(r => `${r.run_id}:${r.recovery.checkpoint_version}`)),
+  ]) : [];
+  const confirm = withConfirm ? { rate, review, recovery } : null;
   const pending = [...notes, ...(base.pending ?? []).filter((p) => p.kind !== 'memory')];
-  return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending,
+  const relay = { ...dok, runner: 'dok' };
+  // The same health report open_dashboard gives, so the panel can poll this one call alone.
+  const health = runnerHealth(healthOf({ ...base, relay, relay_source: dok.available === false ? 'Durable Object status unavailable' : 'Durable Object status' },
+    { snapshotMaxAge: snapshotMaxAge(env), expected: dok.agents }), dok);
+  return { ...base, source: 'hub', generated_at: new Date().toISOString(), agents, runs, pending, health, hub_panel: true,
+    development_available: Boolean(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true'),
     publication_health: await publicationHealth(env),
     run_targets: [dokTarget(dok, agents)],
     status: { ...base.status, agents: agents.length, ...hubCounts(snap?.payload.runs, hubRuns), pending: { memory: notes.length, proposals: pending.length - notes.length } },
     capabilities: { ...base.capabilities, run: withConfirm && dok.online && dok.agents.length > 0, mutate: withConfirm },
-    ...(confirm ? { confirm } : {}), relay: { ...dok, runner: 'dok' } };
+    ...(confirm ? { confirm } : {}), relay };
+}
+
+function runnerHealth(health, dok) {
+  if (dok.online && dok.agents.length) health.execution = { ...health.execution, available: true, runner: 'dok', reason: `dok runner online; start_run runs: ${dok.agents.join(', ')}` };
+  return health;
+}
+
+/**
+ * A short fingerprint of everything the panel shows, from a handful of indexed or tiny reads, so the panel can poll
+ * often and fetch the full data only when it changed. Timestamps that move on every heartbeat are left out; the panel
+ * still does a full read at least once a minute (labels, codes). null when it cannot be computed.
+ */
+async function panelVersion(env, owner) {
+  try {
+    const q = (sql) => env.DB.prepare(sql);
+    const [rows, dok, development] = await Promise.all([
+      env.DB.batch([
+        q('SELECT MAX(updated_at) AS v FROM runs'),
+        q("SELECT COUNT(*) AS n, MAX(created) AS c, MAX(decided) AS d FROM memory WHERE status = 'candidate' OR decided IS NOT NULL"),
+        q('SELECT COUNT(*) AS n, MAX(rated_at) AS v FROM ratings'),
+        q(`SELECT group_concat(run_id || ':' || status || ':' || attempts || ':' || COALESCE(pr_url, '') || ':' || COALESCE(error, ''), '|') AS v
+          FROM review_publications WHERE run_id IN (SELECT run_id FROM runs ORDER BY started DESC LIMIT 50)`),
+        q("SELECT group_concat(root || ':' || COALESCE(observation, ''), '|') AS v FROM review_threads"),
+        q("SELECT group_concat(slot || ':' || state || ':' || updated_at, '|') AS v FROM accounts"),
+        q("SELECT value AS v FROM knowledge_state WHERE key = 'revision'"),
+        q('SELECT observed_at AS v FROM review_publisher_health WHERE id = 1'),
+      ]),
+      dokStatus(env),
+      owner && env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentCall(env, owner, 'get_development', {}).then((d) => d.grants).catch(() => null) : null,
+    ]);
+    const [runs, memory, ratings, publications, threads, accounts, revision, publisher] = rows.map((r) => r.results);
+    const publisherOnline = !!publisher[0]?.v && Date.now() - Date.parse(publisher[0].v) < 60000;
+    const text = JSON.stringify([runs, memory, ratings, publications, threads, accounts, revision, publisherOnline,
+      [dok.online, dok.enabled, dok.available, dok.agents, dok.pending_starts, dok.run_selection], development]);
+    const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+    return [...hash.slice(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch { return null; }
 }
 
 const toolList = TOOLS.map(({ name, title, description, input, annotations, ui }) => ({
@@ -159,8 +202,17 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
         try {
           const args = params.arguments ?? {};
           if (params.name === 'panel_data') {
+            const version = await panelVersion(env, owner);
+            if (version && args.since === version) return reply({ content: [{ type: 'text', text: JSON.stringify({ unchanged: true, version }) }] });
             const { confirm, ...value } = await nativePanel(env, { withConfirm: true });
-            return reply({ content: [{ type: 'text', text: JSON.stringify(value) }], _meta: { 'agents-hub/confirm': confirm } });
+            // The Development tab comes with the panel, so one host call refreshes everything.
+            let devConfirm;
+            if (value.development_available) {
+              try { const { confirm: c, ...d } = await developmentCall(env, owner, 'development_panel', {}); value.development = d; devConfirm = c; }
+              catch { /* the panel falls back to its own development_panel call */ }
+            }
+            return reply({ content: [{ type: 'text', text: JSON.stringify({ ...value, ...(version ? { version } : {}) }) }],
+              _meta: { 'agents-hub/confirm': confirm, ...(devConfirm ? { 'agents-hub/development-confirm': devConfirm } : {}) } });
           }
           if (params.name === 'panel_run') {
             const run = await readRun(env, args.run_id);
@@ -258,7 +310,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
             ? { available: true, runners: { dok: dokAgents }, note: 'start_run works now: it runs on dok, the always-on Linux runner. Poll get_run for the result.' }
             : { available: false, note: 'dok is offline, so no runner is available.' };
           if (dokAgents.length) {
-            value.health.execution = { ...value.health.execution, available: true, runner: 'dok', reason: `dok runner online; start_run runs: ${dokAgents.join(', ')}` };
+            runnerHealth(value.health, dok);
             if (params.name === 'get_status') value.capabilities = { ...value.capabilities, run: true };
           }
         }

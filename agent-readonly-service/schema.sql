@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS runs (
   started TEXT NOT NULL, ended TEXT, updated_at TEXT NOT NULL, receipt TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS runs_started ON runs(started);
+CREATE INDEX IF NOT EXISTS runs_updated_at ON runs(updated_at);
 CREATE TABLE IF NOT EXISTS accounts (
   slot TEXT PRIMARY KEY, state TEXT NOT NULL, until TEXT, last_error_kind TEXT, host TEXT NOT NULL, updated_at TEXT NOT NULL
 );

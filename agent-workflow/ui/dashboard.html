@@ -153,30 +153,50 @@ async function developmentRequest(name, args = {}) {
   S.devRequests.delete(key);
   return result;
 }
-async function refresh() {
-  if (S.refreshing || S.closed) return;
+// A hosted Hub panel polls panel_data alone: it carries health and the Development tab, and with `since` it answers
+// "unchanged" from a few cheap reads. A full read still happens at least once a minute (time labels, one-time codes).
+const hubPanel = () => S.data?.hub_panel === true && S.data?.transport !== 'mac';
+async function refresh({ poll = false } = {}) {
+  if (S.closed) return;
+  // A refresh asked for during a poll (e.g. after a click) runs right after it instead of being dropped.
+  if (S.refreshing) { S.again ||= !poll; return; }
   S.refreshing = true;
   try {
+    if (hubPanel()) {
+      const since = poll && S.version && Date.now() - S.fullAt < 60000 ? S.version : undefined;
+      const live = await call('panel_data', since ? { since } : {});
+      if (live.unchanged) return;
+      S.version = live.version; S.fullAt = Date.now();
+      if (live.development) S.development = live.development;
+      else if (live.development_available) S.development = await call('development_panel');
+      setData({ ...live, health: live.health ?? dashboardHealth(S.data, live) }); showError();
+      return;
+    }
     let data = await call('open_dashboard');
     const developmentAvailable = data.development_available;
     // Hosted panel_data reads the Hub; Mac transport already received that data through its read-only route.
     if (data.transport !== 'mac' && (data.relay?.online === true || data.hub_panel === true)) {
-      try { const live = await call('panel_data'); data = { ...live, health: dashboardHealth(data, live) }; }
+      try { const live = await call('panel_data'); data = { ...live, health: dashboardHealth(data, live) }; S.version = live.version; S.fullAt = Date.now(); }
       catch (e) { data.relay.error = e.message; }
     }
     data.development_available = developmentAvailable;
-    if (developmentAvailable) S.development = await call('development_panel');
+    if (data.development) S.development = data.development;
+    else if (developmentAvailable) S.development = await call('development_panel');
     setData(data); showError(data.relay?.error);
   }
-  catch (e) { showError(`Could not refresh: ${e.message}`); }
-  finally { S.refreshing = false; scheduleRefresh(); }
+  // Keep showing the last data, with the error, and any tab the host switched to.
+  catch (e) { showError(`Could not refresh: ${e.message}`); render({ passive: true }); }
+  finally {
+    S.refreshing = false;
+    if (S.again) { S.again = false; refresh(); } else scheduleRefresh();
+  }
 }
 function scheduleRefresh() {
   clearTimeout(S.poll);
   if (document.hidden || S.closed) return;
-  // Follow active runs on either runner at the same interval.
+  // Follow active runs on either runner. The Hub's change check is cheap, so a hosted panel checks every few seconds.
   const active = S.data?.runs?.some((r) => r.status === 'running' || publicationPending(r.publication));
-  S.poll = setTimeout(refresh, active ? 4000 : 30000);
+  S.poll = setTimeout(() => refresh({ poll: true }), hubPanel() ? (active ? 2000 : 3000) : (active ? 4000 : 30000));
 }
 async function act(key, fn) {
   if (S.busy.has(key)) return;
@@ -540,7 +560,7 @@ app.onhostcontextchanged = applyContext;
 app.onteardown = async () => { S.closed = true; clearTimeout(S.poll); return {}; };
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) clearTimeout(S.poll);
-  else if (!S.closed) refresh();
+  else if (!S.closed) refresh({ poll: true });
 });
 render();
 await app.connect();

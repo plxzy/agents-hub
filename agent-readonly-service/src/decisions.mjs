@@ -4,6 +4,9 @@
 import { RUN_ID, redactLines } from './runs.mjs';
 
 const TTL = 30 * 60 * 1000;
+// D1 allows at most 100 bound parameters per statement.
+const chunks = (ids, n = 90) => Array.from({ length: Math.ceil(ids.length / n) }, (_, i) => ids.slice(i * n, i * n + n));
+const marks = (ids) => ids.map(() => '?').join(',');
 const bytes = () => crypto.getRandomValues(new Uint8Array(18));
 const code = () => btoa(String.fromCharCode(...bytes())).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
@@ -11,13 +14,14 @@ const code = () => btoa(String.fromCharCode(...bytes())).replace(/\+/g, '-').rep
 export async function issueCodes(env, kind, targets, now = Date.now()) {
   await env.DB.prepare('DELETE FROM confirmations WHERE expires < ?').bind(now).run();
   const out = {};
-  for (const target of targets) {
-    const old = await env.DB.prepare('SELECT code FROM confirmations WHERE kind = ? AND target = ? AND expires > ? LIMIT 1').bind(kind, target, now + TTL / 2).first();
-    if (old) { out[target] = old.code; continue; }
-    const fresh = code();
-    await env.DB.prepare('INSERT INTO confirmations (code, kind, target, expires) VALUES (?, ?, ?, ?)').bind(fresh, kind, target, now + TTL).run();
-    out[target] = fresh;
+  for (const part of chunks(targets)) {
+    const { results } = await env.DB.prepare(`SELECT code, target FROM confirmations WHERE kind = ? AND expires > ? AND target IN (${marks(part)})`)
+      .bind(kind, now + TTL / 2, ...part).all();
+    for (const r of results) out[r.target] ??= r.code;
   }
+  const fresh = targets.filter((t) => !Object.hasOwn(out, t)).map((t) => [t, code()]);
+  if (fresh.length) await env.DB.batch(fresh.map(([target, c]) => env.DB.prepare('INSERT INTO confirmations (code, kind, target, expires) VALUES (?, ?, ?, ?)').bind(c, kind, target, now + TTL)));
+  for (const [target, c] of fresh) out[target] = c;
   return out;
 }
 
@@ -44,8 +48,8 @@ export async function rateRun(env, { run_id, rating, comment }, now = new Date()
 export async function ratingsFor(env, ids) {
   if (!env.DB || !ids.length) return new Map();
   try {
-    const marks = ids.map(() => '?').join(',');
-    const { results } = await env.DB.prepare(`SELECT run_id, rating, comment FROM ratings WHERE run_id IN (${marks})`).bind(...ids).all();
+    const results = [];
+    for (const part of chunks(ids)) results.push(...(await env.DB.prepare(`SELECT run_id, rating, comment FROM ratings WHERE run_id IN (${marks(part)})`).bind(...part).all()).results);
     return new Map(results.map((r) => [r.run_id, { rating: r.rating, ...(r.comment ? { comment: r.comment } : {}) }]));
   } catch { return new Map(); }
 }

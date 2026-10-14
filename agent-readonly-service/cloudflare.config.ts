@@ -9,6 +9,8 @@ export default defineConfig({
 		name,
 		compatibilityDate: "2026-10-01",
 		compatibilityFlags: ["global_fetch_strictly_public"],
+		// Run near D1 (LHR) and the runner's Durable Object instead of near the caller: a panel read makes many D1 round trips.
+		placement: { mode: "smart" },
 		entrypoint: "src/worker.mjs",
 		exports: { AgentRelay: exports.durableObject({ storage: "sqlite" }) },
 		env: {
