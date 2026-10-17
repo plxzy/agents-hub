@@ -3,6 +3,13 @@ import { PUBLISH_REVIEW } from './review-publication-contract.mjs';
 const empty = { type: 'object', properties: {}, additionalProperties: false };
 const confirm = { type: 'string', pattern: '^[A-Za-z0-9_-]{20,64}$', description: 'One-time code from the panel; only the panel has it.' };
 const requestId = { type: 'string', pattern: '^[a-zA-Z0-9_-]{8,80}$', description: 'Reuse only for the exact same request.' };
+const runId = { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' };
+// Operator actions on one dok run. Each returns a receipt (action_id, before, after) that list_run_actions reads back.
+const control = (title, description) => ({ title, read: false,
+  input: { type: 'object', required: ['run_id', 'request_id'], additionalProperties: false, properties: { run_id: runId, request_id: requestId,
+    reason: { type: 'string', pattern: '^[A-Za-z0-9 ;:.,_-]{0,120}$', description: 'Short reason recorded with the action (letters, digits, spaces and ;:.,_- only).' } } },
+  description: description + ' Returns {action_id, run_id, action, before, after}; the action is recorded and readable with list_run_actions.' });
+export const RUN_CONTROLS = { cancel_run: 'cancel', pause_run: 'pause', dismiss_run: 'dismiss', retry_inspection: 'retry_inspection' };
 export const RELAY_OPS = {
   publish_review: PUBLISH_REVIEW,
   get_remote_run: { title: 'Get a remote run', read: true,
@@ -30,6 +37,13 @@ export const RELAY_OPS = {
       properties: { run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' }, request_id: requestId,
         checkpoint_version: { type: 'integer', minimum: 1 } } },
     description: 'Resume an eligible failed or interrupted dok run from its exact saved checkpoint, returning a linked new run id. Reuse the request id only for the identical checkpoint. Uncertain file-changing commands require the user to approve recovery in the Hub panel.' },
+  cancel_run: control('Cancel a run', 'Stop one active dok run now. Its files are kept as an interrupted run that is never resumed automatically; dismiss_run then releases its conversation.'),
+  pause_run: control('Pause a run', 'Stop one active dok run at its latest checkpoint and hold it. Nothing resumes it automatically; resume_run with its checkpoint_version continues it.'),
+  dismiss_run: control('Dismiss a stopped run', 'Give up on a failed or interrupted dok run that will not be recovered, for example after its work was redone. Nothing is deleted: its workspace and checkpoint stay for inspection, and its review conversation is no longer blocked.'),
+  retry_inspection: control('Retry a recovery inspection', 'Run the read-only recovery inspection again for an interrupted dok run whose inspection failed, so the user can decide in the panel.'),
+  list_run_actions: { title: 'List actions on a run', read: true,
+    input: { type: 'object', required: ['run_id'], additionalProperties: false, properties: { run_id: runId } },
+    description: 'Operator actions recorded for a run (cancel, pause, dismiss, retry_inspection), oldest first, each with its caller and the run state before and after.' },
   decide_recovery: { title: 'Continue inspected work', appOnly: true, read: false,
     input: { type: 'object', required: ['run_id', 'request_id', 'checkpoint_version', 'confirm'], additionalProperties: false,
       properties: { run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' }, request_id: requestId,

@@ -87,6 +87,8 @@ export function failureGuidance(r = {}) {
   return advice('unknown', 'Inspect this run’s recorded error, last phase/tool and private runner logs to establish the cause before considering a new run.', 'insufficient recorded evidence');
 }
 
+// A stopped run that no resume or approval can continue; only an operator decision moves it on.
+const stuck = r => ['failed', 'interrupted'].includes(r.status) && ['paused', 'unavailable', 'awaiting_review'].includes(r.recovery?.state);
 export function withFailureGuidance(r) {
   // Never trust advice persisted or supplied by a caller; derive it from this receipt each time.
   const { failure_guidance: _ignored, next_action: _action, ...receipt } = r;
@@ -97,7 +99,12 @@ export function withFailureGuidance(r) {
     : action === 'decide_recovery' ? { tool: 'open_dashboard', run_id: receipt.run_id,
       note: 'The user must approve continuation from inspected files in the Hub recovery card. Models cannot approve recovery.' }
     : action ? { tool: action, run_id: receipt.run_id, checkpoint_version: receipt.recovery.checkpoint_version }
-    : receipt.recovery?.resumed_by ? { tool: 'get_run', run_id: receipt.recovery.resumed_by } : undefined;
+    : receipt.recovery?.resumed_by ? { tool: 'get_run', run_id: receipt.recovery.resumed_by }
+    : stuck(receipt) ? (receipt.recovery.state === 'awaiting_review' && !receipt.recovery.inspection
+      ? { tool: 'retry_inspection', run_id: receipt.run_id, note: 'An interrupted command needs a read-only inspection before the user can approve continuing. If the inspection failed, retry_inspection runs it again; otherwise poll get_run.' }
+      : { tool: 'dismiss_run', run_id: receipt.run_id,
+        note: `No recovery applies${receipt.recovery.reason ? ` (${receipt.recovery.reason})` : ''}. If the work was redone or is no longer needed, dismiss_run releases its conversation; nothing is deleted.` })
+    : undefined;
   const pr = publicReview(receipt.review), input = publicSourcePr(receipt.source_pr);
   if (receipt.status === 'completed') {
     if (pr?.state === 'merged' || pr?.state === 'closed') next_action = { note: `PR #${pr.pr_number} is ${pr.state}. New work requires a new PR from current main.` };

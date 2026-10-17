@@ -15,7 +15,7 @@ import { createUiServer } from './server.mjs';
 
 test('recovery buttons use the same eligibility as the runner for failed and interrupted work', () => {
   const html = dashboardHtml();
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S: { data: { relay: {} }, busy: new Set(), devRequests: new Map() }, recoveryAction,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null, S: { data: { relay: {} }, busy: new Set(), devRequests: new Map() }, recoveryAction,
     ago: () => 'now', h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   const r = { run_id: 'r-20261014T000000Z-abcdef', status: 'failed', error: 'model turn failed',
@@ -33,6 +33,24 @@ test('recovery buttons use the same eligibility as the runner for failed and int
   assert.match(JSON.stringify(context.recoveryView(r)), /Approve continuation from current files/);
   r.recovery.retained = false;
   assert.doesNotMatch(JSON.stringify(context.recoveryView(r)), /Approve continuation/);
+});
+
+test('run action buttons follow the run state and stay off the Mac panel', async () => {
+  const html = dashboardHtml(), calls = [];
+  const context = vm.createContext({ S: { data: { relay: {} }, busy: new Set(), devRequests: new Map() },
+    act: (_key, fn) => fn(), call: async (name, args) => { calls.push([name, args]); return {}; }, loadDetail: async () => {}, refresh: async () => {},
+    crypto: { randomUUID: () => 'request-uuid-0001' }, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
+  vm.runInContext(html.match(/function controlView\(r\) \{[\s\S]*?\n\}/)[0], context);
+  const labels = r => JSON.stringify(context.controlView(r) ?? null);
+  const run = { run_id: 'r-20261014T000000Z-abcdef', runner: 'dok', status: 'running' };
+  assert.match(labels(run), /Pause \(resume later\).*Cancel run/);
+  assert.match(labels({ ...run, status: 'failed', recovery: { state: 'paused' } }), /Dismiss/);
+  assert.match(labels({ ...run, status: 'interrupted', recovery: { state: 'awaiting_review' } }), /Retry inspection.*Dismiss/);
+  for (const r of [{ ...run, status: 'completed' }, { ...run, status: 'failed', recovery: { state: 'ready' } }, { ...run, runner: 'mac' }])
+    assert.equal(labels(r), 'null');
+  context.S.data.transport = 'mac'; assert.equal(labels(run), 'null'); delete context.S.data.transport;
+  await context.controlView({ ...run, status: 'failed', recovery: { state: 'paused' } }).children[1].attrs.onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [['dismiss_run', { run_id: run.run_id, request_id: 'request-uuid-0001', reason: 'from the Hub panel' }]]);
 });
 
 test('the dashboard inlines the MCP Apps bridge and loads nothing from the network', () => {
@@ -153,7 +171,7 @@ test('agent ui needs its token and a loopback Host header', async (t) => {
 test('health chips put diagnostics in a native disclosure and keep its open state', () => {
   const html = dashboardHtml();
   const code = html.match(/function chips\(\) \{[\s\S]*?\n\}/)[0];
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, healthOf, healthLabels,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null, healthOf, healthLabels,
     S: { healthOpen: false, data: { source: 'hub', status: { agents: 6, running: 0, pending: { memory: 1, proposals: 0 } },
       relay: { online: true, enabled: true, agents: ['vm', 'workflow', 'helper', 'tikkytracker'], observed_at: new Date().toISOString(), last_seen_at: new Date().toISOString() } } },
     h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
@@ -174,7 +192,7 @@ test('health chips put diagnostics in a native disclosure and keep its open stat
 test('Hub running receipts poll quickly and detail reads work with dok offline', async () => {
   const html = dashboardHtml();
   const calls = [], delays = [];
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null,
     S: { data: { source: 'hub', snapshot: { stale: true }, relay: { online: false }, runs: [{ status: 'running' }] } },
     document: { hidden: false }, clearTimeout() {}, setTimeout: (_fn, delay) => { delays.push(delay); }, refresh() {},
     call: async (name, args) => { calls.push({ name, ...args }); return { run_id: args.run_id }; }, render() {}, showError: assert.fail,
@@ -246,7 +264,7 @@ test('hosted refresh polls panel_data alone, skips unchanged answers and never d
 
 test('unknown Mac details refresh after contact returns and cannot be rated', () => {
   const html = dashboardHtml(), refreshed = [];
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null,
     S: { detail: { run_id: 'mac-run', agent: 'helper', status: 'unknown', error: 'Mac heartbeat expired' }, busy: new Set() },
     canDecide: () => true, canArchive: () => false, list: () => null, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction, loadDetail: id => refreshed.push(id), scheduleRefresh() {}, render() {},
     h: (tag, attrs, ...children) => ({ tag, attrs, children }),
@@ -264,7 +282,7 @@ test('unknown Mac details refresh after contact returns and cannot be rated', ()
 test('run details render shared historical context as text and label absent fields', () => {
   const html = dashboardHtml({ bridge: '' });
   const receipt = { run_id: 'r-demo', agent: 'demo', repo: '<script>not executable</script>', commit: 'a'.repeat(40), status: 'failed', error: 'model turn failed' };
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null, S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
     canDecide: () => false, canArchive: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
@@ -273,7 +291,7 @@ test('run details render shared historical context as text and label absent fiel
   assert.match(result, /Technical details and saved run evidence/);
   assert.doesNotMatch(result, /innerHTML/);
   assert.match(html, /globalThis\.AgentsHealth = \{[^}]*\bconfigurationRows\b[^}]*\bpublicReview\b/);
-  const bundled = vm.createContext({ publicationPending, publicationView: () => null,});
+  const bundled = vm.createContext({ publicationPending, publicationView: () => null, controlView: () => null,});
   const module = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)].find((m) => m[1].includes('globalThis.AgentsHealth ='));
   vm.runInContext(module[1], bundled);
   assert.equal(JSON.stringify(bundled.AgentsHealth.runTrace(receipt)), JSON.stringify(runTrace(receipt)));
@@ -283,14 +301,14 @@ test('failed detail shows its error alongside labelled partial output and record
   const html = dashboardHtml();
   const receipt = { run_id: 'r-failed', agent: 'helper', status: 'failed', error: 'model turn failed', output: 'Useful partial answer', output_partial: true,
     failure_context: { phase: 'model', last_tool: 'read', provider: 'openai', model: 'gpt-6-luna', message: '503 upstream disconnected' } };
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null, S: { detail: receipt, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
     canDecide: () => false, canArchive: () => false, list: () => null, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(/function detailView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.detailView());
   for (const text of ['Error: model turn failed', 'Partial output', 'Useful partial answer', 'Last tool', 'read', '503 upstream disconnected', 'Failure category (inferred)', 'Agent / model', 'Next step']) assert.ok(result.includes(text), text);
   assert.equal(failureRows({ status: 'failed', error: 'old receipt' })[0][1], 'Unclassified');
-  const bundled = vm.createContext({ publicationPending, publicationView: () => null,});
+  const bundled = vm.createContext({ publicationPending, publicationView: () => null, controlView: () => null,});
   vm.runInContext([...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)].find(m => m[1].includes('globalThis.AgentsHealth ='))[1], bundled);
   assert.equal(JSON.stringify(bundled.AgentsHealth.failureRows(receipt)), JSON.stringify(failureRows(receipt)));
 });
@@ -299,7 +317,7 @@ test('run list and detail expose live progress, stale checkpoints and missing ol
   const html = dashboardHtml(), time = new Date(Date.now() - 60000).toISOString();
   const receipt = { run_id: 'live', agent: 'helper', status: 'running', progress: { phase: 'tool', action: 'tool_started',
     observed_at: time, last_tool: 'read', checkpoint: 'tool_error', checkpoint_tool: 'ls', checkpoint_at: time, blocker: 'tool_error' } };
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S: { detail: receipt, data: { runs: [receipt] }, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null, S: { detail: receipt, data: { runs: [receipt] }, busy: new Set() }, runTrace, failureRows, progressRows, progressSummary, configurationRows, recoveryAction,
     canDecide: () => false, canArchive: () => false, list: () => null, ago: () => '1m', firstLine: x => x, h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function recoveryView\(r\) \{[\s\S]*?\n\}/)[0], context);
   vm.runInContext(html.match(new RegExp(`function detailView\\(\\) \\{[\\s\\S]*?\\n\\}`))[0], context);
@@ -352,7 +370,7 @@ test('development task shows error and diagnostics alongside partial output', ()
   const html = dashboardHtml();
   const receipt = { run_id: 'r-failed', status: 'failed', error: 'model turn failed', output: 'Partial development answer', output_partial: true,
     failure_context: { phase: 'model', last_tool: 'read', message: '503 upstream disconnected' } };
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S: { development: { grants: [] }, devRun: receipt, busy: new Set() }, failureRows,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null, S: { development: { grants: [] }, devRun: receipt, busy: new Set() }, failureRows,
     h: (tag, attrs, ...children) => ({ tag, attrs, children }) });
   vm.runInContext(html.match(/function developmentView\(\) \{[\s\S]*?\n\}/)[0], context);
   const result = JSON.stringify(context.developmentView());
@@ -369,7 +387,7 @@ test('runner form defaults to dok, preserves the task, and clears incompatible f
     { id: 'dok', available: true, agents: [{ name: 'demo', description: 'Remote', repo: 'demo', model: 'openai/gpt-6-luna' }] },
     { id: 'mac', available: true, agents: [{ name: 'demo', description: 'Local', workspace: 'here' }] },
   ] }, form: { task: 'Keep this task', cwd: '/private/project', continue: true }, busy: new Set() };
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, S, crypto: { randomUUID: () => 'request-form-test' }, canRun: () => true, allowedForRun: () => true,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null, S, crypto: { randomUUID: () => 'request-form-test' }, canRun: () => true, allowedForRun: () => true,
     h: (tag, attrs, ...children) => ({ tag, attrs, children: children.flat().filter(Boolean) }), firstLine: x => x,
     render() {}, showError: assert.fail, act: (_key, fn) => { pending = fn(); },
     call: async (name, args) => { calls.push({ name, args }); return { run_id: 'r-demo', status: 'running' }; },
@@ -408,7 +426,7 @@ test('browser bridge rejects cross-site calls without its token and rejects wron
 
 test('hosted form persists request identity before admission and reuses it after reload', async () => {
   const html = dashboardHtml(), storage = new Map();
-  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, crypto: globalThis.crypto, TextEncoder, Uint8Array,
+  const context = vm.createContext({ publicReview, publicationPending, publicationView: () => null, controlView: () => null, crypto: globalThis.crypto, TextEncoder, Uint8Array,
     localStorage: { getItem: k => storage.get(k), setItem: (k, v) => storage.set(k, v) } });
   for (const name of ['hostedRequests', 'reserveHostedStart', 'resolveHostedStart']) {
     vm.runInContext(html.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}`))[0], context);

@@ -12,6 +12,14 @@ const source = path.dirname(fileURLToPath(import.meta.url));
 const runId = id => /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/.test(id ?? '');
 const requestId = id => /^[A-Za-z0-9_-]{8,80}$/.test(id ?? '');
 const safeText = text => sanitizeFailureContext({ message: text })?.message ?? '';
+export const CONTROL = ['cancel', 'pause', 'dismiss', 'retry_inspection'];
+// The reason becomes part of the public recovery reason, which allows only this character set.
+export const CONTROL_REASON = /^[A-Za-z0-9 ;:.,_-]{0,120}$/;
+const controlView = r => {
+  const recovery = publicRecovery(r.recovery);
+  if (recovery) delete recovery.inspection;
+  return { status: r.status, ...(recovery ? { recovery } : {}) };
+};
 export class RecoveryHost {
   recoveryDir(id) {
     if (!runId(id)) throw Error('Invalid run');
@@ -36,6 +44,8 @@ export class RecoveryHost {
       if (checkpoint?.remaining_ms <= 1000) { state = 'paused'; reason = 'Run execution budget exhausted'; }
       if (setup.revision !== this.revision) { state = 'paused'; reason = 'Runner release changed; operator migration required'; }
       if (lifecycle.paused) { state = 'paused'; reason = lifecycle.paused; }
+      if (lifecycle.held && state === 'ready') reason = lifecycle.held;
+      if (lifecycle.dismissed) { state = 'dismissed'; reason = lifecycle.dismissed; }
       if (lifecycle.resumed_by) state = 'resumed';
       if (receipt.status === 'completed') state = 'completed';
       const info = publicRecovery({ state, reason, checkpoint_version: checkpoint?.version, checkpoint_at: checkpoint?.saved_at,
@@ -44,7 +54,9 @@ export class RecoveryHost {
         resumed_by: lifecycle.resumed_by, inspection: lifecycle.inspection });
       return { setup, checkpoint, lifecycle, info };
     } catch {
-      let retained = fs.existsSync(dir);
+      let retained = fs.existsSync(dir), dismissed;
+      try { dismissed = read(path.join(dir, 'lifecycle.json')).dismissed; } catch { /* no operator decision recorded */ }
+      if (dismissed) return { info: { state: 'dismissed', retained, reason: dismissed } };
       try { const r = read(path.join(this.state, 'agent-runs', id + '.json')); retained ||= fs.existsSync(path.join(this.state, 'run-work', r.root ?? id)); } catch {}
       return { info: { state: 'unavailable', retained, reason: 'Recovery checkpoint unavailable or invalid; preserve retained artifacts' } };
     }
@@ -72,6 +84,7 @@ export class RecoveryHost {
         this.saveRecoveryInfo(r.run_id, value.info);
         // Old failed runs are preserved for explicit selection, never revived by an upgrade.
         if (r.status === 'failed' && value.lifecycle?.automatic_eligible !== true) continue;
+        if (value.lifecycle?.held) continue; // paused by an operator: only an explicit resume_run continues it
         if (value.info.state === 'awaiting_review' && !value.lifecycle.inspection_started) await this.inspectRecovery(r, value);
         else if (value.info.state === 'ready') {
           try { await this.resumeRun({ run_id: r.run_id, request_id: `recover-${r.run_id}-${value.checkpoint.version}`,
@@ -146,6 +159,48 @@ export class RecoveryHost {
       void this.executeRun(setup.agent, setup.runtime, receipt, null, { setup: nextSetup, checkpoint }).catch(() => this.finalizationFailed(receipt));
       return this.runGet(next);
     } catch (e) { this.runs.delete(next); throw e; }
+  }
+  // Operator actions on one run. Each is idempotent per request_id and returns the run's state before and after.
+  async controlRun({ run_id, request_id, action, reason = '' }) {
+    if (!runId(run_id) || !requestId(request_id) || !CONTROL.includes(action) || !CONTROL_REASON.test(reason)) throw Error('Invalid run action');
+    const request = path.join(this.state, 'agent-requests', request_id + '.json');
+    const fp = fingerprint({ operation: 'control', run_id, action, reason });
+    if (fs.existsSync(request)) {
+      const old = read(request);
+      if (old.fingerprint !== fp) throw Error('Request identity conflict');
+      return old.value;
+    }
+    const file = path.join(this.state, 'agent-runs', run_id + '.json');
+    if (!fs.existsSync(file)) throw Error('Unknown run');
+    const r = read(file), entry = this.runs.get(run_id), before = controlView(r);
+    const dir = this.recoveryDir(run_id), lifeFile = path.join(dir, 'lifecycle.json');
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const lifecycle = fs.existsSync(lifeFile) ? read(lifeFile) : {};
+    const why = text => (reason ? `${text}: ${reason}` : text).slice(0, 180);
+    if (action === 'cancel' || action === 'pause') {
+      if (r.status !== 'running' || !entry?.stop) throw Error('Run is not active on this runner');
+      // Written before the stop so the final receipt, and any later recovery scan, see the decision.
+      save(lifeFile, { ...lifecycle, ...(action === 'cancel' ? { paused: why('Cancelled by operator') } : { held: why('Paused by operator; resume_run continues it') }) });
+      const stopped = action === 'cancel' ? 'Cancelled by operator' : 'Paused by operator';
+      entry.stopped = stopped; entry.stop(stopped);
+      for (let i = 0; i < 40 && read(file).status === 'running'; i++) await new Promise(resolve => setTimeout(resolve, 200));
+    } else if (action === 'dismiss') {
+      if (entry || !['failed', 'interrupted'].includes(r.status)) throw Error('Only a stopped failed or interrupted run can be dismissed');
+      if (['resumed', 'completed', 'dismissed'].includes(r.recovery?.state)) throw Error(`Run recovery is already ${r.recovery.state}`);
+      // Nothing is deleted: the workspace and checkpoint stay for inspection, and the conversation is unblocked.
+      save(lifeFile, { ...lifecycle, dismissed: why('Dismissed by operator') });
+      this.saveRecoveryInfo(run_id, this.recoveryInfo(run_id).info);
+    } else {
+      const value = this.recoveryInfo(run_id);
+      if (entry || value.info.state !== 'awaiting_review' || value.lifecycle.inspection) throw Error('No failed recovery inspection to retry');
+      const { inspection_started: _s, inspection_error: _e, ...rest } = value.lifecycle;
+      save(lifeFile, rest);
+      void this.inspectRecovery(r, { ...value, lifecycle: rest }).catch(() => {});
+    }
+    await this.report(run_id);
+    const value = { run_id, action, before, after: controlView(read(file)) };
+    save(request, { fingerprint: fp, run_id, value });
+    return value;
   }
   async inspectRecovery(receipt, recovery) {
     if (this.draining || [...this.runs.values()].some(r => r.repo === receipt.repo)) return;

@@ -110,3 +110,15 @@ test('configuration rows distinguish trusted Pi MCP policy from an observed host
   assert.match(rows['Advertised MCP capabilities'], /tools\.listChanged/);
   assert.match(rows['Advertised MCP capabilities'], /elicitation\.form/);
 });
+
+test('stopped runs that nothing can continue point at the operator action that applies', () => {
+  const base = { run_id: 'r-20261014T190428Z-22dfa4', status: 'failed', error: 'model turn failed',
+    failure_context: { phase: 'model', message: 'Request refused' } };
+  const paused = withFailureGuidance({ ...base, recovery: { state: 'paused', retained: true, checkpoint_version: 3, reason: 'Failure requires operator inspection before recovery' } });
+  assert.equal(paused.next_action.tool, 'dismiss_run'); assert.match(paused.next_action.note, /operator inspection/);
+  const inspecting = withFailureGuidance({ ...base, status: 'interrupted', recovery: { state: 'awaiting_review', retained: true, checkpoint_version: 3 } });
+  assert.equal(inspecting.next_action.tool, 'retry_inspection');
+  const limited = withFailureGuidance({ ...base, status: 'interrupted', recovery: { state: 'paused', retained: true, checkpoint_version: 3, reason: 'Automatic recovery attempt limit reached' } });
+  assert.deepEqual(limited.next_action, { tool: 'resume_run', run_id: base.run_id, checkpoint_version: 3 });
+  assert.equal(withFailureGuidance({ ...base, recovery: { state: 'dismissed', retained: true } }).next_action, undefined);
+});

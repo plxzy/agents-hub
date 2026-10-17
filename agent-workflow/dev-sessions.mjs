@@ -382,7 +382,7 @@ export class DevelopmentSessions extends RecoveryHost {
         let other;
         try { other = read(path.join(this.state, 'agent-runs', name)); }
         catch { throw Error('Run history unreadable; inspect retained work before continuing'); }
-        if (other.root === root && other.status !== 'completed' && !other.recovery?.resumed_by)
+        if (other.root === root && other.status !== 'completed' && !other.recovery?.resumed_by && other.recovery?.state !== 'dismissed')
           throw new Error(`Retained unfinished work requires recovery: ${other.run_id}`);
       }
     }
@@ -447,7 +447,7 @@ export class DevelopmentSessions extends RecoveryHost {
         }
         const info = this.recoveryInfo(receipt.run_id).info;
         // Failed model turns are terminal unless a command or process interruption needs reconciliation.
-        const interrupted = !result.error || info.state === 'awaiting_review' || ['Runner stopped', 'Pi process exited', 'Invalid Pi result', 'Run state persistence failed'].includes(failure);
+        const interrupted = !result.error || info.state === 'awaiting_review' || ['Runner stopped', 'Pi process exited', 'Invalid Pi result', 'Run state persistence failed', 'Cancelled by operator', 'Paused by operator'].includes(failure);
         save(file, { ...terminal, ...(interrupted ? { status: 'interrupted' } : {}), recovery: info });
       }
       this.runs.delete(receipt.run_id);

@@ -1,5 +1,5 @@
 import { publisherFetch, ensurePublication, publishReview } from './review-publications.mjs';
-import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
+import { validateRelay, RUN_CONTROLS } from '../../agent-workflow/relay-contract.mjs';
 import { validateSelectedStart, REQUEST_ID, dokTarget } from '../../agent-workflow/run-selection.mjs';
 import { storeRun, readRun, runForRequest } from './runs.mjs';
 import { bundleFor, pendingMemory } from './memory.mjs';
@@ -194,6 +194,28 @@ export async function getStartStatus(env, requestId) {
   const result = await host.dispatch('run_lookup', { target_request_id: requestId });
   return result.ok && result.value.state === 'started' ? result.value
     : { state: 'unknown', reason: 'No accepted run established; keep the original request identity' };
+}
+/** cancel_run, pause_run, dismiss_run, retry_inspection: dok performs the action, the Hub records it. */
+export async function controlRun(env, name, args, { caller = 'mcp' } = {}) {
+  validateRelay(name, args);
+  const action = RUN_CONTROLS[name], reason = args.reason ?? '';
+  const known = await env.DB.prepare('SELECT * FROM run_actions WHERE request_id=?').bind(args.request_id).first();
+  if (known && (known.run_id !== args.run_id || known.action !== action || (known.reason ?? '') !== reason)) throw Error('request_id already belongs to a different action');
+  if (known) return actionView(known);
+  const result = await env.RELAY.getByName('owner-dok-dev').dispatch('run_control', { run_id: args.run_id, request_id: args.request_id, action, ...(reason ? { reason } : {}) });
+  if (!result.ok) throw Error(result.error);
+  const { before, after } = result.value;
+  await env.DB.prepare(`INSERT INTO run_actions(action_id,request_id,run_id,action,caller,reason,before_json,after_json,created_at)
+    VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(request_id) DO NOTHING`).bind(crypto.randomUUID(), args.request_id, args.run_id, action, caller,
+    reason || null, JSON.stringify(before ?? {}), JSON.stringify(after ?? {}), new Date().toISOString()).run();
+  return actionView(await env.DB.prepare('SELECT * FROM run_actions WHERE request_id=?').bind(args.request_id).first());
+}
+const actionView = row => ({ action_id: row.action_id, run_id: row.run_id, action: row.action, caller: row.caller,
+  ...(row.reason ? { reason: row.reason } : {}), at: row.created_at, before: JSON.parse(row.before_json), after: JSON.parse(row.after_json) });
+export async function runActions(env, args) {
+  validateRelay('list_run_actions', args);
+  const { results } = await env.DB.prepare('SELECT * FROM run_actions WHERE run_id=? ORDER BY created_at, action_id').bind(args.run_id).all();
+  return { run_id: args.run_id, actions: results.map(actionView) };
 }
 export async function resumeRun(env, args, { approved = false } = {}) {
   validateRelay('resume_run', args);

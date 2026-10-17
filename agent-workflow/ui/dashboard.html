@@ -449,6 +449,24 @@ function recoveryView(r) {
         h('p', { class: 'small muted' }, 'Leave this run paused by taking no action.')) : null);
 }
 
+// Operator actions on one dok run; each returns a receipt recorded in the Hub (list_run_actions).
+function controlView(r) {
+  if (!(S.data?.relay && S.data?.transport !== 'mac') || r.runner !== 'dok') return null;
+  const stuck = ['failed', 'interrupted'].includes(r.status) && ['paused', 'unavailable', 'awaiting_review'].includes(r.recovery?.state);
+  const actions = r.status === 'running' ? [['pause_run', 'Pause (resume later)'], ['cancel_run', 'Cancel run']]
+    : stuck ? [...(r.recovery.state === 'awaiting_review' && !r.recovery.inspection ? [['retry_inspection', 'Retry inspection']] : []), ['dismiss_run', 'Dismiss (keeps files)']] : [];
+  if (!actions.length) return null;
+  const run = name => act(`${name}-${r.run_id}`, async () => {
+    const key = `${name}-${r.run_id}`, request_id = S.devRequests.get(key) ?? crypto.randomUUID();
+    S.devRequests.set(key, request_id);
+    await call(name, { run_id: r.run_id, request_id, reason: 'from the Hub panel' });
+    S.devRequests.delete(key); await loadDetail(r.run_id); await refresh();
+  });
+  return h('section', {}, h('h3', {}, 'Run actions'),
+    ...actions.map(([name, label]) => h('button', { disabled: S.busy.has(`${name}-${r.run_id}`), onclick: () => run(name) }, label)),
+    h('p', { class: 'small muted' }, 'Nothing is deleted. Each action is recorded with the run’s state before and after.'));
+}
+
 const publicationPending = p => ['waiting_artifact', 'queued', 'publishing', 'retrying'].includes(p?.status);
 function publicationView(r) {
   const p = r.publication ?? {}, review = publicReview(r.review);
@@ -486,6 +504,7 @@ function detailView() {
     r.error ? h('p', { class: 'error' }, `Error: ${r.error}`) : null,
     publicationView(r),
     recoveryView(r),
+    controlView(r),
     progressRows(r).length ? h('section', {}, h('h3', {}, ['running', 'unknown'].includes(r.status) ? 'Run progress' : 'Recorded progress'),
       h('dl', {}, ...progressRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)]))) : null,
     failureRows(r).length ? h('dl', {}, ...failureRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'white-space:pre-wrap;overflow-wrap:anywhere' }, value)])) : null,

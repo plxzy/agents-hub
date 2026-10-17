@@ -1,5 +1,6 @@
 // Browser/Worker-safe public projection. Private checkpoints never cross the relay.
-const STATES = ['ready', 'awaiting_review', 'paused', 'resumed', 'unavailable', 'completed'];
+const STATES = ['ready', 'awaiting_review', 'paused', 'resumed', 'unavailable', 'completed', 'dismissed'];
+const ATTEMPT_LIMIT = 'Automatic recovery attempt limit reached';
 const run = v => typeof v === 'string' && /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/.test(v) ? v : undefined;
 // Only trusted failure diagnostics participate, never task text or model prose.
 export function retryableModelFailure(r = {}) {
@@ -14,7 +15,8 @@ export function recoveryAction(r = {}) {
   // A new Hub can be deployed before its runner. Old ready receipts do not establish
   // that the connected supervisor supports failed-turn admission.
   if (r.status === 'failed' && v.failed_resume_supported !== true) return null;
-  if (v.state === 'ready') return 'resume_run';
+  // The attempt limit stops automatic recovery only; an explicit resume is accepted.
+  if (v.state === 'ready' || (v.state === 'paused' && v.reason === ATTEMPT_LIMIT)) return 'resume_run';
   if (v.state === 'awaiting_review' && v.inspection) return 'decide_recovery';
   return null;
 }

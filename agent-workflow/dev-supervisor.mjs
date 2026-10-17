@@ -119,6 +119,7 @@ async function execute(message) {
     if (operation === 'dev_read') return { ok: true, value: sessions.get(args.run_id) };
     if (operation === 'run_lookup') return { ok: true, value: sessions.runLookup(args.target_request_id) };
     if (operation === 'run_read') return { ok: true, value: sessions.runGet(args.run_id) };
+    if (operation === 'run_control') return { ok: true, value: await sessions.controlRun(args) };
     if (operation === 'run_resume') return { ok: true, value: await sessions.resumeRun(args, { approved: args.approved === true }) };
     if (operation === 'run_start') return { ok: true, value: await sessions.runStart(args) };
     if (operation === 'dev_start') return { ok: true, value: await sessions.start(args) };

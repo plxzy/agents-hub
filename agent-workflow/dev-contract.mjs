@@ -22,6 +22,8 @@ export const HOST_OPS = {
     repo: { type: 'string', pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$' }, continue_from: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' },
     pr_number: { type: 'integer', minimum: 1 }, issue_number: { type: 'integer', minimum: 1 }, mcp_connection: { type: 'object' } }, ['request_id', 'agent', 'task']),
   run_resume: schema({ run_id: id, request_id: id, checkpoint_version: { type: 'integer', minimum: 1 }, approved: { type: 'boolean' } }, ['run_id', 'request_id', 'checkpoint_version']),
+  run_control: schema({ run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' }, request_id: id,
+    action: { type: 'string', enum: ['cancel', 'pause', 'dismiss', 'retry_inspection'] }, reason: { type: 'string', pattern: '^[A-Za-z0-9 ;:.,_-]{0,120}$' } }, ['run_id', 'request_id', 'action']),
   run_lookup: schema({ target_request_id: id }),
   run_read: schema({ run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' } }),
 };

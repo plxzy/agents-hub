@@ -2,8 +2,8 @@ import { publishReview, publicationHealth, withRunnerPublishing } from './review
 import { dokTarget } from '../../agent-workflow/run-selection.mjs';
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
-import { RELAY_OPS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
-import { relayFetch, startRun, getRun, getStartStatus, resumeRun, dokEnabled, dokStatus } from './relay.mjs';
+import { RELAY_OPS, RUN_CONTROLS, relayToolList, validateRelay } from '../../agent-workflow/relay-contract.mjs';
+import { relayFetch, startRun, getRun, getStartStatus, resumeRun, controlRun, runActions, dokEnabled, dokStatus } from './relay.mjs';
 import { readRun, recentRuns, archiveSuggestions, setArchived } from './runs.mjs';
 import { readAccounts } from './accounts.mjs';
 import { issueCodes, redeemCode, rateRun } from './decisions.mjs';
@@ -126,7 +126,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'ping') return reply({});
     if (method === 'tools/list') return reply({ tools: [...(dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The panel shows runs, agents and the review queue held by the Hub.' } : t),
-      ...relayToolList().filter((t) => ['publish_review', 'start_run', 'get_start_status', 'resume_run', 'decide_recovery', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide', 'panel_archived', 'archive_runs'].includes(t.name)),
+      ...relayToolList().filter((t) => ['publish_review', 'start_run', 'get_start_status', 'resume_run', ...Object.keys(RUN_CONTROLS), 'list_run_actions', 'decide_recovery', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide', 'panel_archived', 'archive_runs'].includes(t.name)),
     ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
@@ -198,10 +198,12 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           if (params.name === 'review_decide') throw new Error('Unknown review item ' + args.id);
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
-      if (dokEnabled(env) && ['start_run', 'get_remote_run', 'get_start_status', 'resume_run'].includes(params?.name)) {
+      if (dokEnabled(env) && ['start_run', 'get_remote_run', 'get_start_status', 'resume_run', ...Object.keys(RUN_CONTROLS), 'list_run_actions'].includes(params?.name)) {
         try {
           const args = params.arguments ?? {};
           const result = params.name === 'start_run' ? await startRun(env, args)
+            : Object.hasOwn(RUN_CONTROLS, params.name) ? await controlRun(env, params.name, args)
+            : params.name === 'list_run_actions' ? await runActions(env, args)
             : params.name === 'get_start_status' ? await getStartStatus(env, args.request_id)
             : params.name === 'resume_run' ? await resumeRun(env, args) : await getRun(env, args.run_id);
           if (params.name === 'get_remote_run' && !result) throw new Error('Unknown run ' + args.run_id + ' (not in the Hub).');

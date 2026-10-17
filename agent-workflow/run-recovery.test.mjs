@@ -210,3 +210,43 @@ test('journal total size limit preserves the last durable intent', async t => {
   await assert.rejects(j.tool('last', 'write', {}, async () => { j.value.padding = 'x'.repeat(16 * 1024 ** 2); return { content: [] }; }), /storage budget/);
   assert.equal(recoveryState(loadCheckpoint(file)), 'awaiting_review');
 });
+
+test('operators cancel, pause, dismiss and retry inspection with idempotent before/after receipts', async t => {
+  const { host, id, j, receipt } = hostFixture(t);
+  const file = path.join(host.state, 'agent-runs', id + '.json');
+  // pause: an active run stops at its checkpoint and is held from automatic recovery
+  save(file, { ...receipt, status: 'running' });
+  let stopped;
+  host.runs.set(id, { write: true, repo: 'demo', stop: reason => { stopped = reason; save(file, { ...receipt, status: 'interrupted' }); } });
+  const paused = await host.controlRun({ run_id: id, request_id: 'pause-0001', action: 'pause', reason: 'wrong branch' });
+  assert.equal(stopped, 'Paused by operator');
+  assert.deepEqual([paused.before.status, paused.after.status], ['running', 'interrupted']);
+  assert.deepEqual(await host.controlRun({ run_id: id, request_id: 'pause-0001', action: 'pause', reason: 'wrong branch' }), paused);
+  await assert.rejects(host.controlRun({ run_id: id, request_id: 'pause-0001', action: 'cancel' }), /identity conflict/);
+  host.runs.delete(id);
+  const info = host.recoveryInfo(id).info;
+  assert.equal(info.state, 'ready'); assert.match(info.reason, /Paused by operator.*wrong branch/);
+  let starts = 0; host.executeRun = async () => { starts++; };
+  await host.recoverPending(); assert.equal(starts, 0, 'a held run is not resumed automatically');
+  // dismiss: a stopped run gives up recovery without deleting anything and refuses resume
+  await assert.rejects(host.controlRun({ run_id: id, request_id: 'cancel-0001', action: 'cancel' }), /not active/);
+  const dismissed = await host.controlRun({ run_id: id, request_id: 'dismiss-0001', action: 'dismiss', reason: 'redone by r-x' });
+  assert.equal(dismissed.after.recovery.state, 'dismissed');
+  assert.equal(read(file).recovery.state, 'dismissed');
+  assert.ok(fs.existsSync(path.join(host.state, 'workspace')), 'workspace kept');
+  await assert.rejects(host.resumeRun({ run_id: id, request_id: 'after-dismiss', checkpoint_version: j.value.version }), /Dismissed by operator/);
+  await assert.rejects(host.controlRun({ run_id: id, request_id: 'dismiss-0002', action: 'dismiss' }), /already dismissed/);
+  for (const reason of ['bad\nline', "it's", 'x'.repeat(121)])
+    await assert.rejects(host.controlRun({ run_id: id, request_id: 'reason-0001', action: 'dismiss', reason }), /Invalid run action/);
+});
+
+test('retry_inspection clears a failed inspection and only applies to one', async t => {
+  const { host, id, dir } = hostFixture(t, { uncertain: true });
+  save(path.join(dir, 'lifecycle.json'), { inspection_started: 'x', inspection_error: 'Read-only inspection unavailable; operator inspection required' });
+  let inspected;
+  host.inspectRecovery = async (_r, value) => { inspected = value.lifecycle; };
+  await host.controlRun({ run_id: id, request_id: 'inspect-0001', action: 'retry_inspection' });
+  assert.deepEqual(inspected, {}); assert.deepEqual(read(path.join(dir, 'lifecycle.json')), {});
+  save(path.join(dir, 'lifecycle.json'), { inspection: 'Saved files look complete' });
+  await assert.rejects(host.controlRun({ run_id: id, request_id: 'inspect-0002', action: 'retry_inspection' }), /No failed recovery inspection/);
+});
