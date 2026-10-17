@@ -95,7 +95,7 @@ export async function startRun(env, args, { mac = false } = {}) {
     if (args.continue) throw new Error('continue is not supported on dok yet; start a new run and include the needed context in the task. No action was queued.');
     const result = await env.RELAY.getByName('owner-dok-dev').dispatch('run_start', { request_id: args.request_id, agent: args.agent, task: args.task,
       ...(args.model ? { model: args.model } : {}), ...(args.thinking ? { thinking: args.thinking } : {}),
-      ...(args.pr_number ? { pr_number: args.pr_number } : {}),
+      ...(args.pr_number ? { pr_number: args.pr_number } : {}), ...(args.issue_number ? { issue_number: args.issue_number } : {}),
       ...(args.repo ? { repo: args.repo } : {}), ...(args.continue_from ? { continue_from: args.continue_from } : {}),
       ...(connection ? { mcp_connection: connection } : {}) });
     if (!result.ok) throw new Error(result.error);

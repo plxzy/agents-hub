@@ -18,3 +18,10 @@ test('host run_start accepts a PR selection with a positive integer only', () =>
   validateDevelopment('run_start', { ...base, pr_number: 12 }, true);
   for (const bad of [0, -1, 1.5, '12']) assert.throws(() => validateDevelopment('run_start', { ...base, pr_number: bad }, true), /Invalid pr_number/);
 });
+
+test('host run_start accepts an issue link with a positive integer only, alone or with a PR', () => {
+  const base = { request_id: 'request-0001', agent: 'workflow', task: 'Fix the issue' };
+  validateDevelopment('run_start', { ...base, issue_number: 806 }, true);
+  validateDevelopment('run_start', { ...base, issue_number: 806, pr_number: 12 }, true);
+  for (const bad of [0, 1.5, '806']) assert.throws(() => validateDevelopment('run_start', { ...base, issue_number: bad }, true), /Invalid issue_number/);
+});

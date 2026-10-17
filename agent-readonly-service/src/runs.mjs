@@ -49,6 +49,7 @@ export function sanitizeReceipt(r, runner) {
     model_calls: Number.isInteger(r.model_calls) && r.model_calls >= 0 ? r.model_calls : undefined,
     accounts_used: Array.isArray(r.accounts_used) ? r.accounts_used.filter((x) => /^openai(-[1-9]\d*)?$/.test(x)).slice(0, 10) : undefined,
     repo: /^[a-z0-9][a-z0-9_.-]{0,63}$/.test(r.repo ?? '') ? r.repo : undefined,
+    issue_number: Number.isSafeInteger(r.issue_number) && r.issue_number > 0 ? r.issue_number : undefined,
     ...publicRunContext(r),
     ...(r.github_base && /^[a-f0-9]{40}$/.test(r.github_base.commit) && iso(r.github_base.observed_at)
       ? { github_base: { commit: r.github_base.commit, observed_at: iso(r.github_base.observed_at) } } : {}),

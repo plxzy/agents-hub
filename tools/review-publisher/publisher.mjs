@@ -121,7 +121,8 @@ export function reviewBody(job) {
   const r = job.receipt;
   // Keep full prompts, private paths and memory out of GitHub descriptions. The run's output is agent-reported evidence.
   const output = String(r.output ?? '').split('\n').filter(line => !/(Bearer\s|gh[opusr]_|github_pat_|sk-|PRIVATE KEY|\/home\/|\/Users\/|https?:\/\/[^\s]*[?])/.test(line)).join('\n').slice(0, 12000);
-  return `${marker(job.root)}\n\nSaved Agents Hub review from ${r.run_id}.\n\nOriginal saved head: ${r.commit}\nOriginal tested base: ${r.base_commit}\n\n## Agent-reported changes and validation\n\n${output || 'See the saved run for its report.'}\n\nPublication preserves the tested commit. It does not establish current-main integration or passing GitHub checks.`;
+  const issue = Number.isSafeInteger(r.issue_number) && r.issue_number > 0 ? `Refs #${r.issue_number}\n\n` : '';
+  return `${marker(job.root)}\n\n${issue}Saved Agents Hub review from ${r.run_id}.\n\nOriginal saved head: ${r.commit}\nOriginal tested base: ${r.base_commit}\n\n## Agent-reported changes and validation\n\n${output || 'See the saved run for its report.'}\n\nPublication preserves the tested commit. It does not establish current-main integration or passing GitHub checks.`;
 }
 export async function publishJob(config, github, job, bytes, { verify = verifiedRepository, gitImpl = git } = {}) {
   if (!ARTIFACT_RUN_ID.test(job.root ?? '') || job.run_id !== job.receipt?.run_id || job.branch !== `review/agents/${job.root}`) throw new PublicationError('invalid_artifact');

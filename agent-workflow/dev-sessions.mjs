@@ -328,11 +328,13 @@ export class DevelopmentSessions extends RecoveryHost {
     this.startQueue = next;
     return next;
   }
-  async startPreparedRun({ request_id, agent: name, task, model, thinking, repo, continue_from, pr_number, mcp_connection }) {
+  async startPreparedRun({ request_id, agent: name, task, model, thinking, repo, continue_from, pr_number, issue_number, mcp_connection }) {
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(request_id ?? '') || typeof task !== 'string' || !task.trim() || task.length > 16000) throw new Error('Invalid task');
     if (continue_from !== undefined && !RUN_ID.test(continue_from)) throw new Error('Invalid continue_from');
     if (pr_number !== undefined && (!Number.isSafeInteger(pr_number) || pr_number < 1 || continue_from !== undefined)) throw Error('Invalid PR selection');
-    const fingerprint = hash({ agent: name, task, model: model ?? null, thinking: thinking ?? null, repo: repo ?? null, continue_from: continue_from ?? null, ...(pr_number !== undefined ? { pr_number } : {}) });
+    if (issue_number !== undefined && (!Number.isSafeInteger(issue_number) || issue_number < 1)) throw Error('Invalid issue_number');
+    const fingerprint = hash({ agent: name, task, model: model ?? null, thinking: thinking ?? null, repo: repo ?? null, continue_from: continue_from ?? null,
+      ...(pr_number !== undefined ? { pr_number } : {}), ...(issue_number !== undefined ? { issue_number } : {}) });
     const requestFile = path.join(this.state, 'agent-requests', request_id + '.json');
     if (fs.existsSync(requestFile)) {
       const old = read(requestFile);
@@ -384,9 +386,11 @@ export class DevelopmentSessions extends RecoveryHost {
           throw new Error(`Retained unfinished work requires recovery: ${other.run_id}`);
       }
     }
+    // A follow-up keeps the conversation's issue unless it names one.
+    const issue = issue_number ?? previous?.issue_number;
     const receipt = { run_id, request_id, agent: agent.name, kind: 'task', runner: 'dok', status: 'running', task, title: titleOf(task),
       started: new Date().toISOString(), model: `${runtime.provider}/${runtime.model}`, thinking: runtime.thinking, agent_version: agent.version,
-      repo: project, write, ...(mcp_connection ? { mcp_connection } : {}),
+      repo: project, write, ...(issue ? { issue_number: issue } : {}), ...(mcp_connection ? { mcp_connection } : {}),
       progress: runProgressTelemetry().snapshot(), ...(continue_from || previous ? { continued_from: continue_from ?? previous.run_id } : {}),
       ...(prepared ? { source_pr: prepared.source_pr, source_ref: prepared.ref } : sourceReview ? { source_review: sourceReview } : {}), root: root ?? run_id };
     save(requestFile, { fingerprint, run_id, receipt });

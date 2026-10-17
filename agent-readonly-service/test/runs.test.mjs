@@ -52,6 +52,9 @@ test('receipts keep useful fields, drop unknown ones and redact secret-looking l
   assert.match(r.output, /src\/access\.mjs:9\n\[redacted line/); assert.doesNotMatch(r.output, /sk-/);
   assert.deepEqual(r.tool_calls, ['read']); assert.equal(r.reported_at, undefined); assert.equal(r.host_path, undefined);
   assert.throws(() => sanitizeReceipt({ run_id: 'x', agent: 'helper', status: 'completed', started: 'now' }, 'dok'), /Invalid/);
+  const linked = { run_id: RUN, agent: 'vm', status: 'running', started: '2026-10-12T12:00:00.000Z' };
+  assert.equal(sanitizeReceipt({ ...linked, issue_number: 806 }, 'dok').issue_number, 806);
+  for (const bad of [0, 1.5, '806']) assert.equal(sanitizeReceipt({ ...linked, issue_number: bad }, 'dok').issue_number, undefined);
 });
 
 test('receipt configuration keeps model thinking and bounded MCP observations only', () => {

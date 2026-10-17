@@ -41,6 +41,7 @@ export const RELAY_OPS = {
       continue: { type: 'boolean' }, request_id: requestId,
       repo: { type: 'string', pattern: '^[a-z0-9][a-z0-9_.-]{0,63}$', description: 'Repository on dok for agents that are not tied to one (e.g. workflow). Defaults to the agent\u2019s own repository.' },
       pr_number: { type: 'integer', minimum: 1, description: 'Existing Hub-linked PR in repo. Continue its current GitHub head, including reviewer fixes. Mutually exclusive with continue_from.' },
+      issue_number: { type: 'integer', minimum: 1, description: 'GitHub issue in repo this work addresses. Recorded on the run, inherited by follow-ups, and referenced in the draft PR the Hub opens.' },
       continue_from: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$', description: 'Latest completed run of this agent on the same review conversation, including a no-edit review. Published reviews start from the current PR head; internal reviews use their saved commit. Failed work requires resume_run.' },
       model: { ...{ type: 'string', pattern: '^[a-z0-9-]{1,40}/[A-Za-z0-9._:-]{1,80}$' }, description: 'Optional per-run model override as provider/model, e.g. openai/gpt-6.1-sol. Defaults to the agent definition.' },
       thinking: { ...{ type: 'string', enum: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] }, description: 'Optional per-run thinking level. Defaults to the agent definition.' },

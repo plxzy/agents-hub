@@ -128,6 +128,11 @@ test('PR report omits prompts and obvious private material', () => {
   const j = job(); j.receipt.task = 'private task'; j.receipt.output = '17 tests passed\n/home/agent/private\nBearer secret\nhttps://host/path?token=secret';
   const body = reviewBody(j); assert.match(body, /17 tests passed/); assert.doesNotMatch(body, /private task|\/home|Bearer|token=/);
 });
+test('a run linked to an issue references it in the new PR body', () => {
+  const j = job(); assert.doesNotMatch(reviewBody(j), /Refs #/);
+  j.receipt.issue_number = 806; assert.match(reviewBody(j), /\n\nRefs #806\n\n/);
+  j.receipt.issue_number = '806 closes #1'; assert.doesNotMatch(reviewBody(j), /Refs #/);
+});
 
 test('publication adopts a trusted pinned reviewer head and blocks later concurrent changes', async t => {
   const state = await fs.mkdtemp(path.join(os.tmpdir(), 'publisher-review-')); t.after(() => fs.rm(state, { recursive: true, force: true }));

@@ -57,6 +57,7 @@ export function runBrief(r) {
     ...(publicReview(r.review) ? { review: publicReview(r.review) } : {}),
     ...(publicPublication(r.publication) ? { publication: publicPublication(r.publication) } : {}),
     run_id: r.run_id, agent: r.agent, kind: r.kind ?? 'task', status: r.status, title: r.title ?? titleOf(r.task),
+    ...(Number.isSafeInteger(r.issue_number) && r.issue_number > 0 ? { issue_number: r.issue_number } : {}),
     started: r.started, ended: r.ended, model: r.model, tool_calls: count(r.tool_calls ?? live?.tool_calls), blocked: count(r.blocked),
     tokens: num(r.usage?.totalTokens, r.tokens, live?.tokens), cost_usd: num(r.usage?.cost, r.cost_usd, live?.cost_usd),
     ...(publicRecovery(r.recovery) ? { recovery: { ...publicRecovery(r.recovery), inspection: undefined } } : {}),
