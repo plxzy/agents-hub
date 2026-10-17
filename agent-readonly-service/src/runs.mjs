@@ -6,7 +6,7 @@ import { runBrief, titleOf } from '../../agent-workflow/contract.mjs';
 import { ratingsFor, redeemCodes } from './decisions.mjs';
 import { proposeMemory } from './memory.mjs';
 import { sanitizeFailureContext } from '../../agent-workflow/failure-telemetry.mjs';
-import { sanitizeProgress } from '../../agent-workflow/run-progress.mjs';
+import { sanitizeProgress, sanitizeSteps } from '../../agent-workflow/run-progress.mjs';
 import { withFailureGuidance, publicRunContext } from '../../agent-workflow/run-trace.mjs';
 import { runConfiguration, runtimeConfig } from '../../agent-workflow/run-config.mjs';
 import { readArtifact } from './run-artifacts.mjs';
@@ -64,7 +64,8 @@ export function sanitizeReceipt(r, runner) {
     memory_source: ['hub', 'frozen-release'].includes(r.memory_source) ? r.memory_source : undefined,
     memory_hash: /^[a-f0-9]{16}$/.test(r.memory_hash ?? '') ? r.memory_hash : undefined,
     recovery: publicRecovery(r.recovery ? { ...r.recovery, inspection: redactLines(r.recovery.inspection, 12000) } : null),
-    usage, runtime, configuration, progress: sanitizeProgress(r.progress), error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
+    usage, runtime, configuration, progress: sanitizeProgress(r.progress), progress_steps: sanitizeSteps(r.progress_steps),
+    ...(r.status === 'running' ? { progress_output: redactLines(r.progress_output, 2000) } : {}), error: redactLines(r.error, 200), output: redactLines(r.output, 48000),
     ...(r.status !== 'completed' && r.status !== 'running' ? {
       failure_context: sanitizeFailureContext(r.failure_context), output_partial: r.output_partial === true,
     } : {}),

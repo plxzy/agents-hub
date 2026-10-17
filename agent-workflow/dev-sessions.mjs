@@ -11,7 +11,7 @@ import { DEVELOPMENT, digest } from './dev-grants.mjs';
 import { DEVELOPMENT_RUNTIME, runtimeMatches, agentRuntime } from './dev-runtime.mjs';
 import { titleOf } from './contract.mjs';
 import { failedResult, sanitizeFailureContext } from './failure-telemetry.mjs';
-import { runProgressTelemetry, sanitizeProgress, progressPublisher } from './run-progress.mjs';
+import { runProgressTelemetry, sanitizeProgress, progressPublisher, appendStep } from './run-progress.mjs';
 import { captureRunContext, logObservation } from './run-context.mjs';
 import { runConfiguration } from './run-config.mjs';
 import { save, read, syncDirectory } from './durable-file.mjs';
@@ -413,8 +413,11 @@ export class DevelopmentSessions extends RecoveryHost {
     fs.mkdirSync(recoveryDir, { recursive: true, mode: 0o700 });
     let branch = receipt.source_pr ? receipt.source_ref.slice('refs/heads/'.length) : receipt.source_review ? receipt.source_review.review_ref.slice('refs/heads/'.length) : 'main';
     let failure, output = '', bytes = 0, observed, commit, baseCommit, harvested, killTimer, timeout, diskTimer, policy, configFile, slots, checkpoint = {};
+    // receipt.progress_steps also lands in the final receipt; the output tail is shown only while running.
+    receipt.progress_steps = [];
     const progress = progressPublisher(async update => {
-      save(file, { ...receipt, ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}), progress: update });
+      save(file, { ...receipt, ...(commit ? { commit } : {}), ...(observed ? { runtime: observed } : {}), progress: update,
+        ...(checkpoint.output ? { progress_output: checkpoint.output.slice(-2000) } : {}) });
       await this.report(receipt.run_id);
     });
     progress.update(receipt.progress);
@@ -575,7 +578,7 @@ export class DevelopmentSessions extends RecoveryHost {
           checkpoint = { output: safeOutput(typeof message.partial?.output === 'string' ? message.partial.output : ''),
             failure_context: sanitizeFailureContext(message.partial?.failure_context) };
           const update = sanitizeProgress(message.progress);
-          if (update) { receipt.progress = update; progress.update(update); }
+          if (update) { receipt.progress = update; appendStep(receipt.progress_steps, update); progress.update(update); }
           return;
         }
         if (message?.type === 'account' && slots.includes(message.slot) && ['usage limit reached', 'account not eligible'].includes(message.kind)) {
@@ -599,6 +602,7 @@ export class DevelopmentSessions extends RecoveryHost {
         if (code === 0 && !failure && (!observed || !runtimeMatches(result.runtime, { ...runtime, provider: observed.provider }))) failure = 'Missing verified Pi runtime';
         if (write && code === 0 && !failure && !result.error) {
           receipt.progress = { ...receipt.progress, phase: 'export', action: 'export_started', observed_at: new Date().toISOString(), blocker: undefined };
+          appendStep(receipt.progress_steps, receipt.progress);
           progress.update(receipt.progress);
           try { harvested = await this.harvest(policy, receipt, baseCommit, repository); commit = harvested.commit;
             save(path.join(recoveryDir, 'export.json'), harvested); }

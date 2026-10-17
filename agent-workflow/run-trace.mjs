@@ -145,6 +145,8 @@ export function progressRows(r = {}, now = Date.now()) {
     ...(active && Number.isSafeInteger(p.tool_calls) ? [['So far', `${p.tool_calls} tool calls · ${p.model_calls ?? 0} model calls`
       + (Number.isSafeInteger(p.tokens) ? ` · ${p.tokens} tokens` : '') + (Number.isFinite(p.cost_usd) ? ` · $${p.cost_usd.toFixed(4)}` : '')]] : []),
     ['Progress updated', `${p.observed_at || 'Unavailable'} · ${freshness}`],
+    ...(Array.isArray(r.progress_steps) && r.progress_steps.length ? [['Recent steps', r.progress_steps.slice(-8)
+      .map(s => `${String(s.at).slice(11, 19)} ${progressAction(s.action, s.tool)}`).join(' → ')]] : []),
   ];
 }
 

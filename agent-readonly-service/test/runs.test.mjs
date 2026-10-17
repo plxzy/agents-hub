@@ -323,3 +323,14 @@ test('start_run goes to dok, receipts land in D1 and stay readable', async (t) =
   assert.equal(failed.failure_context.last_tool, 'read'); assert.equal(failed.output_partial, true); assert.equal(failed.output, 'Partial answer');
   ws.close();
 });
+
+test('running receipts carry steps and a redacted output tail; final receipts keep only the steps', () => {
+  const base = { run_id: RUN, agent: 'vm', started: '2026-10-12T12:00:00.000Z',
+    progress_steps: [{ at: '2026-10-12T12:00:01.000Z', action: 'tool_started', tool: 'bash', args: 'private' }],
+    progress_output: 'Running tests\napi_key = sk-abcdefghijklmnopqrstuv' };
+  const running = sanitizeReceipt({ ...base, status: 'running' }, 'dok');
+  assert.deepEqual(running.progress_steps, [{ at: '2026-10-12T12:00:01.000Z', action: 'tool_started', tool: 'bash' }]);
+  assert.match(running.progress_output, /Running tests/); assert.doesNotMatch(running.progress_output, /sk-/);
+  const done = sanitizeReceipt({ ...base, status: 'completed' }, 'dok');
+  assert.equal(done.progress_output, undefined); assert.equal(done.progress_steps.length, 1);
+});

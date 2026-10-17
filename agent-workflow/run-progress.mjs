@@ -16,6 +16,28 @@ export function sanitizeProgress(value) {
   }).filter(([, v]) => v !== undefined));
 }
 
+// A bounded step history: completed actions only, newest last, never tool arguments or model text.
+export const STEP_LIMIT = 40;
+const STEP_ACTIONS = ['model_started', 'message_completed', 'tool_started', 'tool_completed', 'tool_error', 'model_error', 'export_started'];
+export function sanitizeSteps(value) {
+  if (!Array.isArray(value)) return undefined;
+  const tool = v => typeof v === 'string' && /^[a-z][a-z0-9_]{0,39}$/.test(v) ? v : undefined;
+  const steps = value.slice(-STEP_LIMIT).map(s => s && STEP_ACTIONS.includes(s.action) && iso(s.at)
+    ? Object.fromEntries(Object.entries({ at: iso(s.at), action: s.action, tool: tool(s.tool) }).filter(([, v]) => v !== undefined)) : null).filter(Boolean);
+  return steps.length ? steps : undefined;
+}
+/** Adds a progress snapshot to steps in place when it is a new step; returns whether it was added. */
+export function appendStep(steps, progress) {
+  const p = sanitizeProgress(progress);
+  if (!p || !STEP_ACTIONS.includes(p.action)) return false;
+  const step = { at: p.observed_at, action: p.action, ...(p.phase === 'tool' && p.last_tool ? { tool: p.last_tool } : {}) };
+  const last = steps.at(-1);
+  if (last && last.at === step.at && last.action === step.action && last.tool === step.tool) return false;
+  steps.push(step);
+  if (steps.length > STEP_LIMIT) steps.splice(0, steps.length - STEP_LIMIT);
+  return true;
+}
+
 export function runProgressTelemetry(now = () => Date.now()) {
   let value = { phase: 'startup', action: 'preparing', observed_at: new Date(now()).toISOString() };
   return {

@@ -512,6 +512,8 @@ function detailView() {
     h('dl', {}, ...configurationRows(r).flatMap(([label, value]) => [h('dt', {}, label), h('dd', { style: 'overflow-wrap:anywhere' }, value)])),
     output ? h('h3', {}, r.output_partial ? 'Partial output' : 'Output') : null,
     output ? h('pre', {}, output) : null,
+    !output && r.status === 'running' && r.progress_output ? h('h3', {}, 'Latest agent message so far') : null,
+    !output && r.status === 'running' && r.progress_output ? h('pre', {}, r.progress_output) : null,
     h('dl', {}, ...[
       ['runner', r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null)], ['model', r.model], ['started', r.started && new Date(r.started).toLocaleString()], ['tools', list(r.tool_calls, ', ', 'call(s)')],
       ['commands', r.commands?.length ? r.commands.join('\n') : null], ['blocked', list(r.blocked, '\n', 'attempt(s)')],

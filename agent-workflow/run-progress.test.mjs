@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runProgressTelemetry, sanitizeProgress, progressPublisher } from './run-progress.mjs';
+import { runProgressTelemetry, sanitizeProgress, progressPublisher, appendStep, sanitizeSteps, STEP_LIMIT } from './run-progress.mjs';
 import { progressRows, progressSummary } from './run-trace.mjs';
 import { runBrief } from './contract.mjs';
 
@@ -83,4 +83,22 @@ test('publication retries a failure with the newest update while still active', 
   p.update({ ...initial, phase: 'model', action: 'model_started' }); scheduled.shift()();
   await new Promise(r => setImmediate(r)); await p.stop();
   assert.deepEqual(seen, ['preparing', 'model_started']);
+});
+
+test('step history keeps completed actions only, deduplicated and bounded', () => {
+  const steps = [], at = i => new Date(Date.UTC(2026, 9, 17, 11, 0, i)).toISOString();
+  assert.equal(appendStep(steps, { phase: 'model', action: 'model_streaming', observed_at: at(0) }), false);
+  assert.equal(appendStep(steps, { phase: 'tool', action: 'tool_started', last_tool: 'bash', observed_at: at(1) }), true);
+  assert.equal(appendStep(steps, { phase: 'tool', action: 'tool_started', last_tool: 'bash', observed_at: at(1) }), false, 'a re-sent snapshot is one step');
+  appendStep(steps, { phase: 'model', action: 'message_completed', last_tool: 'bash', observed_at: at(2) });
+  assert.deepEqual(steps, [{ at: at(1), action: 'tool_started', tool: 'bash' }, { at: at(2), action: 'message_completed' }]);
+  for (let i = 3; i < 100; i++) appendStep(steps, { phase: 'tool', action: 'tool_completed', last_tool: 'read', observed_at: at(i % 60) + i });
+  assert.ok(steps.length <= STEP_LIMIT);
+  assert.equal(sanitizeSteps([{ at: at(1), action: 'tool_started', tool: 'bash', args: 'rm -rf /' }, { at: 'bad', action: 'tool_started' }, { action: 'x' }])
+    .length, 1);
+  assert.deepEqual(sanitizeSteps([{ at: at(1), action: 'tool_started', tool: 'bash', args: 'secret' }]), [{ at: at(1), action: 'tool_started', tool: 'bash' }]);
+  assert.equal(sanitizeSteps([]), undefined);
+  const rows = progressRows({ status: 'running', progress: sanitizeProgress({ phase: 'tool', action: 'tool_started', observed_at: at(5) }),
+    progress_steps: [{ at: at(1), action: 'tool_started', tool: 'bash' }, { at: at(2), action: 'tool_completed', tool: 'bash' }] }, Date.parse(at(6)));
+  assert.match(JSON.stringify(rows), /Recent steps.*11:00:01 bash started → 11:00:02 bash completed/);
 });
