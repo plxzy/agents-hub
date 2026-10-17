@@ -1,7 +1,7 @@
 name: agents
 services:
   runner:
-    image: agents-runner:pi-1.2.0-tools-20261014
+    image: agents-runner:pi-1.3.0-node-26.12.0-20261017
     build:
       context: .
       # Private Pi extensions kept outside this repo; set AGENTS_EXTENSIONS in ~/agents-runner/.env.

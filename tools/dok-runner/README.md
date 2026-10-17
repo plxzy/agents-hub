@@ -6,8 +6,8 @@ wrapper. It replaces the supervisor that ran inside the vm project's `dok-dev` d
 cutover happened on 2026-10-12 17:01 UTC. The old `dok-agent` unit is disabled and retained only for rollback;
 the old `dok-dev` container and Codex image were removed on 2026-10-12. Its named volumes remain preserved.
 
-The image selected by Compose is `agents-runner:pi-1.2.0-tools-20261014`, based on the digest-pinned Node 26.11.1 Debian 13 Trixie slim
-image. It contains Pi 1.2.0 (from the lockfile), bubblewrap, Git, Python 3, procps, mawk, CA certificates
+The image selected by Compose is `agents-runner:pi-1.3.0-node-26.12.0-20261017`, based on the digest-pinned Node 26.12.0 Debian 13 Trixie slim
+image. It contains npm 12.2.0, Pi 1.3.0 (from the lockfile), bubblewrap, Git, Python 3, procps, mawk, CA certificates
 and tini. It has no standalone `codex` executable, SSH daemon or editor. The image strips Pi's unused OpenAI Codex
 provider and OAuth/API modules; the ordinary OpenAI provider remains.
 
@@ -74,6 +74,20 @@ procfs mount. No host PID namespace, privileged mode, Docker socket, or host-roo
 Run these checks in a separate candidate container without the `agents-home` volume or a Hub connection.
 Promoting a candidate image and its matching sandbox release is a separate rollout; changing the image
 recipe alone does not update a running container.
+
+## Runtime refresh (2026-10-17)
+
+Pi and its SDK packages are pinned together at 1.3.0; the Linux tool policy requires that same version.
+Node 26.12.0 uses the multi-platform image digest above, and npm is pinned separately at 12.2.0.
+Rebuild with `docker compose build --pull --no-cache` to refresh Debian packages as well as npm dependencies.
+The supervisor's lockfile already resolves the current WebSocket dependency (ws 8.22.0).
+The review publisher uses the same Node base image.
+
+Candidate validation: repository suites passed on Node 26.12.0 (208 application tests and 54 Hub tests;
+three platform-specific skips). A separate Linux container passed 198 workflow/publisher tests,
+including real Pi sandbox isolation and killed-tool recovery (one platform-specific skip), with no
+production volumes, credentials or Hub connection. Pi's npm audit reported zero known vulnerabilities.
+Drain and back up before promotion; preserve the previous images, configuration, sessions and releases for rollback.
 
 ## Restart recovery (2026-10-13)
 

@@ -11,8 +11,9 @@ if test -n "$(docker ps -q --filter name=^agents$)"; then
   docker exec agents /home/agent/.local/bin/agent-supervisor --drain /home/agent/.config/agent-workflow/dok.json
   trap 'docker exec agents /home/agent/.local/bin/agent-supervisor --undrain /home/agent/.config/agent-workflow/dok.json >/dev/null 2>&1 || true' EXIT
 fi
-knowledge=${2:-$(docker run --rm --entrypoint sh -v agents-home:/home/agent agents-runner:pi-1.1.0 -c 'basename "$(python3 -c "import json;print(json.load(open(\"/home/agent/.config/agent-workflow/dok.json\"))[\"knowledge\"])")"')}
 cd "$(dirname "$0")"
+# Read through the selected image, including first installs and rollbacks, rather than an obsolete image tag.
+knowledge=${2:-$(docker compose run --rm --no-deps -T --entrypoint python3 runner -c 'import json, os; print(os.path.basename(json.load(open("/home/agent/.config/agent-workflow/dok.json"))["knowledge"]))')}
 docker compose run --rm --no-deps --entrypoint bash runner -lc "set -e
   R=/home/agent/repos/agents-hub.git; T=\$(mktemp)
   test -d \$R || git init -q --bare \$R

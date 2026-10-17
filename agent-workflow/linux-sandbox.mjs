@@ -37,7 +37,7 @@ export function linuxPolicy(agent, state, { readOnly = false } = {}) {
   let packageDir = path.dirname(binary);
   while (packageDir !== path.dirname(packageDir) && !fs.existsSync(path.join(packageDir, 'package.json'))) packageDir = path.dirname(packageDir);
   const pkg = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
-  if (pkg.name !== '@earendil-works/pi-coding-agent' || pkg.version !== '1.2.0') throw new Error('Linux tools require the pinned Pi 1.2.0 release');
+  if (pkg.name !== '@earendil-works/pi-coding-agent' || pkg.version !== '1.3.0') throw new Error('Linux tools require the pinned Pi 1.3.0 release');
   // Include the dependency tree, not the containing home directory.
   const runtime = path.resolve(packageDir, '../..');
   if (inside(workspace, runtime)) throw new Error('Pi runtime must be outside the workspace');
