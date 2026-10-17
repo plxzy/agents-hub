@@ -178,7 +178,8 @@ export class RecoveryHost {
     const lifecycle = fs.existsSync(lifeFile) ? read(lifeFile) : {};
     const why = text => (reason ? `${text}: ${reason}` : text).slice(0, 180);
     if (action === 'cancel' || action === 'pause') {
-      if (r.status !== 'running' || !entry?.stop) throw Error('Run is not active on this runner');
+      if (r.status !== 'running' || !entry) throw Error('Run is not active on this runner');
+      if (!entry.stop) throw Error('Run is still preparing its clone; retry in a few seconds');
       // Written before the stop so the final receipt, and any later recovery scan, see the decision.
       save(lifeFile, { ...lifecycle, ...(action === 'cancel' ? { paused: why('Cancelled by operator') } : { held: why('Paused by operator; resume_run continues it') }) });
       const stopped = action === 'cancel' ? 'Cancelled by operator' : 'Paused by operator';

@@ -60,3 +60,52 @@ test('supervisor completes through actual child callbacks without deleting faile
     if (outcome === 'transport_error') assert.equal(read(path.join(state, 'recovery-v1', id, 'lifecycle.json')).automatic_eligible, true);
   }
 });
+
+test('pause and cancel stop a live child and leave the recovery state the action promised', async t => {
+  const { recoveryAction } = await import('./recovery-contract.mjs');
+  for (const action of ['pause', 'cancel']) {
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'supervisor-control-'));
+    t.after(() => fs.rmSync(state, { recursive: true, force: true }));
+    const id = 'r-20261013T000000Z-abcdef', workspace = path.join(state, 'run-work', id, 'workspace');
+    for (const dir of ['agent-runs', 'agent-requests', 'recovery-v1', 'knowledge']) fs.mkdirSync(path.join(state, dir));
+    save(path.join(state, 'knowledge', 'RELEASE.json'), { source_revision: 'knowledge' });
+    const runtime = { engine: 'pi-sdk', provider: 'openai', model: 'gpt-6-luna', thinking: 'low' };
+    const observed = { ...runtime, pi_version: '1.1.0' };
+    const agent = { name: 'demo', version: 'v1', tools: ['read', 'write'], skills: 'none', memory: [], instructions: 'Test', workspace: '/repo' };
+    const receipt = { run_id: id, root: id, agent: 'demo', repo: 'demo', write: true, status: 'running', task: 'Fixture task' };
+    const file = path.join(state, 'agent-runs', id + '.json');
+    save(file, receipt);
+    let spawned;
+    const started = new Promise(r => { spawned = r; });
+    const host = Object.assign(Object.create(DevelopmentSessions.prototype), {
+      state, revision: 'release', repos: { demo: '/unused/repo.git' }, knowledge: path.join(state, 'knowledge'),
+      limits: { slots: ['openai'], writeMs: 10000, diskBytes: 1024 ** 3 }, runs: new Map([[id, { repo: 'demo', write: true }]]),
+      poolSlots: async () => ['openai'], prune() {}, report: async () => {},
+      runIO: {
+        execFileSync(_cmd, args) { if (args.includes('clone')) { fs.mkdirSync(path.join(workspace, '.git'), { recursive: true }); return ''; } return 'a'.repeat(40); },
+        linuxPolicy: agent => ({ workspace: agent.workspace }), sandboxExecute: async () => ({}),
+        spawn() {
+          const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
+          // Like Pi on SIGTERM: no final JSON, a non-zero exit.
+          child.kill = () => queueMicrotask(() => child.emit('close', 1));
+          child.stdin.on('finish', () => queueMicrotask(() => { child.emit('message', { type: 'runtime', runtime: observed }); spawned(); }));
+          return child;
+        },
+      },
+    });
+    await host.executeRun(agent, runtime, receipt);
+    await started;
+    const result = await host.controlRun({ run_id: id, request_id: `${action}-request-1`, action });
+    const final = read(file);
+    assert.equal(final.status, 'interrupted', action);
+    const { revision: _r, ...stored } = final.recovery;
+    assert.deepEqual(result.after, { status: 'interrupted', recovery: stored }, 'the receipt reports the settled state');
+    if (action === 'pause') {
+      assert.equal(final.recovery.state, 'ready'); assert.match(final.recovery.reason, /Paused by operator/);
+      assert.equal(recoveryAction(final), 'resume_run');
+    } else {
+      assert.equal(final.recovery.state, 'paused'); assert.match(final.recovery.reason, /Cancelled by operator/);
+      assert.equal(recoveryAction(final), null);
+    }
+  }
+});

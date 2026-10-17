@@ -452,6 +452,8 @@ export class DevelopmentSessions extends RecoveryHost {
         // Failed model turns are terminal unless a command or process interruption needs reconciliation.
         const interrupted = !result.error || info.state === 'awaiting_review' || ['Runner stopped', 'Pi process exited', 'Invalid Pi result', 'Run state persistence failed', 'Cancelled by operator', 'Paused by operator'].includes(failure);
         save(file, { ...terminal, ...(interrupted ? { status: 'interrupted' } : {}), recovery: info });
+        // info was read while the receipt still said failed; an interrupted run is judged again as interrupted.
+        if (interrupted) save(file, { ...read(file), recovery: this.recoveryInfo(receipt.run_id).info });
       }
       this.runs.delete(receipt.run_id);
       // Write conversations keep their Pi history (not the checkout) so a follow-up can continue; others are removed.
