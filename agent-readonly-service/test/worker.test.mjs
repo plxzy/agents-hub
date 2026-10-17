@@ -39,6 +39,6 @@ test('MCP endpoint lists read-only tools and serves the dashboard resource', asy
   assert.deepEqual(resource.result.contents[0]._meta['openai/ui'].availableDisplayModes, ['inline', 'fullscreen']);
   body = await (await apiFetch(rpc({ id: 3, method: 'tools/call', params: { name: 'get_run', arguments: { run_id: 'r1' } } }), env)).json();
   assert.equal(body.result.isError, true);
-  body = await (await apiFetch(rpc({ id: 4, method: 'resources/list' }), env)).json(); assert.equal(body.result.resources[0].uri, 'ui://agents-hub/dashboard-v13.html');
+  body = await (await apiFetch(rpc({ id: 4, method: 'resources/list' }), env)).json(); assert.equal(body.result.resources[0].uri, 'ui://agents-hub/dashboard-v14.html');
   assert.equal((await apiFetch(rpc({ method: 'notifications/initialized' }), env)).status, 202);
 });

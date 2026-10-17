@@ -19,7 +19,7 @@ import { publicPublication } from './review-publication-contract.mjs';
 import { publicRecovery } from './recovery-contract.mjs';
 import { sanitizeProgress } from './run-progress.mjs';
 
-export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v13.html';
+export const DASHBOARD_URI = 'ui://agents-hub/dashboard-v14.html';
 /** Any earlier dashboard URI a host may still have cached; it is answered with the current page. */
 export const isDashboardUri = (uri) => typeof uri === 'string' && /^ui:\/\/agents(-hub)?\/dashboard(-v\d+)?\.html$/.test(uri);
 

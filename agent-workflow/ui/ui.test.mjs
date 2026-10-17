@@ -43,6 +43,74 @@ test('the dashboard inlines the MCP Apps bridge and loads nothing from the netwo
   assert.throws(() => bridgeScript('const a = 1;'), /unexpected ext-apps bundle format/);
 });
 
+test('the assembled dashboard opens run details across isolated module scopes', async (t) => {
+  const run_id = 'r-20261014T000000Z-abcdef';
+  const review = { root: run_id, github: 'example/project', pr_number: 123,
+    branch: `review/agents/${run_id}`, commit: 'a'.repeat(40), state: 'open', observed_at: '2026-10-14T00:00:00Z' };
+  for (const receipt of [
+    { run_id, agent: 'workflow', status: 'failed', error: 'model turn failed',
+      failure_context: { phase: 'model', message: 'Provider returned 503' },
+      recovery: { state: 'ready', retained: true, checkpoint_version: 336, failed_resume_supported: true } },
+    { run_id, agent: 'workflow', status: 'completed', review, output: 'Saved review output' },
+  ]) await t.test(receipt.status, async () => {
+    class Element {
+      children = []; listeners = {}; style = { setProperty() {} }; dataset = {};
+      constructor(tag) { this.tag = tag; }
+      append(...children) { this.children.push(...children); }
+      replaceChildren(...children) { this.children = children; }
+      setAttribute(key, value) { this[key] = value; }
+      addEventListener(name, fn) { this.listeners[name] = fn; }
+      get textContent() { return this.children.map(c => c instanceof Element ? c.textContent : c).join(''); }
+      set textContent(value) { this.children = [value]; }
+    }
+    const elements = new Map(), calls = [];
+    const getElementById = id => {
+      if (!elements.has(id)) elements.set(id, new Element('div'));
+      return elements.get(id);
+    };
+    let app;
+    class FixtureApp {
+      constructor() { app = this; }
+      async connect() {}
+      getHostContext() { return {}; }
+      async callServerTool({ name, arguments: args }) {
+        calls.push({ name, ...args });
+        assert.equal(name, 'panel_run');
+        return { structuredContent: receipt };
+      }
+    }
+    const context = vm.createContext({ FixtureApp, Node: Element,
+      document: { documentElement: new Element('html'), getElementById,
+        createElement: tag => new Element(tag), querySelectorAll: () => [], addEventListener() {} },
+      matchMedia: () => ({ matches: false }), setTimeout() {}, clearTimeout() {} });
+    const html = dashboardHtml({ bridge: 'globalThis.ExtApps = { App: FixtureApp };' });
+    // Each browser module has its own lexical scope. Do not inject the helpers under test.
+    for (const [, script] of html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)) {
+      await vm.runInContext(`(async () => { ${script}\n})();`, context);
+    }
+    app.ontoolresult({ structuredContent: { source: 'hub', hub_panel: true, relay: { online: false },
+      status: { agents: 1, running: 0 }, agents: [], runs: [receipt] } });
+    const find = (el, predicate) => predicate(el) ? el : el.children?.map(c => c instanceof Element && find(c, predicate)).find(Boolean);
+    const view = getElementById('view');
+    find(view, el => el.className === 'row click').listeners.click();
+    await new Promise(setImmediate);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].run_id, run_id);
+    assert.equal(getElementById('error').textContent, '');
+    assert.doesNotMatch(view.textContent, /Loading/);
+    if (receipt.recovery) {
+      assert.match(view.textContent, /Saved work and recovery/);
+      assert.match(view.textContent, /model turn failed/);
+      assert.match(view.textContent, /Recovery artifacts are retained/);
+      assert.ok(find(view, el => el.tag === 'button' && el.textContent === 'Resume saved work'));
+    } else {
+      assert.match(view.textContent, /PR #123: open/);
+      assert.equal(find(view, el => el.tag === 'a').href, 'https://github.com/example/project/pull/123');
+      assert.match(view.textContent, /Saved review output/);
+    }
+  });
+});
+
 test('the dashboard isolates its styles from the embedding host', () => {
   const html = dashboardHtml();
   assert.match(html, /<div id="agents-hub-ui">\s*<div class="app">/);
@@ -204,7 +272,7 @@ test('run details render shared historical context as text and label absent fiel
   for (const [label, value] of runTrace(receipt)) { assert.ok(result.includes(label)); assert.ok(result.includes(value)); }
   assert.match(result, /Technical details and saved run evidence/);
   assert.doesNotMatch(result, /innerHTML/);
-  assert.ok(html.includes('globalThis.AgentsHealth = { healthOf, healthLabels, dashboardHealth, runTrace, failureRows, progressRows, progressSummary, configurationRows };'));
+  assert.match(html, /globalThis\.AgentsHealth = \{[^}]*\bconfigurationRows\b[^}]*\bpublicReview\b/);
   const bundled = vm.createContext({ publicationPending, publicationView: () => null,});
   const module = [...html.matchAll(/<script type="module">([\s\S]*?)<\/script>/g)].find((m) => m[1].includes('globalThis.AgentsHealth ='));
   vm.runInContext(module[1], bundled);
