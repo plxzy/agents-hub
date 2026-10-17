@@ -5,7 +5,7 @@ const run = v => typeof v === 'string' && /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/.test(v)
 export function retryableModelFailure(r = {}) {
   const f = r.failure_context;
   return r.error === 'model turn failed' && f?.phase === 'model'
-    && /stream ended before a terminal response event|\bECONNRESET\b|\bETIMEDOUT\b|\b(?:502|503|504)\b/.test(f.message ?? '');
+    && /stream ended before a terminal response event|\bECONNRESET\b|\bETIMEDOUT\b|\b(?:502|503|504|529)\b|\bservers? (?:are|is) (?:currently )?overloaded\b/i.test(f.message ?? '');
 }
 export const recoveryEligible = r => r?.status === 'interrupted' || (r?.status === 'failed' && retryableModelFailure(r));
 export function recoveryAction(r = {}) {

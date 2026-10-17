@@ -145,6 +145,14 @@ test('unsafe failures never become eligible from task text or a ready checkpoint
   }
 });
 
+test('provider overload is a retryable model failure; quota and refusals are not', () => {
+  const failed = message => ({ status: 'failed', error: 'model turn failed', failure_context: { phase: 'model', message } });
+  for (const message of ['Our servers are currently overloaded. Please try again later.', '529 Overloaded'])
+    assert.equal(recoveryEligible(failed(message)), true, message);
+  for (const message of ['429 You exceeded your current quota', 'Request refused', 'overloaded'])
+    assert.equal(recoveryEligible(failed(message)), false, message);
+});
+
 test('failed transport recovery still refuses uncertain tools and missing workspaces', async t => {
   const { host, id, j, receipt } = hostFixture(t, { uncertain: true });
   save(path.join(host.state, 'agent-runs', id + '.json'), { ...receipt, ...modelFailure });
