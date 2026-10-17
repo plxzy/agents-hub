@@ -9,6 +9,16 @@ async function repository(env, repo) {
   if (!env.REVIEW_PUBLISHER_TOKEN) return null;
   return env.DB.prepare('SELECT * FROM review_repositories WHERE repo = ?').bind(repo).first();
 }
+const notEnabled = reason => ({ status: 'not_enabled', reason });
+// A completed run without a job says why, so an internal repository never looks like a lost publication.
+function unpublished(r, target, publisher = true) {
+  if (r.status !== 'completed') return undefined;
+  if (!r.review_ref) return { status: 'not_applicable' };
+  if (!publisher) return notEnabled('This Hub has no GitHub publisher configured');
+  if (!target) return notEnabled(`Repository ${r.repo ?? 'of this run'} is internal; GitHub publication is not enabled for it`);
+  if (Date.parse(r.started) < Date.parse(target.enabled_after)) return notEnabled('Run predates GitHub publication for this repository; publish_review can publish it');
+  return undefined;
+}
 async function rawRun(env, id) {
   const row = await env.DB.prepare('SELECT receipt FROM runs WHERE run_id = ?').bind(id).first();
   return row ? JSON.parse(row.receipt) : null;
@@ -50,15 +60,14 @@ export async function publishReview(env, args) {
   return { run_id: r.run_id, publication: await ensurePublication(env, r, { explicit: true }) };
 }
 export async function readPublication(env, r) {
-  if (!env.REVIEW_PUBLISHER_TOKEN) return undefined;
+  if (!env.REVIEW_PUBLISHER_TOKEN) return unpublished(r, null, false);
   const row = await env.DB.prepare(`SELECT p.*,t.github FROM review_publications p
     JOIN review_repositories t ON t.repo=p.repo WHERE p.run_id=?`).bind(r.run_id).first();
   if (row) return publicPublication({ status: row.status, github: row.github, branch: branch(row.root), commit: row.commit_sha,
     conversation_id: row.root, pr_number: row.pr_number, pr_url: row.pr_url, published_at: row.published_at,
     error: row.error, ...(row.due ? { next_retry_at: new Date(row.due).toISOString() } : {}) });
   if (r.source_review && r.commit === r.source_review.commit) return readPublication(env, { run_id: r.source_review.run_id });
-  if (r.status === 'completed' && !r.review_ref) return { status: 'not_applicable' };
-  return undefined;
+  return unpublished(r, r.status === 'completed' && r.review_ref ? await repository(env, r.repo) : null);
 }
 export async function readReview(env, r) {
   if (!env.REVIEW_PUBLISHER_TOKEN) return undefined;
@@ -76,7 +85,9 @@ export async function inChunks(ids, read) {
 /** readPublication and readReview for many runs: a few IN queries instead of three lookups per run. Map of run_id → { publication, review }. */
 export async function publicationsAndReviews(env, runs) {
   const out = new Map(runs.map(r => [r.run_id, {}]));
-  if (!env.REVIEW_PUBLISHER_TOKEN || !runs.length) return out;
+  if (!env.REVIEW_PUBLISHER_TOKEN) { for (const r of runs) out.get(r.run_id).publication = unpublished(r, null, false); return out; }
+  if (!runs.length) return out;
+  const targets = new Map((await env.DB.prepare('SELECT * FROM review_repositories').all()).results.map(t => [t.repo, t]));
   const ids = [...new Set(runs.flatMap(r => [r.run_id, r.source_review?.run_id].filter(Boolean)))];
   const byId = new Map(runs.map(r => [r.run_id, r]));
   const rows = new Map((await inChunks(ids, async (part, marks) => (await env.DB.prepare(`SELECT p.run_id,p.root,p.status,p.commit_sha,p.pr_number,p.pr_url,
@@ -90,7 +101,7 @@ export async function publicationsAndReviews(env, runs) {
     // Same order as readPublication.
     out.get(r.run_id).publication = row?.github != null ? published(row)
       : r.source_review && r.commit === r.source_review.commit ? published(rows.get(r.source_review.run_id))
-      : r.status === 'completed' && !r.review_ref ? { status: 'not_applicable' } : undefined;
+      : unpublished(r, targets.get(r.repo));
     // Same steps as rootOf, walking parents already loaded here; only a parent outside this list needs D1.
     try {
       let at = r;
@@ -127,8 +138,20 @@ export async function publicationHealth(env) {
   if (!env.REVIEW_PUBLISHER_TOKEN) return { enabled: false };
   const h = await env.DB.prepare('SELECT observed_at FROM review_publisher_health WHERE id=1').first();
   const { results } = await env.DB.prepare('SELECT status,COUNT(*) AS count FROM review_publications GROUP BY status').all();
+  const repos = (await env.DB.prepare('SELECT repo,github,base,enabled_after FROM review_repositories ORDER BY repo').all()).results;
   return { enabled: true, online: !!h && Date.now() - Date.parse(h.observed_at) < 60000,
-    observed_at: h?.observed_at ?? null, counts: Object.fromEntries(results.map(r => [r.status, r.count])) };
+    observed_at: h?.observed_at ?? null, counts: Object.fromEntries(results.map(r => [r.status, r.count])),
+    repositories: repos.map(t => ({ repo: t.repo, github: t.github, base: t.base, since: t.enabled_after })) };
+}
+// The Hub and the runner each hold a publication switch; a repository enabled in only one of them is reported.
+export function withRunnerPublishing(health, selection) {
+  const runner = new Map((selection?.agents ?? []).filter(a => a.repo && typeof a.publishes === 'boolean').map(a => [a.repo, a.publishes]));
+  if (!health?.repositories || !runner.size) return health;
+  const hub = new Set(health.repositories.map(t => t.repo));
+  const mismatched = [...health.repositories.filter(t => runner.get(t.repo) === false).map(t => t.repo),
+    ...[...runner].filter(([repo, on]) => on && !hub.has(repo)).map(([repo]) => repo)];
+  return { ...health, repositories: health.repositories.map(t => runner.has(t.repo) ? { ...t, runner_publishes: runner.get(t.repo) } : t),
+    ...(mismatched.length ? { mismatched } : {}) };
 }
 
 async function claim(env) {

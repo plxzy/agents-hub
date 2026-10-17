@@ -97,7 +97,8 @@ const sessions = new DevelopmentSessions({ ...config, processSession, lease, rep
   prepareReview: config.reviewPublisher ? (repo, id, selection) => config.reviewPublisher.repositories.includes(repo)
     ? prepareReviewBase(config.reviewPublisher.socket, repo, id, selection) : null : null,
   prepareBase: config.reviewPublisher ? (repo, id) => config.reviewPublisher.repositories.includes(repo)
-    ? prepareReviewBase(config.reviewPublisher.socket, repo, id) : null : null, hub_agents: hubAgents });
+    ? prepareReviewBase(config.reviewPublisher.socket, repo, id) : null : null,
+  publishes: repo => !!config.reviewPublisher?.repositories.includes(repo), hub_agents: hubAgents });
 // The knowledge release is frozen, so the runnable list is computed once per supervisor boot.
 const agents = [...new Set(['workflow', ...sessions.runnable().map(a => a.name)])];
 const started = identity(process.pid);

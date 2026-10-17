@@ -1,4 +1,4 @@
-import { publishReview, publicationHealth } from './review-publications.mjs';
+import { publishReview, publicationHealth, withRunnerPublishing } from './review-publications.mjs';
 import { dokTarget } from '../../agent-workflow/run-selection.mjs';
 import { DASHBOARD_URI, isDashboardUri, DASHBOARD_TOOL_META, DASHBOARD_RESOURCE_META, DASHBOARD_ICONS, READ_OPS, lastRunOf } from '../../agent-workflow/contract.mjs';
 import { accessSubject } from './access.mjs';
@@ -235,7 +235,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           value.hub_panel = dokEnabled(env);
           value.runners = { dok };
           value.accounts = accounts;
-          value.publication_health = publication_health;
+          value.publication_health = withRunnerPublishing(publication_health, dok.run_selection);
           // The runner (dok) is what the panel and the health report call "relay": the Mac no longer connects.
           value.relay = { ...dok, runner: 'dok' };
           value.health = healthOf({ ...value, relay_source: relaySource(dok) }, { expected: dok.agents });

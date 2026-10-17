@@ -61,7 +61,7 @@ export function persistRunCompletion({ file, receipt, result, observed, done, co
 }
 
 export class DevelopmentSessions extends RecoveryHost {
-  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, knowledgeHub, hub_agents = null, accounts_module = null, prepareBase = null, prepareReview = null, limits = {} }) {
+  constructor({ state, repository, repositories = {}, knowledge, context, revision, processSession = randomUUID(), lease, report, accounts, knowledgeHub, hub_agents = null, accounts_module = null, prepareBase = null, prepareReview = null, publishes = null, limits = {} }) {
     super();
     if (process.platform !== 'linux') throw new Error('Development sessions require Linux');
     this.state = path.resolve(state); this.repository = fs.realpathSync(repository); this.knowledge = fs.realpathSync(knowledge);
@@ -69,7 +69,7 @@ export class DevelopmentSessions extends RecoveryHost {
       ...Object.fromEntries(Object.entries(repositories).map(([name, dir]) => [name, fs.realpathSync(dir)])) };
     this.context = context ? fs.realpathSync(context) : null;
     this.revision = revision; this.processSession = processSession; this.lease = lease; this.reporter = report;
-    this.prepareBase = prepareBase; this.prepareReview = prepareReview;
+    this.prepareBase = prepareBase; this.prepareReview = prepareReview; this.publishes = publishes;
     this.accounts = accounts; this.accountsModule = accounts_module; this.knowledgeHub = knowledgeHub;
     // Agent definitions published to the Hub (a folder with agents/*.md written at boot); the frozen release is the fallback.
     this.hubAgents = hub_agents ? fs.realpathSync(hub_agents) : null;
@@ -309,7 +309,7 @@ export class DevelopmentSessions extends RecoveryHost {
       const active = [...this.runs.values()];
       if (!reason && repo && active.some(r => r.repo === repo)) reason = `repository ${repo} is busy; wait for its current run to finish.`;
       if (!reason && active.filter(r => r.write === write).length >= (write ? this.limits.writeRuns : this.limits.runs)) reason = `dok ${write ? 'write' : 'read-only'} capacity is full; wait for a slot.`;
-      return { name: agent.name, model: agent.model, ...(repo ? { repo } : {}), ...(reason ? { reason } : {}) };
+      return { name: agent.name, model: agent.model, ...(repo ? { repo } : {}), ...(repo && this.publishes ? { publishes: this.publishes(repo) } : {}), ...(reason ? { reason } : {}) };
     }) };
   }
   runLookup(requestId) {

@@ -8,9 +8,9 @@ export const PUBLISH_REVIEW = {
 };
 export const publicationPending = p => ['waiting_artifact', 'queued', 'publishing', 'retrying'].includes(p?.status);
 export function publicPublication(p) {
-  if (!p || !['waiting_artifact', 'queued', 'publishing', 'retrying', 'published', 'blocked', 'not_applicable'].includes(p.status)) return undefined;
+  if (!p || !['waiting_artifact', 'queued', 'publishing', 'retrying', 'published', 'blocked', 'not_applicable', 'not_enabled'].includes(p.status)) return undefined;
   const out = { status: p.status };
-  for (const k of ['github', 'branch', 'commit', 'conversation_id', 'published_at', 'next_retry_at', 'error', 'pr_url']) {
+  for (const k of ['github', 'branch', 'commit', 'conversation_id', 'published_at', 'next_retry_at', 'error', 'reason', 'pr_url']) {
     if (typeof p[k] === 'string' && p[k].length <= 300) out[k] = p[k];
   }
   if (out.pr_url && !/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(out.pr_url)) delete out.pr_url;

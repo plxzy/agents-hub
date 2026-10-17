@@ -76,7 +76,16 @@ test('auth boundaries, activation cutoff, unchanged runs and explicit backfills'
   assert.equal((await call('/relay/publisher/claim', {}, 'mac-test')).status, 401);
   assert.equal((await call('/relay/dok-dev/runs', receipt(), 'publisher-test')).status, 401);
   const old = { ...receipt(), started: '2026-10-13T12:00:00Z' };
-  await post(old); await upload(old); assert.equal((await read(RUN)).publication, undefined);
+  await post(old); await upload(old);
+  assert.deepEqual((await read(RUN)).publication, { status: 'not_enabled', reason: 'Run predates GitHub publication for this repository; publish_review can publish it' });
+  // An internal repository says so instead of omitting publication, in the one-run read and the panel brief alike.
+  const INTERNAL = 'r-20261014T060744Z-71aa4a';
+  await post({ ...receipt(INTERNAL), repo: 'dev-workflow', agent: 'workflow' });
+  assert.deepEqual((await read(INTERNAL)).publication, { status: 'not_enabled', reason: 'Repository dev-workflow is internal; GitHub publication is not enabled for it' });
+  const panel = JSON.parse((await tool('panel_data')).content[0].text);
+  assert.deepEqual(panel.runs.find(x => x.run_id === INTERNAL).publication, (await read(INTERNAL)).publication);
+  const status = JSON.parse((await tool('get_status')).content[0].text);
+  assert.deepEqual(status.publication_health.repositories, [{ repo: 'vm', github: 'owner/vm', base: 'main', since: '2026-10-14T00:00:00Z' }]);
   assert.equal((await tool('publish_review', { run_id: RUN, repo: 'other' })).isError, true);
   assert.equal((await tool('publish_review', { run_id: RUN })).isError, undefined);
   assert.equal((await read(RUN)).publication.status, 'queued');
@@ -174,4 +183,16 @@ test('archive_runs needs the panel code, refuses running runs, hides runs from t
   await tool('archive_runs', { items: [{ run_id: RUN, confirm: restore }], archived: false, request_id: 'req-archive-5' });
   const back = JSON.parse(text(await tool('panel_data', { since: changed.version })));
   assert.ok(back.runs.some((r) => r.run_id === RUN && !r.archived_at), 'restored runs come back');
+});
+
+test('get_status flags repositories whose Hub and runner publication switches disagree', async () => {
+  const { withRunnerPublishing } = await import('../src/review-publications.mjs');
+  const { validateStatus } = await import('../../agent-workflow/relay-wire.mjs');
+  const selection = validateStatus({ enabled: true, agents: ['vm', 'tracker', 'helper'], run_selection: { version: 1, agents: [
+    { name: 'vm', repo: 'vm', publishes: false }, { name: 'tracker', repo: 'tracker', publishes: true }, { name: 'helper', repo: 'dev-workflow', publishes: false }] } }).run_selection;
+  assert.throws(() => validateStatus({ enabled: true, agents: ['vm'], run_selection: { version: 1, agents: [{ name: 'vm', publishes: 'yes' }] } }));
+  const health = { enabled: true, repositories: [{ repo: 'vm', github: 'owner/vm', base: 'main', since: '2026-10-14T00:00:00Z' }] };
+  assert.deepEqual(withRunnerPublishing(health, selection), { enabled: true, mismatched: ['vm', 'tracker'],
+    repositories: [{ repo: 'vm', github: 'owner/vm', base: 'main', since: '2026-10-14T00:00:00Z', runner_publishes: false }] });
+  assert.equal(withRunnerPublishing(health, undefined), health, 'an older runner that reports nothing changes nothing');
 });

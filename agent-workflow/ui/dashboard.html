@@ -330,7 +330,7 @@ function runRow(r, extra = null) {
       h('span', { class: `pill ${r.status}` }, r.status === 'running' ? [h('span', { class: 'spin' }), ' running'] : r.status),
       h('span', { class: 'name' }, r.agent), h('span', { class: 'grow ell' }, r.title ?? firstLine(r.task)),
       r.feedback ? h('span', { class: 'small muted' }, r.feedback === 'good' ? '👍' : '👎') : null),
-    r.review ? h('div', { class: 'small' }, `GitHub PR #${r.review.pr_number} · ${r.review.state}`) : r.publication && r.publication.status !== 'not_applicable' ? h('div', { class: 'small' }, r.publication.status === 'published' ? `GitHub PR #${r.publication.pr_number}` : r.publication.status === 'blocked' ? 'GitHub publication needs attention' : 'Publishing to GitHub') : null,
+    r.review ? h('div', { class: 'small' }, `GitHub PR #${r.review.pr_number} · ${r.review.state}`) : r.publication && r.publication.status !== 'not_applicable' ? h('div', { class: 'small' }, r.publication.status === 'published' ? `GitHub PR #${r.publication.pr_number}` : r.publication.status === 'blocked' ? 'GitHub publication needs attention' : r.publication.status === 'not_enabled' ? 'Internal: not published to GitHub' : 'Publishing to GitHub') : null,
     progressSummary(r) ? h('div', { class: 'small', role: 'status' }, progressSummary(r)) : null,
     h('div', { class: 'meta' }, [r.runner ?? (S.data?.transport === 'mac' ? 'mac' : null), r.kind !== 'task' && r.kind, ago(r.started), r.status !== 'running' && `${r.tool_calls} tool call(s)`,
       r.blocked > 0 && `${r.blocked} blocked`, r.model].filter(Boolean).join(' · ')),
@@ -453,7 +453,7 @@ const publicationPending = p => ['waiting_artifact', 'queued', 'publishing', 're
 function publicationView(r) {
   const p = r.publication ?? {}, review = publicReview(r.review);
   if (!review && (!r.publication || p.status === 'not_applicable')) return null;
-  const label = review ? `PR #${review.pr_number}: ${review.state} (observed ${review.observed_at})` : p.status === 'published' ? 'Published on GitHub' : p.status === 'blocked' ? 'Publication needs attention' : 'Publishing to GitHub';
+  const label = review ? `PR #${review.pr_number}: ${review.state} (observed ${review.observed_at})` : p.status === 'published' ? 'Published on GitHub' : p.status === 'blocked' ? 'Publication needs attention' : p.status === 'not_enabled' ? 'Not published to GitHub' : 'Publishing to GitHub';
   const url = review?.pr_url ?? p.pr_url;
   const safeUrl = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+$/.test(url ?? '');
   return h('section', {}, h('h3', {}, 'GitHub review'), h('p', { role: 'status', 'aria-live': 'polite' }, label),
@@ -461,6 +461,7 @@ function publicationView(r) {
     review ? h('p', { class: 'small' }, `Branch: ${review.branch}`) : null,
     r.next_action?.note ? h('p', {}, r.next_action.note) : null,
     p.error ? h('p', {}, p.error) : null,
+    p.reason ? h('p', {}, p.reason) : null,
     p.commit ? h('p', { class: 'small muted' }, `Saved commit ${p.commit}`) : null,
     ['blocked', 'retrying'].includes(p.status) ? h('button', { disabled: S.busy.has(`publish-${r.run_id}`), onclick: () => act(`publish-${r.run_id}`, async () => {
       await call('publish_review', { run_id: r.run_id }); await loadDetail(r.run_id); await refresh();

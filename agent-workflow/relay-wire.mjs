@@ -30,6 +30,10 @@ export function validateStatus(value) {
         if (typeof a[k] !== 'string' || a[k].length > 300) throw new Error('Invalid runner selection field');
         out[k] = a[k];
       }
+      if (a.publishes !== undefined) {
+        if (typeof a.publishes !== 'boolean') throw new Error('Invalid runner selection field');
+        out.publishes = a.publishes;
+      }
       return out;
     }) };
   }
