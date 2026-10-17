@@ -207,15 +207,6 @@ export async function executeRun(config, task) {
       const unsubscribe = session.subscribe(event => {
         telemetry.observe(event);
         progress.observe(event);
-        // Retain a bounded checkpoint in the supervisor for a process exit with no final JSON.
-        if (runtime && process.connected && (Date.now() - checkpointAt >= 1000 || ['message_end', 'tool_execution_start', 'tool_execution_end'].includes(event.type))) {
-          checkpointAt = Date.now();
-          if (journal) {
-            try { journal.session(sessionManager); journal.update({ partial: telemetry.partial(), runtime }); }
-            catch { failed = 'Recovery persistence failed'; void session.abort(); }
-          }
-          process.send({ type: 'checkpoint', partial: telemetry.partial(), progress: progress.snapshot() }, () => {});
-        }
         if (event.type === 'tool_execution_start') calls.push(event.toolName);
         if (event.type === 'message_end' && event.message.role === 'assistant') {
           models++;
@@ -224,6 +215,16 @@ export async function executeRun(config, task) {
             totalTokens: sum(usage.totalTokens, u.totalTokens), cost: sum(usage.cost, u.cost?.total) };
           if (['error', 'aborted'].includes(event.message.stopReason)) failed = event.message.errorMessage || 'error';
           output = (event.message.content ?? []).filter(c => c.type === 'text').map(c => c.text).join('\n').slice(0, 64000);
+        }
+        // Retain a bounded checkpoint in the supervisor for a process exit with no final JSON.
+        if (runtime && process.connected && (Date.now() - checkpointAt >= 1000 || ['message_end', 'tool_execution_start', 'tool_execution_end'].includes(event.type))) {
+          checkpointAt = Date.now();
+          if (journal) {
+            try { journal.session(sessionManager); journal.update({ partial: telemetry.partial(), runtime }); }
+            catch { failed = 'Recovery persistence failed'; void session.abort(); }
+          }
+          process.send({ type: 'checkpoint', partial: telemetry.partial(), progress: { ...progress.snapshot(),
+            tool_calls: calls.length, model_calls: models, tokens: usage.totalTokens, cost_usd: usage.cost } }, () => {});
         }
       });
       const abort = () => { void session.abort(); };

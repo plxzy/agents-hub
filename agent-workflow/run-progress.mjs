@@ -2,6 +2,9 @@
 const PHASES = ['startup', 'model', 'tool', 'export'];
 const ACTIONS = ['preparing', 'model_started', 'model_streaming', 'message_completed', 'tool_started', 'tool_running', 'tool_completed', 'tool_error', 'model_error', 'export_started'];
 const iso = v => typeof v === 'string' && v.length <= 40 && Number.isFinite(Date.parse(v)) ? new Date(v).toISOString() : undefined;
+const int = v => Number.isSafeInteger(v) && v >= 0 ? v : undefined;
+// Running totals so far; the final receipt's tool_calls, model_calls and usage replace them.
+const COUNTS = { tool_calls: int, model_calls: int, tokens: int, cost_usd: v => Number.isFinite(v) && v >= 0 ? v : undefined };
 export function sanitizeProgress(value) {
   if (!value || !PHASES.includes(value.phase) || !ACTIONS.includes(value.action) || !iso(value.observed_at)) return undefined;
   const tool = v => typeof v === 'string' && /^[a-z][a-z0-9_]{0,39}$/.test(v) ? v : undefined;
@@ -9,6 +12,7 @@ export function sanitizeProgress(value) {
     last_tool: tool(value.last_tool), checkpoint: ACTIONS.includes(value.checkpoint) ? value.checkpoint : undefined,
     checkpoint_at: iso(value.checkpoint_at), checkpoint_tool: tool(value.checkpoint_tool),
     blocker: ['tool_error', 'model_error'].includes(value.blocker) ? value.blocker : undefined,
+    ...Object.fromEntries(Object.entries(COUNTS).map(([k, valid]) => [k, valid(value[k])])),
   }).filter(([, v]) => v !== undefined));
 }
 

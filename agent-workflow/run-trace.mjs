@@ -125,7 +125,9 @@ export function progressRows(r = {}, now = Date.now()) {
   const active = ['running', 'unknown'].includes(r.status), p = r.progress;
   if (!p) return active ? [['Progress', 'Unavailable — this run has not published telemetry']] : [];
   const age = now - Date.parse(p.observed_at), seconds = Math.max(0, Math.floor(age / 1000));
-  const fresh = Number.isFinite(age) && age >= 0 && age < 30000 && r.status === 'running';
+  // A long tool emits no events; the runner's last contact (when the Hub reports it) says whether the run is still observed.
+  const contact = r.last_seen_at ? now - Date.parse(r.last_seen_at) : age;
+  const fresh = Number.isFinite(age) && age >= 0 && Number.isFinite(contact) && contact >= 0 && contact < 30000 && r.status === 'running';
   const freshness = !Number.isFinite(age) || age < 0 ? 'Update time unavailable or clock mismatch'
     : active ? `${seconds}s ago${fresh ? '' : ' — stale observation; current activity unknown'}` : 'Historical observation; run has ended';
   return [
@@ -133,6 +135,8 @@ export function progressRows(r = {}, now = Date.now()) {
     ['Latest checkpoint', p.checkpoint ? `${progressAction(p.checkpoint, p.checkpoint_tool)} (${p.checkpoint_at || 'time unavailable'})` : 'No completed checkpoint yet'],
     ['Last action', progressAction(p.action, p.last_tool)], ['Last tool', p.last_tool || 'No tool observed'],
     ['Blocker', p.blocker === 'tool_error' ? 'Last tool reported an error; recovery not yet observed' : p.blocker === 'model_error' ? 'Model reported an error; recovery not yet observed' : 'None reported'],
+    ...(active && Number.isSafeInteger(p.tool_calls) ? [['So far', `${p.tool_calls} tool calls · ${p.model_calls ?? 0} model calls`
+      + (Number.isSafeInteger(p.tokens) ? ` · ${p.tokens} tokens` : '') + (Number.isFinite(p.cost_usd) ? ` · $${p.cost_usd.toFixed(4)}` : '')]] : []),
     ['Progress updated', `${p.observed_at || 'Unavailable'} · ${freshness}`],
   ];
 }

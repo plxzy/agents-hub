@@ -44,6 +44,14 @@ test('progress display distinguishes freshness, uncertainty, and historical obse
   assert.match(progressSummary({ status: 'running' }), /not published telemetry/);
   assert.equal(progressSummary({ status: 'completed', progress }), '');
   assert.deepEqual(runBrief(run).progress, progress);
+  // Running totals travel with progress and fill the brief until the final receipt has its own.
+  const counted = { ...run, progress: { ...progress, tool_calls: 4, model_calls: 2, tokens: 900, cost_usd: 0.01 } };
+  assert.equal(sanitizeProgress({ ...counted.progress, tool_calls: -1, tokens: 1.5 }).tool_calls, undefined);
+  assert.deepEqual([runBrief(counted).tool_calls, runBrief(counted).tokens, runBrief(counted).cost_usd], [4, 900, 0.01]);
+  assert.equal(runBrief({ ...counted, tool_calls: ['read'] }).tool_calls, 1);
+  assert.match(JSON.stringify(progressRows(counted, now)), /4 tool calls · 2 model calls · 900 tokens/);
+  assert.match(JSON.stringify(progressRows({ ...run, last_seen_at: new Date(now + 40000).toISOString() }, now + 45000)), /Current phase/,
+    'recent runner contact keeps a long tool current');
   assert.equal(runBrief({ ...run, status: 'completed' }).progress, undefined);
 });
 

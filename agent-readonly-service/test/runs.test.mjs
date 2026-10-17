@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { build } from 'esbuild';
 import { encode, PONG } from '../../agent-workflow/relay-wire.mjs';
-import { sanitizeReceipt, observedRun, MAC_HEARTBEAT_TTL_MS } from '../src/runs.mjs';
+import { sanitizeReceipt, observedRun, MAC_HEARTBEAT_TTL_MS, DOK_CONTACT_TTL_MS } from '../src/runs.mjs';
 
 const DOK = 'dok-test-only';
 const RUN = 'r-20261012T120000Z-abcdef';
@@ -30,9 +30,18 @@ test('Mac liveness uses the Hub observation time and never invents completion', 
   assert.equal(JSON.parse(row.receipt).status, 'running', 'projection leaves stored state recoverable');
   assert.equal(observedRun({ ...row, updated_at: 'bad' }, now).status, 'unknown');
   assert.equal(observedRun(row, now - 1).status, 'unknown');
-  for (const receipt of [{ runner: 'dok', status: 'running' }, { runner: 'mac', status: 'completed' }]) {
+  for (const receipt of [{ runner: 'dok', status: 'completed' }, { runner: 'mac', status: 'completed' }]) {
     assert.equal(observedRun({ ...row, receipt: JSON.stringify(receipt) }, now + MAC_HEARTBEAT_TTL_MS).status, receipt.status);
   }
+});
+
+test('dok runs that stop reporting become unknown, never failed', () => {
+  const now = Date.parse('2026-10-13T00:00:00Z');
+  const row = { receipt: JSON.stringify({ run_id: RUN, runner: 'dok', status: 'running' }), updated_at: new Date(now).toISOString() };
+  const live = observedRun(row, now + DOK_CONTACT_TTL_MS - 1);
+  assert.equal(live.status, 'running'); assert.equal(live.last_seen_at, row.updated_at);
+  const stale = observedRun(row, now + DOK_CONTACT_TTL_MS);
+  assert.equal(stale.status, 'unknown'); assert.equal(stale.ended, undefined); assert.match(stale.error, /dok has not reported/);
 });
 
 test('receipts keep useful fields, drop unknown ones and redact secret-looking lines', () => {

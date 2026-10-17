@@ -18,6 +18,8 @@ const STATUS = ['running', 'completed', 'failed', 'interrupted'];
 // Archiving keeps the panel fast; this caps what D1 holds (oldest runs are deleted first).
 const KEEP = 500;
 export const MAC_HEARTBEAT_TTL_MS = 90000;
+// dok re-sends a running receipt every 5 seconds, even when nothing changed.
+export const DOK_CONTACT_TTL_MS = 60000;
 const iso = (v) => typeof v === 'string' && v.length <= 40 && !Number.isNaN(Date.parse(v)) ? v : undefined;
 const num = (v) => Number.isFinite(v) && v >= 0 ? v : undefined;
 const short = (v, max) => typeof v === 'string' && v.length <= max ? v : undefined;
@@ -92,11 +94,12 @@ export async function storeRun(env, receipt, runner) {
 /** Missing contact is unknown, not proof of failure. Keep stored state running so a heartbeat can recover it. */
 export function observedRun(row, now = Date.now()) {
   const receipt = JSON.parse(row.receipt);
-  if (receipt.runner !== 'mac' || receipt.status !== 'running') return receipt;
-  const seen = Date.parse(row.updated_at), age = now - seen;
+  if (!['mac', 'dok'].includes(receipt.runner) || receipt.status !== 'running') return receipt;
+  const seen = Date.parse(row.updated_at), age = now - seen, mac = receipt.runner === 'mac';
   return { ...receipt, last_seen_at: row.updated_at,
-    ...(!Number.isFinite(age) || age < 0 || age >= MAC_HEARTBEAT_TTL_MS
-      ? { status: 'unknown', error: 'Mac heartbeat expired; the run may still be active. Waiting for contact or a final receipt.' } : {}) };
+    ...(!Number.isFinite(age) || age < 0 || age >= (mac ? MAC_HEARTBEAT_TTL_MS : DOK_CONTACT_TTL_MS)
+      ? { status: 'unknown', error: mac ? 'Mac heartbeat expired; the run may still be active. Waiting for contact or a final receipt.'
+        : 'dok has not reported this run for over a minute; it may still be active. Check get_status for the runner, then poll again.' } : {}) };
 }
 
 export async function readRun(env, runId) {

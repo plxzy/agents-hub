@@ -52,15 +52,16 @@ export function titleOf(text) {
 /** A run receipt (or an already-made brief: this is idempotent) as the shared brief, without the full task. */
 export function runBrief(r) {
   const rating = typeof r.feedback === 'string' ? r.feedback : r.feedback?.rating;
+  const live = ['running', 'unknown'].includes(r.status) ? sanitizeProgress(r.progress) : undefined;
   return {
     ...(publicReview(r.review) ? { review: publicReview(r.review) } : {}),
     ...(publicPublication(r.publication) ? { publication: publicPublication(r.publication) } : {}),
     run_id: r.run_id, agent: r.agent, kind: r.kind ?? 'task', status: r.status, title: r.title ?? titleOf(r.task),
-    started: r.started, ended: r.ended, model: r.model, tool_calls: count(r.tool_calls), blocked: count(r.blocked),
-    tokens: num(r.usage?.totalTokens, r.tokens), cost_usd: num(r.usage?.cost, r.cost_usd),
+    started: r.started, ended: r.ended, model: r.model, tool_calls: count(r.tool_calls ?? live?.tool_calls), blocked: count(r.blocked),
+    tokens: num(r.usage?.totalTokens, r.tokens, live?.tokens), cost_usd: num(r.usage?.cost, r.cost_usd, live?.cost_usd),
     ...(publicRecovery(r.recovery) ? { recovery: { ...publicRecovery(r.recovery), inspection: undefined } } : {}),
     feedback: rating === 'good' || rating === 'bad' ? rating : null,
-    ...(['running', 'unknown'].includes(r.status) && sanitizeProgress(r.progress) ? { progress: sanitizeProgress(r.progress) } : {}),
+    ...(live ? { progress: live } : {}),
   };
 }
 
