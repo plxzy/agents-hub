@@ -7,6 +7,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { getAgent, loadAgents, loadMemory, buildSystemPrompt, newId, extractRemember } from './agent.mjs';
 import { linuxPolicy, sandboxExecute } from './linux-sandbox.mjs';
+import { installDependencies } from './dev-deps.mjs';
 import { DEVELOPMENT, digest } from './dev-grants.mjs';
 import { DEVELOPMENT_RUNTIME, runtimeMatches, agentRuntime } from './dev-runtime.mjs';
 import { titleOf } from './contract.mjs';
@@ -507,6 +508,8 @@ export class DevelopmentSessions extends RecoveryHost {
       if (receipt.github_base && receipt.github_base.commit !== commit) throw Error('Fresh GitHub base identity mismatch');
       // Observe after checkout, before Pi can modify Git configuration or the tree.
       Object.assign(receipt, captureRunContext(workspace), { repo, base_commit: baseCommit });
+      // Writable runs only: restore locked dependencies before the agent starts (its own shell stays offline).
+      if (write) receipt.dependencies = await installDependencies({ workspace, state: this.state, agent, io });
       save(file, { ...receipt, commit });
       // The Hub holds the agent's definition, skills and accepted memory. Files go to a folder outside the workspace
       // (skills are mounted read-only from there); the frozen release is only the fallback when the Hub is unreachable.
