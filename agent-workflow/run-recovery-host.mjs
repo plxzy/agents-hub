@@ -13,6 +13,7 @@ const runId = id => /^r-\d{8}T\d{6}Z-[a-f0-9]{6}$/.test(id ?? '');
 const requestId = id => /^[A-Za-z0-9_-]{8,80}$/.test(id ?? '');
 const safeText = text => sanitizeFailureContext({ message: text })?.message ?? '';
 export const CONTROL = ['cancel', 'pause', 'dismiss', 'retry_inspection'];
+const RELEASE_CHANGED = 'Saved by an earlier runner release; resume_run continues it on the current release';
 // The reason becomes part of the public recovery reason, which allows only this character set.
 export const CONTROL_REASON = /^[A-Za-z0-9 ;:.,_-]{0,120}$/;
 const controlView = r => {
@@ -42,7 +43,8 @@ export class RecoveryHost {
       if (lifecycle.inspection_error) reason = lifecycle.inspection_error;
       if (state === 'ready' && (setup.attempt ?? 0) >= 2) { state = 'paused'; reason = 'Automatic recovery attempt limit reached'; }
       if (checkpoint?.remaining_ms <= 1000) { state = 'paused'; reason = 'Run execution budget exhausted'; }
-      if (setup.revision !== this.revision) { state = 'paused'; reason = 'Runner release changed; operator migration required'; }
+      // Automatic recovery stays within one release; an explicit resume_run continues on the current one.
+      if (setup.revision !== this.revision && !reason) reason = RELEASE_CHANGED;
       if (lifecycle.paused) { state = 'paused'; reason = lifecycle.paused; }
       if (lifecycle.held && state === 'ready') reason = lifecycle.held;
       if (lifecycle.dismissed) { state = 'dismissed'; reason = lifecycle.dismissed; }
@@ -85,6 +87,7 @@ export class RecoveryHost {
         // Old failed runs are preserved for explicit selection, never revived by an upgrade.
         if (r.status === 'failed' && value.lifecycle?.automatic_eligible !== true) continue;
         if (value.lifecycle?.held) continue; // paused by an operator: only an explicit resume_run continues it
+        if (value.setup?.revision !== this.revision) continue; // saved by an earlier release: explicit resume only
         if (value.info.state === 'awaiting_review' && !value.lifecycle.inspection_started) await this.inspectRecovery(r, value);
         else if (value.info.state === 'ready') {
           try { await this.resumeRun({ run_id: r.run_id, request_id: `recover-${r.run_id}-${value.checkpoint.version}`,
@@ -118,7 +121,7 @@ export class RecoveryHost {
     if (!checkpoint || checkpoint.version !== checkpoint_version) throw Error('Recovery checkpoint changed; refresh the run');
     if (automatic && previous.status === 'failed' && recovery.lifecycle.automatic_eligible !== true) throw Error('Historical failed run requires explicit recovery selection');
     // Safety invariants cannot depend on which blocker the UI happens to display.
-    if (setup.revision !== this.revision) throw Error('Runner release changed; operator migration required');
+    if (automatic && setup.revision !== this.revision) throw Error(RELEASE_CHANGED);
     if (checkpoint.remaining_ms <= 1000) throw Error('Run execution budget exhausted');
     if (automatic && (setup.attempt ?? 0) >= 2) throw Error('Automatic recovery attempt limit reached');
     if (!['ready', 'awaiting_review'].includes(info.state) && !(info.state === 'paused' && info.reason === 'Automatic recovery attempt limit reached' && !automatic)) throw Error(info.reason ?? 'Run cannot resume');
@@ -148,7 +151,7 @@ export class RecoveryHost {
       const config = { ...setup.config, slots: [provider], recover_from: path.join(this.recoveryDir(run_id), 'checkpoint.json'),
         checkpoint_file: path.join(dir, 'checkpoint.json'), remaining_ms: Math.max(0, checkpoint.remaining_ms - 1000), recovery_approved: approved,
         manifest: { ...setup.config.manifest, run_id: next } };
-      const nextSetup = { ...setup, receipt, config, attempt: (setup.attempt ?? 0) + 1, automatic, request_fingerprint: fp };
+      const nextSetup = { ...setup, revision: this.revision, receipt, config, attempt: (setup.attempt ?? 0) + 1, automatic, request_fingerprint: fp };
       save(path.join(dir, 'setup.json'), nextSetup);
       // The request contains the reserved receipt, so a death between the two writes cannot lose its identity.
       save(path.join(this.recoveryDir(run_id), 'lifecycle.json'), { ...recovery.lifecycle, resumed_by: next });

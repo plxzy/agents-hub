@@ -110,6 +110,14 @@ export class DevelopmentSessions extends RecoveryHost {
           error: 'Runner restarted during the run', reported_at: undefined, recovery: { ...this.recoveryInfo(r.run_id).info, revision: (r.recovery?.revision ?? 0) + 1 } });
       } catch { /* Preserve malformed receipt for operator recovery. */ }
     }
+    // Stopped runs are judged again by this release, so a stale blocker from an earlier one does not persist.
+    for (const name of fs.readdirSync(path.join(this.state, 'agent-runs'))) {
+      try {
+        const r = read(path.join(this.state, 'agent-runs', name));
+        if (['failed', 'interrupted'].includes(r.status) && r.recovery && !['resumed', 'completed', 'dismissed', 'unavailable'].includes(r.recovery.state))
+          this.saveRecoveryInfo(r.run_id, this.recoveryInfo(r.run_id).info);
+      } catch { /* Preserve malformed receipt for operator recovery. */ }
+    }
     // Unfinished work is recovery evidence; never delete it at supervisor startup.
     for (const name of fs.readdirSync(path.join(this.state, 'runs'))) {
       const file = path.join(this.state, 'runs', name), r = read(file);

@@ -187,12 +187,12 @@ test('stale approvals, missing accounts, changed policy and exhausted attempts p
   host.poolSlots = async () => [];
   await assert.rejects(host.resumeRun(args, { approved: true }), /account unavailable/);
   assert.equal(host.runs.size, 0);
-  host.revision = 'changed'; assert.equal(host.recoveryInfo(id).info.state, 'paused'); host.revision = 'release';
+  host.revision = 'changed'; assert.equal(host.recoveryInfo(id).info.state, 'awaiting_review'); host.revision = 'release';
   const setup = read(path.join(dir, 'setup.json')); save(path.join(dir, 'setup.json'), { ...setup, attempt: 2 });
   assert.equal(host.recoveryInfo(id).info.state, 'awaiting_review');
   await assert.rejects(host.resumeRun(args), /requires recovery review/);
   host.revision = 'changed';
-  await assert.rejects(host.resumeRun(args, { approved: true }), /release changed/);
+  await assert.rejects(host.resumeRun(args, { approved: true, automatic: true }), /earlier runner release/);
   host.revision = 'release'; j.update({ remaining_ms: 0 });
   await assert.rejects(host.resumeRun({ ...args, checkpoint_version: j.value.version }, { approved: true }), /budget exhausted/);
 });
@@ -249,4 +249,20 @@ test('retry_inspection clears a failed inspection and only applies to one', asyn
   assert.deepEqual(inspected, {}); assert.deepEqual(read(path.join(dir, 'lifecycle.json')), {});
   save(path.join(dir, 'lifecycle.json'), { inspection: 'Saved files look complete' });
   await assert.rejects(host.controlRun({ run_id: id, request_id: 'inspect-0002', action: 'retry_inspection' }), /No failed recovery inspection/);
+});
+
+test('a run saved by an earlier release resumes only explicitly, on the current release', async t => {
+  const { host, id, j, dir } = hostFixture(t);
+  host.revision = 'next-release';
+  const info = host.recoveryInfo(id).info;
+  assert.equal(info.state, 'ready'); assert.match(info.reason, /earlier runner release/);
+  assert.equal(recoveryAction({ ...read(path.join(host.state, 'agent-runs', id + '.json')), recovery: info }), 'resume_run');
+  let starts = 0; host.executeRun = async () => { starts++; };
+  await host.recoverPending();
+  assert.equal(starts, 0, 'automatic recovery never crosses a release');
+  assert.equal(fs.existsSync(path.join(dir, 'lifecycle.json')) ? read(path.join(dir, 'lifecycle.json')).paused : undefined, undefined, 'and does not pause it');
+  const next = await host.resumeRun({ run_id: id, request_id: 'cross-release', checkpoint_version: j.value.version });
+  assert.equal(starts, 1);
+  assert.equal(read(path.join(host.recoveryDir(next.run_id), 'setup.json')).revision, 'next-release', 'the resumed run belongs to the current release');
+  assert.equal(host.recoveryInfo(id).info.state, 'resumed');
 });
