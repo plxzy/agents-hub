@@ -4,6 +4,8 @@ WORKDIR /opt/workflow
 COPY agent-workflow/run-artifact-contract.mjs agent-workflow/run-artifact-contract.mjs
 COPY agent-workflow/run-continuation.mjs agent-workflow/run-continuation.mjs
 COPY tools/review-publisher tools/review-publisher
+# Public application files must be readable even when the build context uses a private umask.
+RUN chmod -R a+rX /opt/workflow
 USER node
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "tools/review-publisher/server.mjs", "/config/publisher.json"]

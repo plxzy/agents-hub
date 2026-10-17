@@ -13,8 +13,8 @@ if test -n "$(docker ps -q --filter name=^agents$)"; then
 fi
 cd "$(dirname "$0")"
 # Read through the selected image, including first installs and rollbacks, rather than an obsolete image tag.
-knowledge=${2:-$(docker compose run --rm --no-deps -T --entrypoint python3 runner -c 'import json, os; print(os.path.basename(json.load(open("/home/agent/.config/agent-workflow/dok.json"))["knowledge"]))')}
-docker compose run --rm --no-deps --entrypoint bash runner -lc "set -e
+knowledge=${2:-$(docker compose run --rm --no-deps --interactive=false -T --entrypoint python3 runner -c 'import json, os; print(os.path.basename(json.load(open("/home/agent/.config/agent-workflow/dok.json"))["knowledge"]))')}
+docker compose run --rm --no-deps --interactive=false --entrypoint bash runner -lc "set -e
   R=/home/agent/repos/agents-hub.git; T=\$(mktemp)
   test -d \$R || git init -q --bare \$R
   git --git-dir=\$R fetch -q --prune $source_url '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'

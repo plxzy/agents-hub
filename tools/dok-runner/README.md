@@ -87,6 +87,7 @@ Candidate validation: repository suites passed on Node 26.12.0 (208 application 
 three platform-specific skips). A separate Linux container passed 198 workflow/publisher tests,
 including real Pi sandbox isolation and killed-tool recovery (one platform-specific skip), with no
 production volumes, credentials or Hub connection. Pi's npm audit reported zero known vulnerabilities.
+A live read-only helper run confirmed Pi 1.3.0, completed inference and successfully listed the repository root.
 Drain and back up before promotion; preserve the previous images, configuration, sessions and releases for rollback.
 
 ## Restart recovery (2026-10-13)
