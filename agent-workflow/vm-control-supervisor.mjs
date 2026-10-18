@@ -6,11 +6,11 @@
 //
 // Four owner dependencies are injected (the contract's "Proposed owner-side integration seam"):
 //   enrollment  evaluate({principal, mode: 'mutate'|'read', intent}) -> {ok, doorRef, hostId, service} | {ok:false, code, detail}
+//               (VmProjectGrants in vm-control-grants.mjs is the durable provider)
 //   store       durable intent store (FileIntentStore here): allocate / get / update / list / recoverable state
 //   doors       doorRef -> door; door.call(body, {timeoutMs}) -> {kind:'bytes', stdout} | {kind:'failure', reason}
 //   clock       {now(), sleep(ms)} plus persisted poll state, so a restart cannot reset the budget
-// This module is NOT registered in dev-supervisor.mjs: that process serves coding-run development grants and has no
-// VM-project enrollment/grant provider. Wiring it in is a separate owner decision.
+// This module is NOT registered in dev-supervisor.mjs: wiring it into the live supervisor is a separate step.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -21,32 +21,6 @@ import { ContractError, FORMAT, LIMITS, daemonBody, envelopeLine, intentOf, isDe
 
 const MUTATION_ID = /^vmc-[0-9a-f]{32}$/;
 export const realClock = { now: () => Date.now(), sleep: ms => new Promise(resolve => setTimeout(resolve, ms)) };
-
-/** Synthetic owner provisioning: enrollments bind a trusted projectId to host, service pin, door and scope; grants are
- *  separate, revocable and mode-specific. Real provisioning is out of scope (#806 stays open for it). */
-export class EnrollmentGrants {
-  #enrollments = new Map(); #grants = new Map();
-  constructor({ now = Date.now } = {}) { this.now = now; }
-  enroll(projectId, { hostId, service, doorRef, workers, targets, operations }) {
-    this.#enrollments.set(projectId, Object.freeze({ hostId, service, doorRef, workers: [...workers], targets: [...targets], operations: [...operations] }));
-  }
-  grant(grantId, { principal, projectId, mode, expiresAt = Infinity, workers, targets, operations }) {
-    this.#grants.set(grantId, { principal, projectId, mode, expiresAt, workers, targets, operations, revoked: false });
-  }
-  revoke(grantId) { const g = this.#grants.get(grantId); if (g) g.revoked = true; }
-  evaluate({ principal, mode, intent }) {
-    const denied = detail => ({ ok: false, code: 'grant-denied', detail });
-    const e = this.#enrollments.get(intent.projectId);
-    if (!e) return denied('no enrollment for this project');
-    const within = (list, v) => !list || list.includes(v);
-    const grant = [...this.#grants.values()].find(g => g.principal === principal && g.projectId === intent.projectId && g.mode === mode
-      && !g.revoked && g.expiresAt > this.now() && within(g.workers, intent.worker) && within(g.targets, intent.target) && within(g.operations, intent.operation));
-    if (!grant) return denied(`no active ${mode} grant for this scope`);
-    if (!e.workers.includes(intent.worker) || !e.targets.includes(intent.target) || !e.operations.includes(intent.operation)) return denied('outside the enrolled scope');
-    if (intent.hostId !== e.hostId || intent.service !== e.service) return { ok: false, code: 'identity-mismatch', detail: 'host or service does not match the enrollment' };
-    return { ok: true, doorRef: e.doorRef, hostId: e.hostId, service: e.service };
-  }
-}
 
 /** Durable dispatch bookkeeping under one directory, one atomic file per intent. Holds no credential. */
 export class FileIntentStore {

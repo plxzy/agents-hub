@@ -8,7 +8,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { EnrollmentGrants, FileIntentStore, StdioDoor, VmControlSupervisor } from './vm-control-supervisor.mjs';
+import { FileIntentStore, StdioDoor, VmControlSupervisor } from './vm-control-supervisor.mjs';
+import { VmProjectGrants } from './vm-control-grants.mjs';
 import { VmControlProjection, projectIntent } from './vm-control-projection.mjs';
 import { ACTIONS, LIMITS, daemonBody, parseReply, parseStrictJson, validateRequest } from './vm-control-contract.mjs';
 
@@ -18,6 +19,21 @@ const PRINCIPAL = 'fixture-principal';
 const BACKING = '0123456789abcdef';
 let keys = 0;
 const nextKey = () => `request-key-${++keys}`;
+const OWNER = 'fixture-owner';
+// The real approval flow (request, owner token, click) behind the labels the tests use; evaluate() is the provider's own.
+function provisioning(provider) {
+  const ids = new Map();
+  return {
+    provider, evaluate: args => provider.evaluate(args),
+    enroll: (projectId, spec) => provider.enroll(OWNER, projectId, spec),
+    grant(label, { principal, projectId, mode, ttlMs }) {
+      const pending = provider.request(principal, `req-${label}`, { projectId, mode, ...(ttlMs === undefined ? {} : { ttlMs }) });
+      provider.decide(OWNER, pending.grant_id, 'approve', provider.issue(OWNER, pending.grant_id, 'approve'));
+      ids.set(label, pending.grant_id);
+    },
+    revoke(label) { const id = ids.get(label); provider.decide(OWNER, id, 'revoke', provider.issue(OWNER, id, 'revoke')); },
+  };
+}
 
 function world(t, { daemon = {}, doorLimits = {}, wrapDoor = d => d, limits = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vm-control-test-'));
@@ -29,7 +45,8 @@ function world(t, { daemon = {}, doorLimits = {}, wrapDoor = d => d, limits = {}
   fs.writeFileSync(path.join(fixture, 'daemon.json'), JSON.stringify({ serviceId: 'fixture-service', worker: 'container', generation: 'fixture-generation',
     backing: BACKING, claims: {}, effects: {}, ...daemon }));
   const clock = { t: 1_000_000, sleeps: [], now: () => clock.t, sleep: async ms => { clock.sleeps.push(ms); clock.t += ms; } };
-  const enrollment = new EnrollmentGrants({ now: clock.now });
+  const grantsDir = path.join(root, 'grants');
+  const enrollment = provisioning(new VmProjectGrants({ dir: grantsDir, owners: [OWNER], now: clock.now }));
   enrollment.enroll('fixture-project', { hostId: 'fixture-host', service: 'fixture-service', doorRef: 'door-1', workers: ['container'],
     targets: ['backing', 'browser'], operations: ['start', 'stop', 'restart'] });
   enrollment.grant('write-1', { principal: PRINCIPAL, projectId: 'fixture-project', mode: 'mutate' });
@@ -37,7 +54,7 @@ function world(t, { daemon = {}, doorLimits = {}, wrapDoor = d => d, limits = {}
   const door = wrapDoor(new StdioDoor({ helper: HELPER, env: { HOME: home, PATH: process.env.PATH }, credential: CREDENTIAL, limits: doorLimits }));
   const storeDir = path.join(root, 'supervisor-state');
   const w = {
-    root, home, clock, enrollment, door, storeDir,
+    root, home, clock, enrollment, door, storeDir, grantsDir,
     // A (re)started supervisor over the same durable state: new process epoch, nothing carried in memory.
     boot: (options = {}) => new VmControlSupervisor({ enrollment, store: new FileIntentStore(storeDir, { now: clock.now }), doors: () => door, clock, limits, ...options }),
     flag: name => fs.writeFileSync(path.join(fixture, 'flags', name), ''),
@@ -206,7 +223,8 @@ test('polls wait the minimum gap, stop early on a definite receipt, and a concur
 
 test('acceptance 4: admission denials launch no helper at all', async t => {
   const w = world(t);
-  w.enrollment.grant('write-expired', { principal: 'expired-principal', projectId: 'fixture-project', mode: 'mutate', expiresAt: w.clock.now() - 1 });
+  w.enrollment.grant('write-expired', { principal: 'expired-principal', projectId: 'fixture-project', mode: 'mutate', ttlMs: 1000 });
+  w.clock.t += 1000;
   w.enrollment.grant('write-revoked', { principal: 'revoked-principal', projectId: 'fixture-project', mode: 'mutate' });
   w.enrollment.revoke('write-revoked');
   w.enrollment.grant('read-only', { principal: 'reader', projectId: 'fixture-project', mode: 'read' });
@@ -523,4 +541,26 @@ test('contract: request is null only for an admission refusal of a new submissio
   for (const r of [sent, readDenied, refreshed]) assert.equal(r.request?.mutationId, sent.request.mutationId, r.source);
   assert.deepEqual([sent.source, readDenied.source, refreshed.source], ['transport', 'admission', 'service-door']);
   assert.equal(readDenied.request.kind, 'receipt');
+});
+
+test('durable grants: after a restart with a re-opened provider, recovery polls still read, and a mutate revocation made elsewhere stops new sends', async t => {
+  const w = world(t);
+  w.flag('drop-reply');
+  const first = w.boot();
+  const sent = await first.submit(PRINCIPAL, nextKey(), intent());
+  assert.equal(sent.state, 'unknown');
+  // New process: the provider is rebuilt from disk only; the earlier approvals must still stand.
+  const reopened = provisioning(new VmProjectGrants({ dir: w.grantsDir, owners: [OWNER], now: w.clock.now }));
+  const second = w.boot({ enrollment: reopened });
+  assert.deepEqual((await second.pollUnresolved()).map(([, r]) => r.status), ['settled']);
+  assert.equal(second.response(sent.request.mutationId).state, 'confirmed');
+  // Owner tooling in another process revokes the mutate grant: the next submit is denied before any helper launch.
+  const owner = new VmProjectGrants({ dir: w.grantsDir, owners: [OWNER], now: w.clock.now });
+  const grant = owner.listFor(PRINCIPAL).find(g => g.mode === 'mutate');
+  owner.decide(OWNER, grant.grant_id, 'revoke', owner.issue(OWNER, grant.grant_id, 'revoke'));
+  const calls = w.calls().length;
+  const denied = await second.submit(PRINCIPAL, nextKey(), intent());
+  assert.deepEqual([denied.source, denied.error.code], ['admission', 'grant-denied']);
+  assert.equal(w.calls().length, calls);
+  assert.equal(w.count('control-worker'), 1);
 });

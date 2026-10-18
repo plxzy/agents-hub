@@ -436,9 +436,16 @@ inspection rather than guessed safe to remove.
 
 ## VM worker control seam (plxzy/vm#806, not wired in)
 
-`vm-control-contract.mjs`, `vm-control-supervisor.mjs` and `vm-control-projection.mjs` implement the supervisor side of
+`vm-control-contract.mjs`, `vm-control-supervisor.mjs`, `vm-control-projection.mjs` and `vm-control-grants.mjs` implement the supervisor side of
 vm's `docs/AGENTS-HUB-VMSERVICE-CONTRACT.md`: strict request/reply validation, the closed action table, a durable intent
 store, one control call through a fixed argument-less door, and at most three persisted receipt polls after a lost reply.
-The Hub projection is read-only. Enrollment/grants, the store and the door are injected; the shipped implementations are
-synthetic (`EnrollmentGrants` is an in-memory stand-in, not provisioning). `dev-supervisor.mjs` does **not** register this
-module: it has no VM-project grant provider. `submit(principal, requestKey, intent)` deduplicates by (principal, project, key) for the life of the persisted intent record; a new key is a fresh action. Tests: `vm-control-supervisor.test.mjs` (fixture helper in `fixtures/`).
+The Hub projection is read-only. `submit(principal, requestKey, intent)` deduplicates by (principal, project, key) for the
+life of the persisted intent record; a new key is a fresh action.
+
+`VmProjectGrants` is the enrollment and grant provider: an owner enrolls a project (host, service pin, door reference,
+workers, targets, operations), and a principal asks for a separate `mutate` or `read` grant that an owner approves with the
+`dev-grants.mjs`-style one-use token click. Grants expire, can be revoked at once (reads keep their own grant) and are pinned to
+the enrollment revision. Unlike development grants they are not bound to a supervisor process session, so bounded receipt polls
+survive a restart. State is durable on disk and re-read on every decision. Nothing here provisions an owner, exposes an
+approval UI or registers the module in `dev-supervisor.mjs`; that wiring is still to do. Tests: `vm-control-supervisor.test.mjs`
+and `vm-control-grants.test.mjs` (fixture helper in `fixtures/`).
