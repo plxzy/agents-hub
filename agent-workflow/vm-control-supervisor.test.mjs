@@ -485,3 +485,25 @@ test('request key: a refusal before any intent existed does not burn the key, an
   assert.deepEqual({ state: denied.state, source: denied.source, request: denied.request }, { state: 'refused', source: 'admission', request: null });
   assert.equal(w.count('control-worker'), 1);
 });
+
+test('request key: concurrent duplicates of a refused submission get that refusal and the key stays reusable', async t => {
+  const w = world(t);
+  const s = w.boot();
+  const both = await Promise.all([s.submit('late-principal', 'click-1', intent()), s.submit('late-principal', 'click-1', intent())]);
+  assert.deepEqual(both.map(r => r.error.code), ['grant-denied', 'grant-denied']);
+  assert.equal(s.store.list().length, 0);
+  w.enrollment.grant('write-late', { principal: 'late-principal', projectId: 'fixture-project', mode: 'mutate' });
+  assert.equal((await s.submit('late-principal', 'click-1', intent())).state, 'confirmed');
+  assert.equal(w.count('control-worker'), 1);
+});
+
+test('request key: a persisted sending record from a crashed supervisor is a duplicate, not a second dispatch', async t => {
+  const w = world(t);
+  const crashing = { call: async body => (body.operation === 'control-worker' ? new Promise(() => {}) : w.door.call(body, {})) };
+  void w.boot({ doors: () => crashing }).submit(PRINCIPAL, 'click-1', intent());
+  await new Promise(r => setTimeout(r, 400));
+  const dup = await w.boot().submit(PRINCIPAL, 'click-1', intent());
+  assert.deepEqual({ state: dup.state, source: dup.source }, { state: 'unknown', source: 'transport' });
+  assert.equal(w.count('control-worker'), 0, 'the duplicate dispatched nothing');
+  assert.equal(w.boot().store.list().length, 1);
+});
