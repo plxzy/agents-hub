@@ -41,23 +41,28 @@ export function untrusted(workspace, rel) {
   return null;
 }
 
+// npm skips optional packages whose os/cpu/libc do not match, so their tarballs are never needed (workerd ships one per platform).
+const fits = (list, value) => !Array.isArray(list) || (!list.includes('!' + value) && (list.every(x => x.startsWith('!')) || list.includes(value)));
+export const needed = (e, { platform = process.platform, arch = process.arch } = {}) => !e.optional || (fits(e.os, platform) && fits(e.cpu, arch) && (platform !== 'linux' || fits(e.libc, 'glibc')));
+
 const MAX_TARBALL = 200 * 1024 ** 2, MAX_TOTAL = 1024 ** 3;
 
 /** Download every locked tarball into state/deps/<lock hash>/ (skipped when already cached). Returns that directory. */
-export async function fetchTarballs(workspace, rel, state, { fetchImpl = fetch } = {}) {
+export async function fetchTarballs(workspace, rel, state, { fetchImpl = fetch, platform, arch } = {}) {
   const raw = fs.readFileSync(path.join(workspace, rel, 'package-lock.json'));
   const dir = path.join(state, 'deps', createHash('sha256').update(raw).digest('hex'));
   if (fs.existsSync(path.join(dir, '.complete'))) return dir;
   const tmp = dir + '.tmp-' + process.pid;
   fs.rmSync(tmp, { recursive: true, force: true }); fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
-  // The same tarball often appears at several node_modules paths; fetch each URL once.
-  const entries = [...new Map(Object.entries(JSON.parse(raw).packages).filter(([name, e]) => name && !e.link).map(([name, e]) => [e.resolved, [name, e]])).values()];
+  // The same tarball can sit under several lockfile paths (nested copies); fetch each URL once.
+  const seen = new Set();
+  const entries = Object.entries(JSON.parse(raw).packages).filter(([name, e]) => name && !e.link && needed(e, { platform, arch }) && !seen.has(e.resolved) && seen.add(e.resolved));
   let total = 0, next = 0;
   const worker = async () => {
     while (next < entries.length) {
       const [name, e] = entries[next++], url = new URL(e.resolved);
       if (url.protocol !== 'https:' || url.host !== 'registry.npmjs.org') throw new Error('Refusing source for ' + name);
-      const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(120_000) });
+      const response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(600_000) });
       if (!response.ok) throw new Error(`Registry ${response.status} for ${name}`);
       const bytes = Buffer.from(await response.arrayBuffer());
       total += bytes.length;

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { lockfileDirs, untrusted, fetchTarballs, installDependencies } from './dev-deps.mjs';
+import { lockfileDirs, untrusted, fetchTarballs, installDependencies, needed } from './dev-deps.mjs';
 
 const bytes = Buffer.from('synthetic tarball');
 const integrity = 'sha512-' + createHash('sha512').update(bytes).digest('base64');
@@ -46,6 +46,12 @@ test('tarballs are integrity-checked, cached by lockfile hash and never partiall
   assert.deepEqual(fs.readdirSync(path.join(bad.state, 'deps')), [], 'failed download leaves nothing behind');
 });
 
+test('a tarball listed under several lockfile paths is fetched once', async t => {
+  const f = fixture(t, { 'node_modules/a/node_modules/demo': { resolved, integrity } }); let calls = 0;
+  const dir = await fetchTarballs(f.workspace, '.', f.state, { fetchImpl: async () => { calls++; return ok(); } });
+  assert.equal(calls, 1); assert.equal(fs.readdirSync(dir).filter(n => n.endsWith('.tgz')).length, 1);
+});
+
 test('install runs offline in the sandbox with a read-only tarball mount and reports failures without throwing', async t => {
   const f = fixture(t); const calls = [];
   const io = { linuxPolicy: a => ({ workspace: a.workspace }),
@@ -61,4 +67,15 @@ test('install runs offline in the sandbox with a read-only tarball mount and rep
   const failed = await installDependencies({ workspace: f.workspace, state: f.state, agent: {}, io, fetchImpl: ok });
   assert.deepEqual(failed.installed, []); assert.match(failed.skipped[0].reason, /install failed/);
   assert.deepEqual(await installDependencies({ workspace: fs.mkdtempSync(path.join(f.state, 'empty-')), state: f.state, agent: {}, io }), { installed: [], skipped: [] });
+});
+
+test('optional packages for other platforms are not downloaded', () => {
+  const linux = { platform: 'linux', arch: 'x64' };
+  assert.equal(needed({ optional: true, os: ['linux'], cpu: ['x64'], libc: ['glibc'] }, linux), true);
+  assert.equal(needed({ optional: true, os: ['darwin'], cpu: ['arm64'] }, linux), false);
+  assert.equal(needed({ optional: true, os: ['linux'], cpu: ['arm64'] }, linux), false);
+  assert.equal(needed({ optional: true, os: ['linux'], cpu: ['x64'], libc: ['musl'] }, linux), false);
+  assert.equal(needed({ optional: true, os: ['!win32'] }, linux), true);
+  assert.equal(needed({ optional: true, os: ['!linux'] }, linux), false);
+  assert.equal(needed({ os: ['darwin'] }, linux), true, 'required packages are always fetched');
 });
