@@ -187,3 +187,95 @@ test('request ids are idempotent for the same request and conflict for a differe
   assert.throws(() => grants.request('p-1', 'request-same-1', { projectId: 'project-a', mode: 'mutate' }), /Request ID conflict/);
   assert.throws(() => grants.request('p-2', 'request-same-1', { projectId: 'project-a', mode: 'mutate', targets: ['browser'] }), /Request ID conflict/);
 });
+
+// ---- restart-safe provisioning and durability, always through a FRESH provider over the same directory
+const mutate = { projectId: 'project-a', mode: 'mutate' };
+
+test('provisionGrant is restart-safe: a fresh provider over the same directory reuses the active grant and writes nothing new', t => {
+  const { make, dir } = fixture(t);
+  const first = make().provisionGrant(OWNER, 'p-1', 'seam_mutate', mutate);
+  assert.equal(first.status, 'active');
+  const files = () => fs.readdirSync(path.join(dir, 'grants')).sort();
+  const before = files();
+  for (let i = 0; i < 3; i++) {
+    const again = make().provisionGrant(OWNER, 'p-1', 'seam_mutate', mutate);
+    assert.equal(again.grant_id, first.grant_id);
+  }
+  assert.deepEqual(files(), before);
+  assert.equal(verdict(make()).ok, true);
+});
+
+test('provisionGrant after an enrollment change obtains a fresh revision-bound grant instead of reusing the stale request id', t => {
+  const { make } = fixture(t);
+  const old = make().provisionGrant(OWNER, 'p-1', 'seam_mutate', mutate);
+  make().enroll(OWNER, 'project-a', { ...SPEC, service: 'service-b' });
+  const stale = make();
+  assert.equal(stale.get(old.grant_id).status, 'invalidated');
+  assert.equal(verdict(stale, { intent: { service: 'service-b' } }).ok, false, 'the invalidated grant authorizes nothing');
+  const fresh = make().provisionGrant(OWNER, 'p-1', 'seam_mutate', mutate);
+  assert.notEqual(fresh.grant_id, old.grant_id);
+  assert.equal(fresh.enrollment_revision, 2);
+  assert.notEqual(fresh.request_id, old.request_id);
+  assert.equal(verdict(make(), { intent: { service: 'service-b' } }).ok, true);
+  assert.equal(make().provisionGrant(OWNER, 'p-1', 'seam_mutate', mutate).grant_id, fresh.grant_id, 'and it is stable again after that');
+});
+
+test('provisionGrant: an expired grant gets the next attempt; a revoked one is final; non-owners cannot provision', t => {
+  const { make, clock } = fixture(t);
+  const one = make().provisionGrant(OWNER, 'p-1', 'seam_mutate', { ...mutate, ttlMs: 1000 });
+  clock.t += 1000;
+  assert.equal(make().get(one.grant_id).status, 'expired');
+  const two = make().provisionGrant(OWNER, 'p-1', 'seam_mutate', { ...mutate, ttlMs: 1000 });
+  assert.notEqual(two.grant_id, one.grant_id);
+  assert.match(two.request_id, /-r1-1$/);
+  const g = make();
+  g.decide(OWNER, two.grant_id, 'revoke', g.issue(OWNER, two.grant_id, 'revoke'));
+  assert.throws(() => make().provisionGrant(OWNER, 'p-1', 'seam_mutate', { ...mutate, ttlMs: 1000 }), /is revoked; not re-approving/);
+  assert.equal(verdict(make()).ok, false);
+  assert.throws(() => make().provisionGrant('p-1', 'p-1', 'seam_other', mutate), /Not an enrollment owner/);
+  assert.throws(() => make().provisionGrant(OWNER, 'p-1', 'seam_x', { projectId: 'unknown', mode: 'mutate' }), /No active enrollment/);
+});
+
+test('a pending approval and a revocation survive a restart; the token is redeemed once, by a different instance, and never stored', t => {
+  const { make, dir } = fixture(t);
+  const pending = make().request('p-1', 'request-restart-1', mutate);
+  const token = make().issue(OWNER, pending.grant_id, 'approve');
+  const redeemer = make();
+  assert.equal(redeemer.decide(OWNER, pending.grant_id, 'approve', token).status, 'active');
+  assert.throws(() => make().decide(OWNER, pending.grant_id, 'approve', token), /Invalid or expired approval/, 'replay on a fresh instance');
+  const revoker = make();
+  revoker.decide(OWNER, pending.grant_id, 'revoke', revoker.issue(OWNER, pending.grant_id, 'revoke'));
+  assert.equal(verdict(make()).ok, false);
+  assert.equal(make().get(pending.grant_id).status, 'revoked');
+  const raw = ['grants', 'enrollments'].flatMap(d => fs.readdirSync(path.join(dir, d)).map(f => fs.readFileSync(path.join(dir, d, f), 'utf8'))).join('');
+  assert.ok(!raw.includes(token), 'no token at rest');
+  assert.ok(!/challenge/.test(raw), 'a used challenge leaves no residue');
+});
+
+test('persistence is atomic: no temporary files remain, and a truncated or corrupt record fails closed instead of authorizing', t => {
+  const { make, dir } = fixture(t);
+  make().provisionGrant(OWNER, 'p-1', 'seam_mutate', mutate);
+  for (const d of ['grants', 'enrollments']) assert.ok(fs.readdirSync(path.join(dir, d)).every(f => /^[0-9a-f]{64}\.json$/.test(f)), `${d} holds only whole records`);
+  assert.equal(verdict(make()).ok, true);
+  const gdir = path.join(dir, 'grants');
+  const file = path.join(gdir, fs.readdirSync(gdir)[0]);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').slice(0, 40));
+  const denied = verdict(make());
+  assert.equal(denied.ok, false);
+  assert.equal(denied.code, 'grant-denied');
+});
+
+test('regression: a grant never authorizes another project, principal, mode, worker, target or operation, even from a fresh instance', t => {
+  const { make } = fixture(t);
+  make().enroll(OWNER, 'project-b', { ...SPEC, doorRef: 'door-b' });
+  make().provisionGrant(OWNER, 'p-1', 'seam_narrow', { ...mutate, workers: ['container'], targets: ['browser'], operations: ['stop'] });
+  const g = make();
+  assert.equal(verdict(g).ok, true);
+  const cases = [
+    { intent: { projectId: 'project-b' } }, { top: { principal: 'p-2' } }, { top: { mode: 'read' } },
+    { intent: { worker: 'other' } }, { intent: { target: 'backing' } }, { intent: { operation: 'restart' } },
+  ];
+  for (const c of cases) assert.equal(verdict(g, c).ok, false, JSON.stringify(c));
+  assert.equal(verdict(g, { intent: { service: 'service-x' } }).code, 'identity-mismatch');
+  assert.throws(() => g.request('p-1', 'request-wide-1', { ...mutate, targets: ['backing'], workers: ['not-enrolled'] }), /exceeds the enrollment/);
+});
