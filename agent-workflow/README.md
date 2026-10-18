@@ -433,3 +433,12 @@ are never pruned. Proof/deletion journals are private under the workflow state d
 After live acceptance, set `STATE/review-cleanup.json` to `{"enabled":true}` (mode 600) to run cleanup on
 checkout/finish. There is no new background service. A stale operation lock is preserved for operator
 inspection rather than guessed safe to remove.
+
+## VM worker control seam (plxzy/vm#806, not wired in)
+
+`vm-control-contract.mjs`, `vm-control-supervisor.mjs` and `vm-control-projection.mjs` implement the supervisor side of
+vm's `docs/AGENTS-HUB-VMSERVICE-CONTRACT.md`: strict request/reply validation, the closed action table, a durable intent
+store, one control call through a fixed argument-less door, and at most three persisted receipt polls after a lost reply.
+The Hub projection is read-only. Enrollment/grants, the store and the door are injected; the shipped implementations are
+synthetic (`EnrollmentGrants` is an in-memory stand-in, not provisioning). `dev-supervisor.mjs` does **not** register this
+module: it has no VM-project grant provider. `submit(principal, requestKey, intent)` deduplicates by (principal, project, key) for the life of the persisted intent record; a new key is a fresh action. Tests: `vm-control-supervisor.test.mjs` (fixture helper in `fixtures/`).
