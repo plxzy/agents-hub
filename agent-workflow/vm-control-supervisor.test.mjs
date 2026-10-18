@@ -16,6 +16,8 @@ const HELPER = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures
 const CREDENTIAL = 'synthetic-credential-0001';
 const PRINCIPAL = 'fixture-principal';
 const BACKING = '0123456789abcdef';
+let keys = 0;
+const nextKey = () => `request-key-${++keys}`;
 
 function world(t, { daemon = {}, doorLimits = {}, wrapDoor = d => d, limits = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vm-control-test-'));
@@ -55,7 +57,7 @@ test('acceptance 1+2: a dropped reply after the daemon settled is unknown, then 
   const w = world(t);
   w.flag('drop-reply');
   const first = w.boot();
-  const sent = await first.submit(PRINCIPAL, intent());
+  const sent = await first.submit(PRINCIPAL, nextKey(), intent());
   assert.equal(sent.state, 'unknown');
   assert.equal(sent.source, 'transport');
   assert.equal(sent.reply, null);
@@ -109,7 +111,7 @@ test('the intent is durable before anything is written to the door, and a crash 
   };
   const a = w.boot({ doors: () => crashing });
   store = a.store;
-  void a.submit(PRINCIPAL, intent());
+  void a.submit(PRINCIPAL, nextKey(), intent());
   await new Promise(r => setTimeout(r, 400));
   assert.equal(seen.length, 1);
   assert.deepEqual(seen[0].tuple, tupleOf(intent()));
@@ -143,7 +145,7 @@ for (const c of UNSETTLED) {
     const w = world(t);
     for (const f of c.flags) w.flag(f);
     const a = w.boot();
-    const sent = await a.submit(PRINCIPAL, intent());
+    const sent = await a.submit(PRINCIPAL, nextKey(), intent());
     assert.deepEqual({ state: sent.state, source: sent.source }, c.first);
     const effectsAfterSend = w.daemon().effects['browser-stop'];
     const b = w.boot();
@@ -161,7 +163,7 @@ test('acceptance 3: the poll budget and deadline are persisted across a supervis
   const w = world(t);
   w.flag('drop-reply'); w.flag('effect-fails');           // reply lost; the daemon settled unknown, so it never resolves
   const a = w.boot();
-  const sent = await a.submit(PRINCIPAL, intent());
+  const sent = await a.submit(PRINCIPAL, nextKey(), intent());
   const id = sent.request.mutationId;
   // Crash during the batch: the second gap's sleep never returns, after two attempts were consumed.
   let sleeps = 0;
@@ -181,7 +183,7 @@ test('acceptance 3: the poll budget and deadline are persisted across a supervis
   const w2 = world(t);
   w2.flag('drop-reply'); w2.flag('effect-fails');
   const c = w2.boot();
-  const id2 = (await c.submit(PRINCIPAL, intent())).request.mutationId;
+  const id2 = (await c.submit(PRINCIPAL, nextKey(), intent())).request.mutationId;
   let step = 0;
   const slow = w2.boot({ clock: { now: w2.clock.now, sleep: async () => { if (++step === 1) throw new Error('died'); } } });
   await slow.poll(id2).catch(() => {});
@@ -195,7 +197,7 @@ test('polls wait the minimum gap, stop early on a definite receipt, and a concur
   const w = world(t);
   w.flag('drop-reply');
   const a = w.boot();
-  const id = (await a.submit(PRINCIPAL, intent())).request.mutationId;
+  const id = (await a.submit(PRINCIPAL, nextKey(), intent())).request.mutationId;
   const [x, y] = await Promise.all([a.poll(id), a.poll(id)]);
   assert.deepEqual([x.status, y.status].sort(), ['already-running', 'settled']);
   assert.equal(w.count('get-control-receipt'), 1, 'stopped on the first definite receipt');
@@ -224,7 +226,7 @@ test('acceptance 4: admission denials launch no helper at all', async t => {
     ['wrong service pin from the caller', PRINCIPAL, intent({ service: 'another-service' }), 'identity-mismatch'],
   ];
   for (const [name, principal, input, code] of cases) {
-    const r = await s.submit(principal, input);
+    const r = await s.submit(principal, nextKey(), input);
     assert.deepEqual({ state: r.state, source: r.source, code: r.error.code, reply: r.reply, request: r.request }, { state: 'refused', source: 'admission', code, reply: null, request: null }, name);
   }
   assert.equal(w.calls().length, 0, 'no helper launched');
@@ -244,7 +246,7 @@ test('acceptance 4: schema failures return exactly bad-request before any helper
     'oversized id': intent({ worker: 'w'.repeat(201) }), 'empty id': intent({ projectId: '' }), 'duplicate JSON member': duplicate, 'not JSON': '{nope', 'array': [],
   };
   for (const [name, input] of Object.entries(bads)) {
-    const r = await s.submit(PRINCIPAL, input);
+    const r = await s.submit(PRINCIPAL, nextKey(), input);
     assert.deepEqual(Object.keys(r), ['error'], name);
     assert.equal(r.error.code, 'bad-request', name);
     assert.equal(typeof r.error.detail, 'string');
@@ -256,7 +258,7 @@ test('acceptance 4: schema failures return exactly bad-request before any helper
 test('acceptance 4: a service-pin failure is refused after only a read-only identity check', async t => {
   const w = world(t, { daemon: { serviceId: 'a-different-service' } });
   const s = w.boot();
-  const r = await s.submit(PRINCIPAL, intent());
+  const r = await s.submit(PRINCIPAL, nextKey(), intent());
   assert.deepEqual({ state: r.state, source: r.source, code: r.error.code }, { state: 'refused', source: 'admission', code: 'identity-mismatch' });
   assert.deepEqual(w.calls().map(c => c.op), ['status']);
   assert.equal(s.store.list().length, 0);
@@ -267,7 +269,7 @@ test('acceptance 4: stale generation or backing is refused by the daemon without
   const w = world(t);
   const s = w.boot();
   for (const [name, over] of [['generation', { workerGeneration: 'stale-generation' }], ['backing', { backingId: 'f'.repeat(64) }], ['null backing', { backingId: null }]]) {
-    const r = await s.submit(PRINCIPAL, intent(over));
+    const r = await s.submit(PRINCIPAL, nextKey(), intent(over));
     assert.equal(r.state, 'refused', name);
     assert.equal(r.source, 'service-door', name);
     assert.equal(r.reply.status, 409, name);
@@ -279,15 +281,15 @@ test('acceptance 4: stale generation or backing is refused by the daemon without
   assert.equal(w.count('get-control-receipt'), 0, 'a definite refusal needs no receipt polling');
   // A daemon that really has no backing accepts only the explicit null.
   const bare = world(t, { daemon: { backing: null } });
-  const ok = await bare.boot().submit(PRINCIPAL, intent({ backingId: null }));
+  const ok = await bare.boot().submit(PRINCIPAL, nextKey(), intent({ backingId: null }));
   assert.equal(ok.state, 'confirmed');
   assert.equal(ok.reply.result.backingId, null);
-  assert.equal((await bare.boot().submit(PRINCIPAL, intent({ backingId: BACKING }))).state, 'refused');
+  assert.equal((await bare.boot().submit(PRINCIPAL, nextKey(), intent({ backingId: BACKING }))).state, 'refused');
 });
 
 test('acceptance 4: reusing a claimed mutation id for a different identity is a conflict, and the table is exactly the contract', async t => {
   const w = world(t);
-  const sent = await w.boot().submit(PRINCIPAL, intent());
+  const sent = await w.boot().submit(PRINCIPAL, nextKey(), intent());
   assert.equal(sent.state, 'confirmed');
   const other = { ...sent.request, operation: 'restart' };
   const conflict = await w.door.call(daemonBody(other), { timeoutMs: 10000 });
@@ -304,7 +306,7 @@ test('acceptance 4: every admitted target/operation maps to its one action; a br
   for (const [target, operation, action] of [['backing', 'start', 'backing-start'], ['backing', 'stop', 'backing-stop'],
     ['browser', 'start', 'browser-resume'], ['browser', 'stop', 'browser-stop'], ['browser', 'restart', 'browser-restart']]) {
     const w = world(t);
-    const r = await w.boot().submit(PRINCIPAL, intent({ target, operation }));
+    const r = await w.boot().submit(PRINCIPAL, nextKey(), intent({ target, operation }));
     assert.equal(r.state, 'confirmed', `${target} ${operation}`);
     assert.equal(r.reply.result.action, action);
     assert.deepEqual(w.calls().map(c => c.action).filter(Boolean), [action]);
@@ -317,9 +319,9 @@ test('read grants are independent: revoking mutation stops sends but not receipt
   const w = world(t);
   w.flag('drop-reply');
   const s = w.boot();
-  const id = (await s.submit(PRINCIPAL, intent())).request.mutationId;
+  const id = (await s.submit(PRINCIPAL, nextKey(), intent())).request.mutationId;
   w.enrollment.revoke('write-1');
-  assert.equal((await s.submit(PRINCIPAL, intent())).error.code, 'grant-denied');
+  assert.equal((await s.submit(PRINCIPAL, nextKey(), intent())).error.code, 'grant-denied');
   const before = w.calls().length;
   w.enrollment.revoke('read-1');
   const denied = await w.boot().poll(id);
@@ -339,7 +341,7 @@ test('acceptance 5: truncated, oversized and hung replies are unknown; only rece
     const w = world(t, { doorLimits, limits: helperMs ? { helperMs } : {} });
     w.flag(flag);
     const s = w.boot();
-    const sent = await s.submit(PRINCIPAL, intent());
+    const sent = await s.submit(PRINCIPAL, nextKey(), intent());
     assert.deepEqual({ state: sent.state, source: sent.source, reply: sent.reply, code: sent.error.code }, { state: 'unknown', source: 'transport', reply: null, code: 'reply-unavailable' }, flag);
     assert.match(sent.error.detail, detail, flag);
     assert.equal(w.daemon().effects['browser-stop'], 1, flag);
@@ -368,7 +370,7 @@ test('a receipt for another identity, an unrecognized state, extra lines or junk
     const door = { call: async body => (body.operation === 'status' ? w.door.call(body, {}) : { kind: 'bytes', stdout: Buffer.from(scripted(body)) }) };
     const s = w.boot({ doors: () => door });
     scripted = body => `{"status": 200, ${JSON.stringify({ result: change({ ...base, mutationId: body.mutationId }) }).slice(1)}\n`;
-    const r = await s.submit(PRINCIPAL, intent());
+    const r = await s.submit(PRINCIPAL, nextKey(), intent());
     assert.deepEqual({ state: r.state, source: r.source, reply: r.reply }, { state: 'unknown', source: 'transport', reply: null }, name);
     assert.equal(s.store.get(r.request.mutationId).evidence, null, `${name}: never retained as service evidence`);
   }
@@ -379,7 +381,7 @@ test('a receipt for another identity, an unrecognized state, extra lines or junk
   // A 5xx is retained but is not a refusal; a 4xx is a definite refusal.
   for (const [status, state] of [[502, 'unknown'], [504, 'unknown'], [400, 'refused'], [409, 'refused']]) {
     const door = { call: async body => (body.operation === 'status' ? w.door.call(body, {}) : { kind: 'bytes', stdout: Buffer.from(`{"status": ${status}, "error": {"code": "c", "detail": "d"}}\n`) }) };
-    const r = await w.boot({ doors: () => door }).submit(PRINCIPAL, intent());
+    const r = await w.boot({ doors: () => door }).submit(PRINCIPAL, nextKey(), intent());
     assert.deepEqual({ state: r.state, source: r.source, status: r.reply.status, error: r.error }, { state: state, source: 'service-door', status: status, error: null });
   }
 });
@@ -387,7 +389,7 @@ test('a receipt for another identity, an unrecognized state, extra lines or junk
 test('a settled receipt is sticky: a later failed read cannot erase it, and an explicit refresh never touches the poll budget', async t => {
   const w = world(t);
   const s = w.boot();
-  const sent = await s.submit(PRINCIPAL, intent());
+  const sent = await s.submit(PRINCIPAL, nextKey(), intent());
   const id = sent.request.mutationId;
   assert.equal(sent.state, 'confirmed');
   const failing = w.boot({ doors: () => ({ call: async (b, o) => (b.operation === 'get-control-receipt' ? { kind: 'failure', reason: 'exit' } : w.door.call(b, o)) }) });
@@ -420,4 +422,66 @@ test('Hub projection: pending only in the live process, lost-reply intents show 
 test('contract: strict JSON rejects duplicate members at any depth and trailing bytes', () => {
   assert.deepEqual(parseStrictJson('{"a": [1, {"b": null}], "c": "\\u00e9"}'), { a: [1, { b: null }], c: 'é' });
   for (const bad of ['{"a":1,"a":2}', '{"x":{"a":1,"a":2}}', '[{"a":1,"a":1}]', '{"a":1} x', '{"a":01}', "{'a':1}", '{"a":1,}', '']) assert.throws(() => parseStrictJson(bad), { code: 'bad-request' }, bad);
+});
+
+test('request key: a duplicate submit, however the members are ordered, concurrent or after a restart, sends nothing new', async t => {
+  const w = world(t);
+  const s = w.boot();
+  const reordered = Object.fromEntries(Object.entries(intent()).reverse());
+  const results = await Promise.all([s.submit(PRINCIPAL, 'click-1', intent()), s.submit(PRINCIPAL, 'click-1', reordered), s.submit(PRINCIPAL, 'click-1', JSON.stringify(intent()))]);
+  assert.equal(new Set(results.map(r => r.request.mutationId)).size, 1);
+  assert.deepEqual(results.map(r => r.state), ['confirmed', 'confirmed', 'confirmed']);
+  const again = await s.submit(PRINCIPAL, 'click-1', intent());
+  const restarted = await w.boot().submit(PRINCIPAL, 'click-1', intent());
+  assert.equal(again.request.mutationId, results[0].request.mutationId);
+  assert.equal(restarted.request.mutationId, results[0].request.mutationId);
+  assert.equal(w.count('control-worker'), 1);
+  assert.equal(w.daemon().effects['browser-stop'], 1);
+  assert.equal(w.boot().store.list().length, 1);
+});
+
+test('request key: after a lost reply a duplicate shows unknown and never resends; only a new key is a fresh action', async t => {
+  const w = world(t);
+  w.flag('drop-reply');
+  const s = w.boot();
+  const first = await s.submit(PRINCIPAL, 'click-1', intent());
+  assert.equal(first.state, 'unknown');
+  const dup = await w.boot().submit(PRINCIPAL, 'click-1', intent());
+  assert.deepEqual({ state: dup.state, id: dup.request.mutationId }, { state: 'unknown', id: first.request.mutationId });
+  assert.equal(w.count('control-worker'), 1);
+  const fresh = await w.boot().submit(PRINCIPAL, 'click-2', intent());
+  assert.notEqual(fresh.request.mutationId, first.request.mutationId);
+  assert.equal(w.count('control-worker'), 2, 'a new key is an explicit new action');
+});
+
+test('request key: reuse for a different intent conflicts, keys are scoped per principal and project, bad keys are bad-request', async t => {
+  const w = world(t);
+  w.enrollment.grant('write-2', { principal: 'second-principal', projectId: 'fixture-project', mode: 'mutate' });
+  const s = w.boot();
+  const first = await s.submit(PRINCIPAL, 'click-1', intent());
+  const clash = await s.submit(PRINCIPAL, 'click-1', intent({ operation: 'restart' }));
+  assert.deepEqual({ state: clash.state, source: clash.source, code: clash.error.code }, { state: 'refused', source: 'admission', code: 'request-key-conflict' });
+  assert.equal(w.count('control-worker'), 1);
+  const other = await s.submit('second-principal', 'click-1', intent({ operation: 'restart' }));
+  assert.notEqual(other.request.mutationId, first.request.mutationId, 'another principal has its own key space');
+  const calls = w.calls().length;
+  for (const key of ['', 'k'.repeat(201), 7, null, undefined]) {
+    const r = await s.submit(PRINCIPAL, key, intent());
+    assert.deepEqual([Object.keys(r), r.error.code], [['error'], 'bad-request'], String(key));
+  }
+  assert.equal(w.calls().length, calls);
+});
+
+test('request key: a refusal before any intent existed does not burn the key, and a duplicate needs the read grant', async t => {
+  const w = world(t);
+  const s = w.boot();
+  assert.equal((await s.submit('late-principal', 'click-1', intent())).error.code, 'grant-denied');
+  w.enrollment.grant('write-late', { principal: 'late-principal', projectId: 'fixture-project', mode: 'mutate' });
+  w.enrollment.grant('read-late', { principal: 'late-principal', projectId: 'fixture-project', mode: 'read' });
+  const ok = await s.submit('late-principal', 'click-1', intent());
+  assert.equal(ok.state, 'confirmed');
+  w.enrollment.revoke('read-late');
+  const denied = await s.submit('late-principal', 'click-1', intent());
+  assert.deepEqual({ state: denied.state, source: denied.source, request: denied.request }, { state: 'refused', source: 'admission', request: null });
+  assert.equal(w.count('control-worker'), 1);
 });

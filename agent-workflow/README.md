@@ -441,4 +441,4 @@ vm's `docs/AGENTS-HUB-VMSERVICE-CONTRACT.md`: strict request/reply validation, t
 store, one control call through a fixed argument-less door, and at most three persisted receipt polls after a lost reply.
 The Hub projection is read-only. Enrollment/grants, the store and the door are injected; the shipped implementations are
 synthetic (`EnrollmentGrants` is an in-memory stand-in, not provisioning). `dev-supervisor.mjs` does **not** register this
-module: it has no VM-project grant provider. Tests: `vm-control-supervisor.test.mjs` (fixture helper in `fixtures/`).
+module: it has no VM-project grant provider. `submit(principal, requestKey, intent)` deduplicates by (principal, project, key) for the life of the persisted intent record; a new key is a fresh action. Tests: `vm-control-supervisor.test.mjs` (fixture helper in `fixtures/`).

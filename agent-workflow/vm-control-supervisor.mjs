@@ -107,7 +107,7 @@ const REASONS = { timeout: 'no complete reply before the deadline', overflow: 'r
 const nowRecord = (clock, via, response) => ({ via, at: clock.now(), state: response.state, source: response.source, reply: response.reply, error: response.error });
 
 export class VmControlSupervisor {
-  #active = new Set(); #recovered = false;
+  #active = new Set(); #recovered = false; #inflight = new Map();
   constructor({ enrollment, store, doors, clock = realClock, limits = {}, epoch = randomUUID() }) {
     this.enrollment = enrollment; this.store = store; this.doors = doors; this.clock = clock; this.epoch = epoch;
     this.limits = Object.fromEntries(Object.entries(LIMITS).map(([k, v]) => [k, Math.min(limits[k] ?? v, v)]));
@@ -146,14 +146,37 @@ export class VmControlSupervisor {
     });
   }
 
-  /** Reject, grant-check, identity-check, persist, then dispatch exactly once. Input is an intent (object or JSON text):
-   *  the full request without `kind` and `mutationId`. Returns the contract projection, a bare bad-request error, or an
-   *  admission refusal (no mutation id exists yet, so `request` is null: see the PR body's note on this gap). */
-  async submit(principal, input) {
+  /** Submit one explicit authorized intent under a caller-supplied `requestKey` (1..200 chars, one per user action).
+   *  The key is deduplicated per (principal, projectId, key) for the lifetime of the persisted intent record: the same
+   *  key with the same canonical intent returns that intent's projection and sends nothing; the same key with a different
+   *  intent is `request-key-conflict`. If records are ever deleted, key reuse then needs its own policy. A fresh action
+   *  needs a new key. Input is an intent (object or JSON text): the full request without `kind` and `mutationId`.
+   *  Returns the contract projection, a bare bad-request error, or an admission refusal (no mutation id exists yet, so
+   *  `request` is null: see the PR body's note on this gap). */
+  async submit(principal, requestKey, input) {
+    if (typeof requestKey !== 'string' || requestKey.length < 1 || requestKey.length > 200) return { error: { code: 'bad-request', detail: 'requestKey is a 1..200 character string' } };
     let intent;
     try { intent = validateIntent(typeof input === 'string' ? parseStrictJson(input) : input); }
     catch (e) { return { error: { code: 'bad-request', detail: e.detail ?? 'invalid request' } }; }
     const refuse = (code, detail) => ({ format: FORMAT, request: null, state: 'refused', source: 'admission', reply: null, error: { code, detail } });
+    // Canonical persisted form: validateIntent rebuilds members in a fixed order, so caller key order cannot matter.
+    const canon = JSON.stringify(intent), scope = JSON.stringify([principal, intent.projectId, requestKey]);
+    const conflict = () => refuse('request-key-conflict', 'this request key was used for a different intent');
+    // Claim the key synchronously, before any await, so concurrent duplicates cannot both dispatch.
+    const running = this.#inflight.get(scope);
+    if (running) return running.canon === canon ? running.promise : conflict();
+    const known = this.store.list().find(r => r.keyScope === scope);
+    if (known) return known.intentCanon === canon ? this.#duplicate(principal, known, intent, refuse) : conflict();
+    const promise = this.#send(principal, intent, canon, scope, refuse);
+    this.#inflight.set(scope, { canon, promise });
+    try { return await promise; } finally { this.#inflight.delete(scope); }
+  }
+  // A duplicate is a read of the existing intent: it needs the read grant, and sends nothing.
+  #duplicate(principal, existing, intent, refuse) {
+    const verdict = this.enrollment.evaluate({ principal, mode: 'read', intent });
+    return verdict.ok ? this.response(existing.request.mutationId) : refuse(verdict.code, verdict.detail);
+  }
+  async #send(principal, intent, canon, scope, refuse) {
     const verdict = this.enrollment.evaluate({ principal, mode: 'mutate', intent });
     if (!verdict.ok) return refuse(verdict.code, verdict.detail);
     const door = this.#door(verdict);
@@ -165,7 +188,7 @@ export class VmControlSupervisor {
     let request;
     this.store.allocate(id => {
       request = validateRequest({ ...intent, kind: 'control', hostId: verdict.hostId, service: verdict.service, mutationId: id });
-      return { format: 1, request, principal, epoch: this.epoch, createdAt: this.clock.now(), phase: 'sending', latest: null, evidence: null, settled: null,
+      return { format: 1, request, principal, keyScope: scope, intentCanon: canon, epoch: this.epoch, createdAt: this.clock.now(), phase: 'sending', latest: null, evidence: null, settled: null,
         poll: { attempts: 0, batchStartedAt: null, batchDeadline: null, lastCompletedAt: null, active: null, exhausted: false } };
     });
     const outcome = await this.#exchange(door, request, this.limits.helperMs);
