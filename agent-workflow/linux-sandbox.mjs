@@ -45,8 +45,22 @@ export function linuxPolicy(agent, state, { readOnly = false } = {}) {
   const evidence = path.join(workspace, 'evidence');
   if (fs.existsSync(evidence)) for (const name of fs.readdirSync(evidence)) protectedPaths.push(path.join(evidence, name));
   for (const name of ['space-mirror', '.context']) protectedPaths.push(path.join(workspace, name));
+  // Restored Python dependencies (dev-deps installs each hashed requirements file into a sibling .deps-python)
+  // import without any per-repo wiring: every existing .deps-python near the root joins the sandbox PYTHONPATH.
+  // The scan includes .devcontainer, whose toolchain pins other dot-directory rules skip.
+  const depsPython = [];
+  const scan = (dir, depth) => {
+    if (fs.existsSync(path.join(dir, '.deps-python'))) depsPython.push(path.join(dir, '.deps-python'));
+    if (depth === 0) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries)
+      if (e.isDirectory() && !e.isSymbolicLink() && !['node_modules', '.git'].includes(e.name) && (!e.name.startsWith('.') || e.name === '.devcontainer'))
+        scan(path.join(dir, e.name), depth - 1);
+  };
+  scan(workspace, 2);
   return { workspace, ...(readOnly ? { readonly_workspace: true } : {}), release: dir, release_revision: revision, runtime,
-    sdk: path.join(packageDir, 'dist/index.js'), timeout_ms: 600_000, output_bytes: 1_048_576,
+    sdk: path.join(packageDir, 'dist/index.js'), timeout_ms: 600_000, output_bytes: 1_048_576, pythonpath: depsPython.length ? depsPython.join(':') : undefined,
     readonly: [...(agent.skills === 'none' ? [] : agent.skills ?? []), ...(agent.context ? [agent.context] : [])].map(p => fs.realpathSync(p)).filter(p => !inside(workspace, p)),
     protected: protectedPaths.filter(p => fs.existsSync(p)).map(p => fs.realpathSync(p)).filter(p => inside(workspace, p)) };
 }
@@ -65,6 +79,7 @@ export function sandboxArgs(policy) {
     ...policy.protected.flatMap(p => ['--ro-bind', p, p]),
     '--setenv', 'HOME', '/tmp/home', '--setenv', 'TMPDIR', '/tmp',
     '--setenv', 'PATH', '/home/agent/.local/bin:/opt/node-vm/bin:/usr/local/bin:/usr/bin:/bin',
+    ...(policy.pythonpath ? ['--setenv', 'PYTHONPATH', policy.pythonpath] : []),
     '--setenv', 'GIT_CONFIG_NOSYSTEM', '1', '--setenv', 'GIT_CONFIG_GLOBAL', '/dev/null',
     '--setenv', 'GIT_AUTHOR_NAME', 'Workflow agent', '--setenv', 'GIT_AUTHOR_EMAIL', 'workflow@localhost',
     '--setenv', 'GIT_COMMITTER_NAME', 'Workflow agent', '--setenv', 'GIT_COMMITTER_EMAIL', 'workflow@localhost',

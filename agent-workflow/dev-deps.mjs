@@ -218,10 +218,10 @@ export async function installPython({ workspace, state, agent, io, fetchImpl }) 
       const policy = { ...base, readonly: [...(base.readonly ?? []), wheels], timeout_ms: 600_000 };
       const keep = path.posix.join(rel, '.deps-python');
       const command = 'set -e; '
-        + 'unset PYTHONPATH PYTHONHOME; export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp XDG_CACHE_HOME=/tmp/pip-cache; umask 022; '
-        + `cd ${rel} && python3 -m pip install --no-index --find-links ${wheels} --require-hashes -r ${file} --target .deps-python && `
+        + 'unset PYTHONHOME; export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 TMPDIR=/tmp XDG_CACHE_HOME=/tmp/pip-cache; umask 022; '
+        + `cd ${rel} && rm -rf .deps-python && env -u PYTHONPATH python3 -m pip install --no-index --find-links ${wheels} --require-hashes -r ${file} --target .deps-python && `
         + `cd ${path.relative(rel, '.') || '.'} && mkdir -p .git/info && `
-        + `for keep in '${keep}' '${keep}.pth'; do grep -qx "$keep" .git/info/exclude 2>/dev/null || echo "$keep" >> .git/info/exclude; done`;
+        + `grep -qx '${keep}' .git/info/exclude 2>/dev/null || echo '${keep}' >> .git/info/exclude`;
       await io.sandboxExecute(policy, 'bash', { command });
       result.installed.push({ dir: rel, requirements: file });
     } catch (error) { result.skipped.push({ dir: rel, requirements: file, reason: 'install failed: ' + String(error.message).slice(0, 300) }); }

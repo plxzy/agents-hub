@@ -3,7 +3,7 @@
 FROM node:26.12.0-trixie-slim@sha256:0d1e33586362bb9e608c4e751e7a9e7edb55c9ac11461ed5666af696cc461dd4 AS python-build
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential curl xz-utils libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+      build-essential ca-certificates curl xz-utils libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
       libffi-dev liblzma-dev libgdbm-dev uuid-dev \
     && curl --fail --show-error --silent --location --connect-timeout 20 --max-time 300 \
       https://www.python.org/ftp/python/3.14.8/Python-3.14.8.tar.xz -o /tmp/python.tar.xz \

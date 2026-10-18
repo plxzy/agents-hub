@@ -20,9 +20,10 @@ supervisor downloads every pinned artifact from PyPI for each `python-requiremen
 `requirements-dev.txt` (repository root, `.devcontainer` and other directories up to two levels deep), verifies the
 bytes against every `--hash` in the file, caches them by requirements hash, and the no-network sandbox installs them
 with `python3 -m pip install --no-index --require-hashes` into `<dir>/.deps-python` (kept out of the review commit via
-`.git/info/exclude`). Runs that use the restored packages set `PYTHONPATH=.deps-python` as their task instructions say;
-the outcome shows on the run's dependency restore section next to the npm results, with skipped files carrying a
-path-free reason (unpinned lines, missing hashes, non-PyPI sources all skip rather than fail the run).
+`.git/info/exclude`). The sandbox policy points `PYTHONPATH` at every restored `.deps-python` near the repository root,
+so `python3 -m yt_dlp --version` and test suites import the pinned wheels with no per-repo wiring; the outcome shows on
+the run's dependency restore section next to the npm results, with skipped files carrying a path-free reason (unpinned
+lines, missing hashes, non-PyPI sources all skip rather than fail the run).
 
 Private Pi extensions are not part of this repo. Compose passes the folder named by `AGENTS_EXTENSIONS` (in
 `~/agents-runner/.env`; default the empty `./extensions`) as the `extensions` build context, and the image copies it to

@@ -152,7 +152,7 @@ test('python install runs offline in the sandbox with a read-only wheel mount an
   const [{ policy, args }] = calls;
   assert.notEqual(policy.network, true);
   assert.match(args.command, /pip install --no-index --find-links .* --require-hashes -r python-requirements\.txt/);
-  assert.match(args.command, /unset PYTHONPATH/);
+  assert.match(args.command, /env -u PYTHONPATH/);
   assert.match(args.command, /\.git\/info\/exclude/);
   assert.equal(policy.readonly.length, 1);
   assert.ok(policy.readonly[0].startsWith(fs.realpathSync(f.state)));

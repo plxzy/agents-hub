@@ -27,6 +27,14 @@ test('read-only runs mount the workspace read-only and refuse write tools', () =
   assert.throws(() => sandboxExecute(p, 'edit', { path: 'x', edits: [] }), /Read-only run/);
 });
 
+test('restored Python dependencies join the sandbox PYTHONPATH', () => {
+  const p = { workspace: '/home/project', release: '/home/release', runtime: '/home/runtime', sdk: '/home/runtime/index.js', protected: [] };
+  assert.ok(!sandboxArgs(p).includes('PYTHONPATH'), 'no restore, no PYTHONPATH');
+  const withDeps = sandboxArgs({ ...p, pythonpath: '/home/project/.devcontainer/.deps-python' });
+  assert.equal(withDeps[withDeps.indexOf('PYTHONPATH') - 1], '--setenv');
+  assert.equal(withDeps[withDeps.indexOf('PYTHONPATH') + 1], '/home/project/.devcontainer/.deps-python');
+});
+
 test('real Linux tools isolate secrets, protect files, support loopback and kill detached descendants',
   { skip: process.platform !== 'linux' || process.env.AGENT_TEST_LINUX !== '1', timeout: 45000 }, async () => {
   const base = fs.mkdtempSync(path.join(os.homedir(), '.local/state/linux-acceptance-'));
