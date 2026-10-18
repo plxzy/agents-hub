@@ -165,7 +165,7 @@ export class VmProjectGrants {
     const e = this.enrollments.get(spec?.projectId);
     if (!e || e.status !== 'active') throw new Error('No active enrollment');
     for (let attempt = 0; attempt < 1000; attempt++) {
-      const view = this.request(principal, `${label}-r${e.revision}-${attempt}`, spec);
+      const view = this.request(principal, `prov_${label}-r${e.revision}-${attempt}`, spec);
       if (view.status === 'active') return view;
       if (view.status === 'pending') return this.decide(owner, view.grant_id, 'approve', this.issue(owner, view.grant_id, 'approve'));
       if (view.status === 'expired') continue;

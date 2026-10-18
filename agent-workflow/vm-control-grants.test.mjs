@@ -279,3 +279,10 @@ test('regression: a grant never authorizes another project, principal, mode, wor
   assert.equal(verdict(g, { intent: { service: 'service-x' } }).code, 'identity-mismatch');
   assert.throws(() => g.request('p-1', 'request-wide-1', { ...mutate, targets: ['backing'], workers: ['not-enrolled'] }), /exceeds the enrollment/);
 });
+
+test('provisionGrant works for the shortest valid label (the derived request id must satisfy the provider id format)', t => {
+  const { make } = fixture(t);
+  const g = make().provisionGrant(OWNER, 'p-1', 'a', mutate);
+  assert.equal(g.status, 'active');
+  assert.equal(make().provisionGrant(OWNER, 'p-1', 'a', mutate).grant_id, g.grant_id);
+});
