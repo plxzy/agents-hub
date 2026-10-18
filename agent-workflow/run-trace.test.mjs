@@ -122,3 +122,11 @@ test('stopped runs that nothing can continue point at the operator action that a
   assert.deepEqual(limited.next_action, { tool: 'resume_run', run_id: base.run_id, checkpoint_version: 3 });
   assert.equal(withFailureGuidance({ ...base, recovery: { state: 'dismissed', retained: true } }).next_action, undefined);
 });
+
+test('dependency restore outcome is public without leaking paths or private fields', async () => {
+  const { publicRunContext } = await import('./run-trace.mjs');
+  const got = publicRunContext({ dependencies: { installed: ['.', 'agent-workflow', '../escape', '/abs'], secret: 'x',
+    skipped: [{ dir: 'agent-readonly-service', reason: "EACCES: open '/home/agent/.local/state/dok-agent/deps/x.tgz'", extra: 1 }, { dir: '/bad', reason: 'r' }] } });
+  assert.deepEqual(got.dependencies, { installed: ['.', 'agent-workflow'], skipped: [{ dir: 'agent-readonly-service', reason: "EACCES: open '<path>'" }] });
+  assert.equal(publicRunContext({ dependencies: 'nope' }).dependencies, undefined);
+});

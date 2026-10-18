@@ -2,6 +2,17 @@
 // Only receipt facts: never resolve today's checkout or infer a branch from an agent default.
 import { recoveryAction } from './recovery-contract.mjs';
 import { publicSourceReview, reviewSource, publicSourcePr, publicReview } from './run-continuation.mjs';
+/** Outcome of the pre-run dependency restore: directories and a short, path-free reason. */
+export function publicDependencies(d) {
+  if (!d || typeof d !== 'object' || !Array.isArray(d.installed) || !Array.isArray(d.skipped)) return undefined;
+  const dir = v => typeof v === 'string' && /^(\.|[\w@-][\w.@-]*(\/[\w@-][\w.@-]*)?)$/.test(v) ? v : undefined;
+  const reason = v => String(v ?? '').replace(/\/[^\s'"]*/g, '<path>').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 300);
+  return {
+    installed: d.installed.map(dir).filter(Boolean).slice(0, 10),
+    skipped: d.skipped.filter(x => x && dir(x.dir)).slice(0, 10).map(x => ({ dir: x.dir, reason: reason(x.reason) })),
+  };
+}
+
 export function publicRunContext(r = {}) {
   const text = v => typeof v === 'string' && v.length <= 200 && !/[\x00-\x1f\x7f]|Bearer\s|\b(?:sk|pk|ghp|gho|xox[abp])[-_][A-Za-z0-9_-]{16,}/i.test(v);
   const sha = v => typeof v === 'string' && /^[a-f0-9]{40,64}$/.test(v);
@@ -15,6 +26,7 @@ export function publicRunContext(r = {}) {
     commit: sha(r.commit) ? r.commit : undefined,
     context_recorded_at: iso(r.context_recorded_at) ? r.context_recorded_at : undefined,
     worktree_dirty: typeof r.worktree_dirty === 'boolean' ? r.worktree_dirty : undefined,
+    dependencies: publicDependencies(r.dependencies),
     logs: logs && ['events', 'session'].includes(logs.kind) && ['recorded', 'removed', 'unavailable'].includes(logs.status) && iso(logs.observed_at)
       ? { kind: logs.kind, status: logs.status, observed_at: logs.observed_at } : undefined,
   }).filter(([, v]) => v !== undefined));
