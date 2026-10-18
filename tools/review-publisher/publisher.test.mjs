@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, generateKeyPairSync } from 'node:crypto';
-import { git, prepareBase, prepareReview, cleanupMergedReview, publishJob, verifiedRepository, reviewBody } from './publisher.mjs';
+import { git, prepareBase, prepareReview, cleanupMergedReview, publishJob, verifiedRepository, reviewBody, reviewTitle } from './publisher.mjs';
 import { githubClient, PublicationError } from './github.mjs';
 import { serializeByKey } from './server.mjs';
 
@@ -20,7 +20,7 @@ function fake() {
     if (url.includes('/pulls?')) return pr ? [structuredClone(pr)] : [];
     if (url.endsWith('/pulls') && options.method === 'POST') {
       creates++; pr = { number: 17, html_url: 'https://github.com/owner/vm/pull/17', state: 'open', draft: true,
-        body: options.body.body, head: { ref: job().branch, repo: { full_name: 'owner/vm' }, sha: head }, base: { ref: 'main' } };
+        title: options.body.title, body: options.body.body, head: { ref: job().branch, repo: { full_name: 'owner/vm' }, sha: head }, base: { ref: 'main' } };
       if (failCreate) { failCreate = false; throw new PublicationError('unavailable', true); }
       return structuredClone(pr);
     }
@@ -132,6 +132,44 @@ test('a run linked to an issue references it in the new PR body', () => {
   const j = job(); assert.doesNotMatch(reviewBody(j), /Refs #/);
   j.receipt.issue_number = 806; assert.match(reviewBody(j), /\n\nRefs #806\n\n/);
   j.receipt.issue_number = '806 closes #1'; assert.doesNotMatch(reviewBody(j), /Refs #/);
+});
+
+test('the PR title is the agent summary line, not the task echo', () => {
+  // Real shape of run r-20261018T232928Z-1ba8d0, whose draft PR inherited the whole task instead.
+  const j = job();
+  j.receipt.title = "Decide what's next in this repo and do it.";
+  j.receipt.output = 'Picked **#36: receipt identity verification**. The existing reconciliation flow was largely implemented.\n\n### Changes\n- require the success response to prove that exact digest';
+  assert.equal(reviewTitle(j.receipt), 'Picked **#36: receipt identity verification**. The existing reconciliation flow was largely implemented.');
+  j.receipt.output = "Decide what's next in this repo and do it.\nDetails follow.";
+  assert.equal(reviewTitle(j.receipt), "Decide what's next in this repo and do it.", 'long fallback cap stands');
+  j.receipt.output = `Fixed the collector once flow. ${'x'.repeat(96)}`;
+  const title = reviewTitle(j.receipt);
+  assert.equal(title.length, 120); assert.ok(title.endsWith('…'));
+  j.receipt.output = `A whole paragraph without breaks. ${'x'.repeat(500)}`;
+  assert.equal(reviewTitle(j.receipt), "Decide what's next in this repo and do it.", 'a paragraph without line breaks is not a title');
+  j.receipt.output = 'Fixed tests/unit/test_collector_runner.py:101 expectation\n\n### Verification\n`node --test` passed\n\nExcluded paths remain.';
+  assert.equal(reviewTitle(j.receipt), 'Fixed tests/unit/test_collector_runner.py:101 expectation');
+  j.receipt.output = '## Findings\nTwo findings in `docs/ci.md`, both fixed in place.';
+  assert.equal(reviewTitle(j.receipt), 'Two findings in `docs/ci.md`, both fixed in place.', 'a style heading yields to the prose below');
+  j.receipt.output = 'postponed details\n\n## Collected reports by direct times when available\n\n- changes';
+  assert.equal(reviewTitle(j.receipt), "Decide what's next in this repo and do it.", 'a one-word lead is not a summary');
+  j.receipt.output = 'reply with a credential pattern\n/home/agent/.pi\nBearer tok';
+  assert.equal(reviewTitle(j.receipt), "Decide what's next in this repo and do it.", 'private material cannot title a PR');
+  j.receipt.output = '## Agent-reported changes\n - things\nNo usable plain line.';
+  j.receipt.title = undefined;
+  assert.equal(reviewTitle(j.receipt), 'Agents Hub review');
+});
+
+test('publishJob sends the summary-line title once, with the agent report in the body', async () => {
+  const f = fake(); const j = job();
+  j.receipt.title = 'Long task first line that used to become the draft title';
+  j.receipt.output = 'Selected receipt identity verification for the collector.\n\n### Changes\n- collector/api.py requires digest proof';
+  const result = await publishJob(config, f.gh, j, new Uint8Array(), f.io);
+  assert.equal(result.status, 'published');
+  assert.equal(f.pr.title, 'Selected receipt identity verification for the collector.');
+  assert.match(f.pr.body, /## Agent-reported changes and validation/);
+  assert.match(f.pr.body, /collector\/api\.py requires digest proof/);
+  assert.doesNotMatch(f.pr.body, /Long task first line/);
 });
 
 test('publication adopts a trusted pinned reviewer head and blocks later concurrent changes', async t => {

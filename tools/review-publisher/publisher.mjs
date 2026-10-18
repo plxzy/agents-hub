@@ -117,6 +117,28 @@ export async function verifiedRepository(target, job, bytes, fn) {
   } finally { await fs.rm(tmp, { recursive: true, force: true }); }
 }
 const marker = root => `<!-- agents-hub-review:${root} -->`;
+// Skips fencing and imagery that would survive the secret filter but cannot name the change.
+const titleLine = /^(?:[`*#~>\s]|!\[|\|.*\|)/;
+const titleSecret = /(Bearer\s|gh[opusr]_|github_pat_|sk-|PRIVATE KEY|\/home\/|\/Users\/|https?:\/\/)/;
+// A summary line reads as a sentence, not a fragment or a continuation.
+const titleReject = /^(?:[,;:(\[]|\S+\s+\S+\s*$)/;
+/** The PR title: the agent's leading summary line when it can name the change, else the task-derived title. */
+export function reviewTitle(receipt) {
+  const fallback = String(receipt?.title || 'Agents Hub review').replace(/[\r\n]/g, ' ').slice(0, 120);
+  let code = false, first = null;
+  for (const raw of String(receipt?.output ?? '').split('\n')) {
+    const trimmed = raw.replace(/[\r\n]/g, ' ').trim();
+    if (/^(?:```|~~~)/.test(trimmed)) { code = !code; continue; }
+    if (!trimmed) { if (first) break; continue; }
+    if (code || titleLine.test(trimmed)) continue;
+    if (titleSecret.test(trimmed) || titleReject.test(trimmed)) return fallback;
+    if (trimmed.length < 12 || first) continue;
+    first = trimmed.replace(/\s+/g, ' ');
+  }
+  // Paragraphs without line breaks are narratives, not summary lines.
+  if (!first || first.length > 400) return fallback;
+  return first.length > 120 ? `${first.slice(0, 119)}…` : first;
+}
 export function reviewBody(job) {
   const r = job.receipt;
   // Keep full prompts, private paths and memory out of GitHub descriptions. The run's output is agent-reported evidence.
@@ -177,7 +199,7 @@ export async function publishJob(config, github, job, bytes, { verify = verified
     const confirmed = await api(`/git/ref/heads/${job.branch}`);
     if (confirmed.object?.sha !== head) throw new PublicationError('conflict');
     if (!pr) pr = await api('/pulls', { method: 'POST', body: {
-      title: String(job.receipt.title || 'Agents Hub review').replace(/[\r\n]/g, ' ').slice(0, 120),
+      title: reviewTitle(job.receipt),
       head: job.branch, base: job.base, draft: true, body: reviewBody(job),
     } });
     // Follow-up evidence stays in its Hub receipt; never overwrite a human-edited PR body.

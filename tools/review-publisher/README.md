@@ -13,6 +13,14 @@ Unexpected branch changes or a closed PR needing another commit block publicatio
 A blocked job also holds later jobs in its conversation. `publish_review {run_id}`
 retries/backfills the saved artifact without running Pi again. No merge is performed.
 
+A *new* PR's title comes from the run receipt: the agent's own leading summary
+line in its final output when it can name the change (a single plain sentence,
+no secrets, at most 400 characters before the 120-character cap), otherwise the
+task-derived title previously used. The publisher never PATCHes an existing
+PR's title, so a conversation's draft keeps the title set when its first run
+was published; a follow-up run may be re-titled only if the PR is later
+recreated. The PR body keeps the full agent report.
+
 Independent runs ask the publisher to fetch GitHub main into an immutable per-run
 ref before checkout. Failure stops setup; it cannot silently use stale main.
 Published continuations fetch the current PR head; internal continuations and interrupted-run recovery retain their saved commits.
