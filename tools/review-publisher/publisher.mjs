@@ -117,8 +117,8 @@ export async function verifiedRepository(target, job, bytes, fn) {
   } finally { await fs.rm(tmp, { recursive: true, force: true }); }
 }
 const marker = root => `<!-- agents-hub-review:${root} -->`;
-// Skips fencing and imagery that would survive the secret filter but cannot name the change.
-const titleLine = /^(?:[`*#~>\s]|!\[|\|.*\|)/;
+// Skips fencing, list items and imagery that would survive the secret filter but cannot name the change.
+const titleLine = /^(?:[`*#~>\s]|[-*+]\s|\d+[.)]\s|!\[|\|.*\|)/;
 const titleSecret = /(Bearer\s|gh[opusr]_|github_pat_|sk-|PRIVATE KEY|\/home\/|\/Users\/|https?:\/\/)/;
 // A summary line reads as a sentence, not a fragment or a continuation.
 const titleReject = /^(?:[,;:(\[]|\S+\s+\S+\s*$)/;

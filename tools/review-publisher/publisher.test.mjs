@@ -151,11 +151,13 @@ test('the PR title is the agent summary line, not the task echo', () => {
   assert.equal(reviewTitle(j.receipt), 'Fixed tests/unit/test_collector_runner.py:101 expectation');
   j.receipt.output = '## Findings\nTwo findings in `docs/ci.md`, both fixed in place.';
   assert.equal(reviewTitle(j.receipt), 'Two findings in `docs/ci.md`, both fixed in place.', 'a style heading yields to the prose below');
+  j.receipt.output = '**Bold opener:** details follow.\n\n### Checks\n- offline portable checks passed';
+  assert.equal(reviewTitle(j.receipt), "Decide what's next in this repo and do it.", 'list items are not summary lines');
   j.receipt.output = 'postponed details\n\n## Collected reports by direct times when available\n\n- changes';
   assert.equal(reviewTitle(j.receipt), "Decide what's next in this repo and do it.", 'a one-word lead is not a summary');
   j.receipt.output = 'reply with a credential pattern\n/home/agent/.pi\nBearer tok';
   assert.equal(reviewTitle(j.receipt), "Decide what's next in this repo and do it.", 'private material cannot title a PR');
-  j.receipt.output = '## Agent-reported changes\n - things\nNo usable plain line.';
+  j.receipt.output = '## Agent-reported changes\n - things\n ### Details\n - more\n| a | b |';
   j.receipt.title = undefined;
   assert.equal(reviewTitle(j.receipt), 'Agents Hub review');
 });
