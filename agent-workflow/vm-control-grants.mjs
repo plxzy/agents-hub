@@ -154,9 +154,32 @@ export class VmProjectGrants {
     return this.public(r);
   }
 
-  /** The supervisor's gate: {ok, doorRef, hostId, service} or {ok:false, code, detail}. Never throws on a denial. */
+  /** Restart-safe, revision-bound provisioning for a host that holds an owner identity (fixtures, bootstrap scripts).
+   *  Request ids are derived from `label`, the current enrollment revision and an attempt counter, so a changed enrollment
+   *  never reuses a stale id. Returns the existing active grant if there is one, approves a pending one, moves on to the
+   *  next attempt when the previous grant expired, and refuses to resurrect a revoked grant (an owner decision is final).
+   *  Same spec + label + revision + attempt is the same request, so re-running after a restart is a no-op. */
+  provisionGrant(owner, principal, label, spec) {
+    this.#owner(owner);
+    if (typeof label !== 'string' || !/^[a-zA-Z0-9_]{1,40}$/.test(label)) throw new Error('Invalid provisioning label');
+    const e = this.enrollments.get(spec?.projectId);
+    if (!e || e.status !== 'active') throw new Error('No active enrollment');
+    for (let attempt = 0; attempt < 1000; attempt++) {
+      const view = this.request(principal, `prov_${label}-r${e.revision}-${attempt}`, spec);
+      if (view.status === 'active') return view;
+      if (view.status === 'pending') return this.decide(owner, view.grant_id, 'approve', this.issue(owner, view.grant_id, 'approve'));
+      if (view.status === 'expired') continue;
+      throw new Error(`Provisioned grant ${label} is ${view.status}; not re-approving`);
+    }
+    throw new Error('Too many expired provisioning attempts');
+  }
+
+  /** The supervisor's gate: {ok, doorRef, hostId, service} or {ok:false, code, detail}. Never throws; an unreadable or corrupt store denies (fails closed). */
   evaluate({ principal, mode, intent }) {
     const denied = detail => ({ ok: false, code: 'grant-denied', detail });
+    try { return this.#evaluate(principal, mode, intent, denied); } catch { return denied('grant store unreadable'); }
+  }
+  #evaluate(principal, mode, intent, denied) {
     const e = this.enrollments.get(intent.projectId);
     if (!e || e.status !== 'active') return denied('no enrollment for this project');
     const grant = this.grants.list().find(r => r.principal === principal && r.projectId === intent.projectId && r.mode === mode && this.#state(r) === 'active'
