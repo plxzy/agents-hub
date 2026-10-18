@@ -50,7 +50,8 @@ export async function fetchTarballs(workspace, rel, state, { fetchImpl = fetch }
   if (fs.existsSync(path.join(dir, '.complete'))) return dir;
   const tmp = dir + '.tmp-' + process.pid;
   fs.rmSync(tmp, { recursive: true, force: true }); fs.mkdirSync(tmp, { recursive: true, mode: 0o700 });
-  const entries = Object.entries(JSON.parse(raw).packages).filter(([name, e]) => name && !e.link);
+  // The same tarball often appears at several node_modules paths; fetch each URL once.
+  const entries = [...new Map(Object.entries(JSON.parse(raw).packages).filter(([name, e]) => name && !e.link).map(([name, e]) => [e.resolved, [name, e]])).values()];
   let total = 0, next = 0;
   const worker = async () => {
     while (next < entries.length) {

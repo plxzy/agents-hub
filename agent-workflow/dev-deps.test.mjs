@@ -38,6 +38,9 @@ test('tarballs are integrity-checked, cached by lockfile hash and never partiall
   assert.equal(fs.readdirSync(dir).filter(n => n.endsWith('.tgz')).length, 1);
   await fetchTarballs(f.workspace, '.', f.state, { fetchImpl: async () => { calls++; return ok(); } });
   assert.equal(calls, 1, 'second run uses the cache');
+  const dup = fixture(t, { 'node_modules/a/node_modules/demo': { resolved, integrity } }); calls = 0;
+  const dupDir = await fetchTarballs(dup.workspace, '.', dup.state, { fetchImpl: async () => { calls++; return ok(); } });
+  assert.equal(calls, 1, 'a tarball listed at two paths is fetched once'); assert.equal(fs.readdirSync(dupDir).filter(n => n.endsWith('.tgz')).length, 1);
   const bad = fixture(t);
   await assert.rejects(fetchTarballs(bad.workspace, '.', bad.state, { fetchImpl: async () => new Response('tampered') }), /Integrity/);
   assert.deepEqual(fs.readdirSync(path.join(bad.state, 'deps')), [], 'failed download leaves nothing behind');
