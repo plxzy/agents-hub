@@ -507,3 +507,20 @@ test('request key: a persisted sending record from a crashed supervisor is a dup
   assert.equal(w.count('control-worker'), 0, 'the duplicate dispatched nothing');
   assert.equal(w.boot().store.list().length, 1);
 });
+
+test('contract: request is null only for an admission refusal of a new submission; every other projection carries the full request', async t => {
+  const w = world(t);
+  w.flag('drop-reply');
+  const s = w.boot();
+  const sent = await s.submit(PRINCIPAL, nextKey(), intent());                                   // transport / unknown
+  const denied = await s.submit('nobody', nextKey(), intent());                                 // admission, new submission
+  const duplicateDenied = await s.submit('nobody', nextKey(), intent({ operation: 'restart' }));
+  w.enrollment.revoke('read-1');
+  const readDenied = await w.boot().refresh(PRINCIPAL, sent.request.mutationId);                // admission, receipt read of an existing intent
+  w.enrollment.grant('read-2', { principal: PRINCIPAL, projectId: 'fixture-project', mode: 'read' });
+  const refreshed = await w.boot().refresh(PRINCIPAL, sent.request.mutationId);                 // service-door
+  for (const r of [denied, duplicateDenied]) assert.deepEqual([r.source, r.request], ['admission', null]);
+  for (const r of [sent, readDenied, refreshed]) assert.equal(r.request?.mutationId, sent.request.mutationId, r.source);
+  assert.deepEqual([sent.source, readDenied.source, refreshed.source], ['transport', 'admission', 'service-door']);
+  assert.equal(readDenied.request.kind, 'receipt');
+});

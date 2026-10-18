@@ -182,6 +182,8 @@ export function verifyReceipt(request, parsed) {
 /** Outcome of one exchange: {kind:'reply', reply} | {kind:'transport', detail} | {kind:'admission', code, detail}. */
 export function projectOutcome(request, outcome) {
   const base = { format: FORMAT, request };
+  // Contract: `request` is null ONLY for an admission refusal of a new control submission (no mutationId exists before
+  // authorization); every other projection, including an admission refusal of a receipt read, carries the full request.
   if (outcome.kind === 'admission') return { ...base, state: 'refused', source: 'admission', reply: null, error: { code: outcome.code, detail: outcome.detail } };
   if (outcome.kind === 'transport') return { ...base, state: 'unknown', source: 'transport', reply: null, error: { code: 'reply-unavailable', detail: outcome.detail } };
   const r = outcome.reply;

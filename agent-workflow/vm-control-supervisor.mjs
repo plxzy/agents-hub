@@ -152,7 +152,7 @@ export class VmControlSupervisor {
    *  intent is `request-key-conflict`. If records are ever deleted, key reuse then needs its own policy. A fresh action
    *  needs a new key. Input is an intent (object or JSON text): the full request without `kind` and `mutationId`.
    *  Returns the contract projection, a bare bad-request error, or an admission refusal (no mutation id exists yet, so
-   *  `request` is null: see the PR body's note on this gap). */
+   *  `request` is null, as the contract permits for admission refusals of a new submission only). */
   async submit(principal, requestKey, input) {
     if (typeof requestKey !== 'string' || requestKey.length < 1 || requestKey.length > 200) return { error: { code: 'bad-request', detail: 'requestKey is a 1..200 character string' } };
     let intent;
