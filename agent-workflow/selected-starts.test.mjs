@@ -23,6 +23,32 @@ test('explicit selection strictly validates runner and fields; old operations re
   const r = await old({ id: 1, method: 'tools/call', params: { name: 'start_selected_run', arguments: args } });
   assert.match(r.error.message, /unknown tool/);
 });
+test('dok starts take hosted follow-up selectors; Mac and invalid values refuse', () => {
+  const RUN = 'r-20261013T000000Z-abcdef';
+  validateSelectedStart({ ...args, pr_number: 93 });
+  validateSelectedStart({ ...args, continue_from: RUN });
+  for (const bad of [0, -1, 1.5, '93', true]) assert.throws(() => validateSelectedStart({ ...args, pr_number: bad }), /Invalid pr_number/);
+  for (const bad of ['93', 'r-20261013T000000Z', 93, true]) assert.throws(() => validateSelectedStart({ ...args, continue_from: bad }), /Invalid continue_from/);
+  assert.throws(() => validateSelectedStart({ ...args, pr_number: 93, continue_from: RUN }), /pr_number or continue_from/);
+  assert.throws(() => validateSelectedStart({ ...args, pr_number: 93, cwd: '/tmp' }), /dok does not accept/);
+  assert.throws(() => validateSelectedStart({ ...args, runner: 'mac', pr_number: 93 }), /Mac uses/);
+  assert.throws(() => validateSelectedStart({ ...args, runner: 'mac', continue_from: RUN }), /Mac uses/);
+});
+test('dok follow-up selectors reach the Hub start request and its saved fingerprint', async t => {
+  const ctx = fixture(t); let posts = 0, sent;
+  const RUN = 'r-20261013T000000Z-abcdef';
+  ctx.fetchImpl = async (_url, init) => {
+    if (init.method === 'GET') return Response.json({ state: 'pending' });
+    posts++; sent = JSON.parse(init.body);
+    return Response.json({ run_id: 'r-20261013T000100Z-a1b2c3', status: 'running' });
+  };
+  const pr = await callOp('start_selected_run', { ...args, request_id: 'request-pr-start', pr_number: 93 }, { ctx });
+  assert.equal(pr.state, 'started'); assert.equal(sent.pr_number, 93); assert.equal('continue_from' in sent, false);
+  const again = await callOp('start_selected_run', { ...args, request_id: 'request-pr-start', pr_number: 93 }, { ctx });
+  assert.equal(again.state, 'started'); assert.equal(posts, 1, 'same identity with same selector never dispatches again');
+  const follow = await callOp('start_selected_run', { ...args, request_id: 'request-cf-start', continue_from: RUN }, { ctx });
+  assert.equal(follow.state, 'started'); assert.equal(sent.continue_from, RUN); assert.equal('pr_number' in sent, false);
+});
 test('simultaneous same-id starts dispatch once; changed payload is refused', async t => {
   const ctx = fixture(t); let release, posts = 0;
   ctx.fetchImpl = async (_url, init) => {

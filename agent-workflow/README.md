@@ -362,10 +362,20 @@ their existing local behavior. dok never falls back on 404, offline, authenticat
 Local discovery and explicit Mac execution do not require a successful Hub request.
 
 The Mac's existing credential gains only permission to request existing allowed dok runs through
-`POST /relay/mac/start` (agent, task, request_id only). Admission rechecks dok eligibility, and the
+`POST /relay/mac/start` (agent, task, request_id, plus the optional follow-up selectors below). Admission rechecks dok eligibility, and the
 supervisor retains its existing agent allowlist, repository permissions, isolation and approval rules.
 No review/rating permission or confirmation codes are added. The loopback browser bridge retains
 its Host check, per-launch token header and absence of CORS permission.
+
+Dok starts from the Mac, including `agent call start_selected_run`, accept the hosted follow-up
+selectors: `pr_number` continues the current GitHub head of an existing Hub-linked PR (the receipt
+records it as `source_pr`), and `continue_from` resumes the latest completed run of a review
+conversation. They are mutually exclusive, dok-only (the Mac runner keeps `cwd`/`continue`), and
+take part in the saved request fingerprint, so a reused `request_id` with a changed selector is refused:
+
+```sh
+agent call start_selected_run '{"runner":"dok","agent":"tikkytracker","request_id":"<unique>","pr_number":93,"task":"Address the review"}'
+```
 
 Before submission, the operation durably saves its request identity in `STATE/selected-starts/`.
 Reusing that identity with changed arguments fails; simultaneous identical submissions dispatch once.

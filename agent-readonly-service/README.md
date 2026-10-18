@@ -15,7 +15,7 @@ Live: your deployment's `workers.dev` URL (or a custom domain).
 | `GET /relay/mac/panel`, `/relay/mac/runs/:id` | Mac token | Shared Hub data without confirmation codes |
 | `GET /relay/mac/artifacts/:id` | Mac token | Download a completed dok review bundle after receipt/hash verification |
 | `PUT /relay/dok-dev/artifacts/:id` | dok machine token | Publish one immutable completed-run review bundle |
-| `POST /relay/mac/start` | Mac token | Existing allowed dok starts; only agent, task, request_id |
+| `POST /relay/mac/start` | Mac token | Existing allowed dok starts; agent, task, request_id, optional pr_number/continue_from (mutually exclusive) |
 | `GET /relay/mac/starts/:id` | Mac token | Read-only request reconciliation via receipts and dok journal |
 
 **What is stored:** runner receipts are normalised on arrival (`sanitizeReceipt` in `src/runs.mjs`): unknown fields are dropped and any line that looks like a secret (`src/secrets.mjs`) is redacted. D1 keeps at most 500 runs; archive keeps the panel small long before that.

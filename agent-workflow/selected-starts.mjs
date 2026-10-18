@@ -73,6 +73,8 @@ export async function startSelected(args, options) {
   try {
     const value = args.runner === 'dok'
       ? await hubStart({ agent: args.agent, task: args.task, request_id: args.request_id,
+        ...(args.pr_number !== undefined ? { pr_number: args.pr_number } : {}),
+        ...(args.continue_from !== undefined ? { continue_from: args.continue_from } : {}),
         ...(options.mcpConnection ? { mcp_connection: options.mcpConnection } : {}) }, options)
       : options.startLocal(args, r.planned_run_id);
     if (!value?.run_id) throw new Error('Start response missing run identity');

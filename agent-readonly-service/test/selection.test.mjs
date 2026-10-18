@@ -55,6 +55,18 @@ test('Mac selected starts use dok admission, scoped identity and read-only recov
   assert.equal((await (await call('panel')).json()).relay.pending_starts, 0);
   const recovered = await (await call('starts/' + args.request_id)).json();
   assert.equal(recovered.state, 'started'); assert.equal(recovered.run_id, running.run_id);
+  // Hosted follow-up selectors pass the same admission and reach dok's run_start.
+  const followUp = { agent: 'helper', task: 'Address review comments', request_id: 'selection-follow-up', pr_number: 93 };
+  const follow = call('start', followUp);
+  const f = await next(); assert.equal(f.operation, 'run_start');
+  assert.deepEqual(f.args, { request_id: 'mac-selection-follow-up', agent: 'helper', task: 'Address review comments', pr_number: 93 });
+  send({ type: 'result', attempt: f.attempt, id: f.id, result: { ok: true, value: { ...running, run_id: 'r-20261013T010100Z-a1b2c3', request_id: f.args.request_id, task: followUp.task } } });
+  assert.equal((await next()).type, 'ack'); assert.equal((await (await follow).json()).run_id, 'r-20261013T010100Z-a1b2c3');
+  for (const bad of [{ pr_number: 0 }, { pr_number: 1.5 }, { pr_number: '93' }, { pr_number: 93, continue_from: recovered.run_id },
+    { continue_from: 'not-a-run' }, { pr_number: 93, cwd: '/tmp' }, { continue: true }]) {
+    const refused = await call('start', { ...args, request_id: 'selection-bad-follow', ...bad });
+    assert.equal(refused.status, 400, JSON.stringify(bad));
+  }
   const lookup = call('starts/missing-from-hub');
   const q = await next(); assert.equal(q.operation, 'run_lookup'); assert.equal(q.args.target_request_id, 'mac-missing-from-hub');
   send({ type: 'result', attempt: q.attempt, id: q.id, result: { ok: true, value: { state: 'not_found' } } });

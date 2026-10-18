@@ -129,7 +129,7 @@ export const OPS = [
   },
   {
     name: 'start_selected_run', access: 'run', title: 'Start on the selected runner',
-    description: 'Start explicitly on mac or dok. A request_id identifies this exact submission. Reusing it only checks the original; it never starts again. Unknown means reconcile with get_selected_start, never fall back to another runner.',
+    description: 'Start explicitly on mac or dok. A request_id identifies this exact submission. Reusing it only checks the original; it never starts again. Unknown means reconcile with get_selected_start, never fall back to another runner. Dok starts also accept pr_number or continue_from (never both) to follow up on an existing published PR or conversation run.',
     input: SELECTED_START_INPUT, annotations: { readOnlyHint: false },
     run: (args, ctx) => startSelected(args, selectedOptions(ctx)),
   },

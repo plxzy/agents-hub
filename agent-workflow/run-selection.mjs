@@ -2,6 +2,9 @@
 export const SELECTION_VERSION = 1;
 export const REQUEST_ID = /^[A-Za-z0-9_-]{8,64}$/;
 const field = (type, rest = {}) => ({ type, ...rest });
+// Optional dok follow-up selectors, mirroring hosted start_run; they are not in `required`, so the Mac
+// route's required-only filter still admits them.
+export const SELECTED_START_DOK_CONTINUATION = ['pr_number', 'continue_from'];
 export const SELECTED_START_INPUT = {
   type: 'object', additionalProperties: false, required: ['runner', 'agent', 'task', 'request_id'],
   properties: {
@@ -10,6 +13,8 @@ export const SELECTED_START_INPUT = {
     task: field('string', { minLength: 1, maxLength: 16000 }),
     request_id: field('string', { pattern: REQUEST_ID.source }),
     cwd: field('string'), continue: field('boolean'),
+    pr_number: { type: 'integer', minimum: 1, description: 'Existing Hub-linked PR on dok. Continue its current GitHub head. Dok only; mutually exclusive with continue_from.' },
+    continue_from: field('string', { pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$', description: 'Latest completed run of this review conversation on dok. Dok only; mutually exclusive with pr_number.' }),
   },
 };
 export function validateSelectedStart(args, macRoute = false) {
@@ -19,11 +24,15 @@ export function validateSelectedStart(args, macRoute = false) {
   for (const k of required) if (!Object.hasOwn(args, k)) throw new Error(`Missing ${k}`);
   for (const [k, v] of Object.entries(args)) {
     const rule = schema.properties[k];
-    if (!rule || macRoute && !required.includes(k) || typeof v !== rule.type || rule.enum && !rule.enum.includes(v)
+    if (!rule || macRoute && !required.includes(k) && !SELECTED_START_DOK_CONTINUATION.includes(k)
+      || (rule.type === 'integer' ? !Number.isSafeInteger(v) : typeof v !== rule.type) || rule.enum && !rule.enum.includes(v)
+      || rule.minimum !== undefined && v < rule.minimum
       || rule.pattern && !new RegExp(rule.pattern).test(v) || rule.minLength && v.trim().length < rule.minLength
       || rule.maxLength && v.length > rule.maxLength) throw new Error(`Invalid ${k}`);
   }
-  if (args.runner === 'dok' && ('cwd' in args || 'continue' in args)) throw new Error('dok does not accept Mac directory or continuation fields');
+  if (args.pr_number !== undefined && args.continue_from !== undefined) throw new Error('Select pr_number or continue_from');
+  if (args.runner !== 'mac' && ('cwd' in args || 'continue' in args)) throw new Error('dok does not accept Mac directory or continuation fields');
+  if (!macRoute && args.runner === 'mac' && ('pr_number' in args || 'continue_from' in args)) throw new Error('pr_number and continue_from select dok runs; the Mac uses cwd/continue');
 }
 export function dokTarget(status, summaries = []) {
   const compatible = status?.run_selection?.version === SELECTION_VERSION;
