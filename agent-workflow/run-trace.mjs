@@ -5,12 +5,21 @@ import { publicSourceReview, reviewSource, publicSourcePr, publicReview } from '
 /** Outcome of the pre-run dependency restore: directories and a short, path-free reason. */
 export function publicDependencies(d) {
   if (!d || typeof d !== 'object' || !Array.isArray(d.installed) || !Array.isArray(d.skipped)) return undefined;
-  const dir = v => typeof v === 'string' && /^(\.|[\w@-][\w.@-]*(\/[\w@-][\w.@-]*)?)$/.test(v) ? v : undefined;
+  const dir = v => typeof v === 'string' && /^(\.|\.devcontainer([\w.@-]*\/[\w@-][\w.@-]*)?|[\w@-][\w.@-]*(\/([\w@-][\w.@-]*|\.devcontainer))?)$/.test(v) ? v : undefined;
   const reason = v => String(v ?? '').replace(/\/[^\s'"]*/g, '<path>').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 300);
-  return {
+  const out = {
     installed: d.installed.map(dir).filter(Boolean).slice(0, 10),
     skipped: d.skipped.filter(x => x && dir(x.dir)).slice(0, 10).map(x => ({ dir: x.dir, reason: reason(x.reason) })),
   };
+  const marker = v => typeof v === 'string' && /^[\w][\w.-]*\.txt$/.test(v) ? v : undefined;
+  if (d.python && typeof d.python === 'object' && Array.isArray(d.python.installed) && Array.isArray(d.python.skipped)
+      && (d.python.installed.length || d.python.skipped.length)) {
+    out.python = {
+      installed: d.python.installed.filter(x => x && dir(x.dir) && marker(x.requirements)).slice(0, 10).map(x => ({ dir: x.dir, requirements: x.requirements })),
+      skipped: d.python.skipped.filter(x => x && dir(x.dir)).slice(0, 10).map(x => ({ dir: x.dir, reason: reason(x.reason) })),
+    };
+  }
+  return out;
 }
 
 export function publicRunContext(r = {}) {

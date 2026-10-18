@@ -130,3 +130,15 @@ test('dependency restore outcome is public without leaking paths or private fiel
   assert.deepEqual(got.dependencies, { installed: ['.', 'agent-workflow'], skipped: [{ dir: 'agent-readonly-service', reason: "EACCES: open '<path>'" }] });
   assert.equal(publicRunContext({ dependencies: 'nope' }).dependencies, undefined);
 });
+
+test('python restore outcome shows pinned installs without leaking paths', async () => {
+  const { publicRunContext } = await import('./run-trace.mjs');
+  const got = publicRunContext({ dependencies: { installed: [], skipped: [], python: {
+    installed: [{ dir: '.', requirements: 'python-requirements.txt', extra: 1 }, { dir: '../escape', requirements: 'requirements.txt' },
+      { dir: '.devcontainer', requirements: '/tmp/secret.txt' }],
+    skipped: [{ dir: '.', requirements: 'requirements.txt', reason: "install failed: pip exploded /home/agent/state detail", extra: 2 }] } } });
+  assert.deepEqual(got.dependencies, { installed: [], skipped: [], python: {
+    installed: [{ dir: '.', requirements: 'python-requirements.txt' }],
+    skipped: [{ dir: '.', reason: "install failed: pip exploded <path> detail" }] } });
+  assert.equal(publicRunContext({ dependencies: { installed: [], skipped: [], python: { installed: [], skipped: [] } } }).dependencies.python, undefined);
+});

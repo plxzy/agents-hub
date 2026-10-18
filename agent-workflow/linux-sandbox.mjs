@@ -64,7 +64,7 @@ export function sandboxArgs(policy) {
     ...(policy.readonly ?? []).flatMap(p => ['--ro-bind', p, p]),
     ...policy.protected.flatMap(p => ['--ro-bind', p, p]),
     '--setenv', 'HOME', '/tmp/home', '--setenv', 'TMPDIR', '/tmp',
-    '--setenv', 'PATH', '/opt/node-vm/bin:/usr/local/bin:/usr/bin:/bin',
+    '--setenv', 'PATH', '/home/agent/.local/bin:/opt/node-vm/bin:/usr/local/bin:/usr/bin:/bin',
     '--setenv', 'GIT_CONFIG_NOSYSTEM', '1', '--setenv', 'GIT_CONFIG_GLOBAL', '/dev/null',
     '--setenv', 'GIT_AUTHOR_NAME', 'Workflow agent', '--setenv', 'GIT_AUTHOR_EMAIL', 'workflow@localhost',
     '--setenv', 'GIT_COMMITTER_NAME', 'Workflow agent', '--setenv', 'GIT_COMMITTER_EMAIL', 'workflow@localhost',

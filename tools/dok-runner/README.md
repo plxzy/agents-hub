@@ -11,6 +11,19 @@ image. It contains npm 12.2.0, Pi 1.3.0 (from the lockfile), bubblewrap, Git, Py
 and tini. It has no standalone `codex` executable, SSH daemon or editor. The image strips Pi's unused OpenAI Codex
 provider and OAuth/API modules; the ordinary OpenAI provider remains.
 
+Two Pythons live in the image. The one agents get is a pinned CPython **3.14.8**, compiled from the checksum-verified
+python.org source tarball and installed under `/opt/python`; `/usr/local/bin/python3` links to it, and the sandbox
+PATH starts with `/home/agent/.local/bin:/usr/local/bin`. Debian's python3.13 stays at `/usr/bin/python3` for the
+runner's own scripts (`parent-exec.py`, the installer's JSON step) and is second on the sandbox PATH. A writable run
+also restores hashed Python requirements the same way it restores npm lockfiles: before the agent starts, the
+supervisor downloads every pinned artifact from PyPI for each `python-requirements.txt` / `requirements.txt` /
+`requirements-dev.txt` (repository root, `.devcontainer` and other directories up to two levels deep), verifies the
+bytes against every `--hash` in the file, caches them by requirements hash, and the no-network sandbox installs them
+with `python3 -m pip install --no-index --require-hashes` into `<dir>/.deps-python` (kept out of the review commit via
+`.git/info/exclude`). Runs that use the restored packages set `PYTHONPATH=.deps-python` as their task instructions say;
+the outcome shows on the run's dependency restore section next to the npm results, with skipped files carrying a
+path-free reason (unpinned lines, missing hashes, non-PyPI sources all skip rather than fail the run).
+
 Private Pi extensions are not part of this repo. Compose passes the folder named by `AGENTS_EXTENSIONS` (in
 `~/agents-runner/.env`; default the empty `./extensions`) as the `extensions` build context, and the image copies it to
 `/opt/pi-extensions/`. An accounts module there that exports `accountProvider(slot, name, catalog)` adds extra provider
