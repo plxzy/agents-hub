@@ -17,7 +17,7 @@ knowledge=${2:-$(docker compose run --rm --no-deps --interactive=false -T --entr
 docker compose run --rm --no-deps --interactive=false --entrypoint bash runner -lc "set -e
   R=/home/agent/repos/agents-hub.git; T=\$(mktemp)
   test -d \$R || git init -q --bare \$R
-  git --git-dir=\$R fetch -q --prune $source_url '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+  git --git-dir=\$R fetch -q $source_url '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
   git --git-dir=\$R show $rev:tools/dok-dev/install-workflow.sh > \$T
   bash \$T \$R /home/agent/.local/share/agent-workflow/knowledge/$knowledge $rev /home/agent/.local/share/agent-workflow/context/current
   rm \$T
