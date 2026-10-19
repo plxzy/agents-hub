@@ -18,11 +18,15 @@ checksum-verified python.org source tarball and installed under `/opt/python`; i
 `/usr/local/bin` either way a stripped PATH is ordered. Debian's python3.13 remains only at
 `/usr/bin/python3.debian` for the runner's internals (`parent-exec.py`, the installer's JSON step) that must keep
 running on the interpreter the base image manages, independent of the pinned build. The sandbox PATH still starts
-with `/home/agent/.local/bin:/usr/local/bin`. `ffmpeg`/`ffprobe` come from Debian's `ffmpeg` package (Trixie
-7.1.x), the same codec tools tikkytracker's devcontainer installs; the runner does not compile a pinned ffmpeg.
-Because bubblewrap runs with an empty root, the tool sandbox itself pins a frozen synthetic `sandbox` passwd/group
-entry (kept in the frozen tool release next to `linux-worker.mjs`) onto `/etc/passwd` instead of exposing host
-`/etc/passwd`: it covers both user-namespace uid mappings (0 and 65534), records a home directory, and lets
+with `/home/agent/.local/bin:/usr/local/bin`. `ffmpeg`/`ffprobe` come from Debian's `ffmpeg` package; on the
+Trixie base image that resolves to `7.1.5-0+deb13u1`, the exact same package byte-for-byte as in tikkytracker's
+devcontainer Debian 13 Trixie image. The runner does not compile a pinned ffmpeg. The accompanying codec
+libraries resolve through Debian's `/etc/alternatives` symlink tree, so the sandbox policy mounts `/usr/lib` and
+`/etc/alternatives` read-only alongside `/usr`. Because bubblewrap runs with an empty root, the tool sandbox
+itself pins a frozen synthetic `sandbox` passwd/group entry (kept in the frozen tool release next to
+`linux-worker.mjs`) onto `/etc/passwd` instead of exposing host `/etc/passwd`: bwrap maps the invoking uid into
+its user namespace unchanged, so the entry names uid 1000 (dok's `agent` user) and uid 0 (host acceptance
+containers) identically, records a home directory, and lets
 `pwd.getpwuid`, `os.path.expanduser('~')` and `getpass.getuser()` answer even when a suite strips `HOME`. A
 writable run also restores hashed Python requirements the same way it restores npm lockfiles: before the agent
 starts, the supervisor downloads every pinned artifact from PyPI for each `python-requirements.txt` /
