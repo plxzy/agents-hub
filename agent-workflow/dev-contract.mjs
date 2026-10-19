@@ -26,6 +26,10 @@ export const HOST_OPS = {
     action: { type: 'string', enum: ['cancel', 'pause', 'dismiss', 'retry_inspection'] }, reason: { type: 'string', pattern: '^[A-Za-z0-9 ;:.,_-]{0,120}$' } }, ['run_id', 'request_id', 'action']),
   run_lookup: schema({ target_request_id: id }),
   run_read: schema({ run_id: { type: 'string', pattern: '^r-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}$' } }),
+  // VM worker control (plxzy/vm#806). `principal` is asserted by the Hub Worker per entry surface, never by a model; it only
+  // selects which grants apply. The intent is validated strictly by the supervisor, not here.
+  vm_control_submit: schema({ principal: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$' }, request_key: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,80}$' }, intent: { type: 'object' } }),
+  vm_control_get: schema({ principal: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{1,64}$' }, mutation_id: { type: 'string', pattern: '^vmc-[0-9a-f]{32}$' }, refresh: { type: 'boolean' } }, ['principal', 'mutation_id']),
 };
 export function validateDevelopment(name, args, host = false) {
   const s = host ? HOST_OPS[name] : DEV_OPS[name]?.input;

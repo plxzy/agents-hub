@@ -68,6 +68,22 @@ export const RELAY_OPS = {
     input: { type: 'object', required: ['id', 'decision', 'request_id', 'confirm'], additionalProperties: false, properties: {
       id: { type: 'string', maxLength: 120 }, decision: { type: 'string', enum: ['accept', 'reject'] }, reason: { type: 'string', maxLength: 4000 }, request_id: requestId, confirm,
     } }, description: 'Accept or reject a proposal only from the user’s explicit click in the panel.' },
+  // VM worker control (plxzy/vm#806). Listed to clients only when the Worker has VM_CONTROL_ENABLED; authority is the
+  // runner's own enrollment and grants (deny by default), never these arguments. Contract: vm docs/AGENTS-HUB-VMSERVICE-CONTRACT.md.
+  submit_vm_control: { title: 'Submit a VM worker control intent', read: false,
+    input: { type: 'object', required: ['request_key', 'intent'], additionalProperties: false, properties: {
+      request_key: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,80}$', description: 'One per user action. Reuse it only for the exact same intent: a repeat reads the original outcome and sends nothing.' },
+      intent: { type: 'object', additionalProperties: false, required: ['format', 'operation', 'target', 'hostId', 'service', 'projectId', 'worker', 'workerGeneration', 'backingId'],
+        properties: { format: { const: 1 }, operation: { enum: ['start', 'stop', 'restart'] }, target: { enum: ['backing', 'browser'] },
+          hostId: { type: 'string', minLength: 1, maxLength: 200 }, service: { type: 'string', minLength: 1, maxLength: 200 }, projectId: { type: 'string', minLength: 1, maxLength: 200 },
+          worker: { type: 'string', minLength: 1, maxLength: 200 }, workerGeneration: { type: 'string', minLength: 1, maxLength: 200 },
+          backingId: { anyOf: [{ type: 'null' }, { type: 'string', minLength: 12, maxLength: 64, pattern: '^[0-9a-f]+$' }], description: 'Required. null means the service observed no backing; it is never a default.' } } } } },
+    description: 'Ask the runner to run one VM worker control action (target backing or browser; start, stop or restart; backing restart is not offered). Needs a project the owner enrolled and an approved grant, otherwise it is refused before anything is sent. The intent must come from a fresh service observation. Returns {response, view}: response.state is confirmed, refused, unknown or absent and carries its provenance; unknown is not failed and not permission to retry. If the call returns {status: "in-flight"} or the reply is lost, repeat the SAME request_key; never use a new key for the same action. A browser action is not a VM action.' },
+  get_vm_control: { title: 'Read a VM worker control receipt', read: true,
+    input: { type: 'object', required: ['mutation_id'], additionalProperties: false, properties: {
+      mutation_id: { type: 'string', pattern: '^vmc-[0-9a-f]{32}$', description: 'From the response.request of submit_vm_control.' },
+      refresh: { type: 'boolean', description: 'true asks the service for one bounded receipt read now. It never resends the action. Default: the runner’s recorded state, no service contact.' } } },
+    description: 'Read the recorded outcome of one VM control intent, with provenance and freshness. Receipt confirmation is not current worker health. Needs a read grant. Returns {response, view}, or {status: "in-flight"} while a refresh is still running.' },
 };
 export function validateRelay(name, args) {
   const op = Object.hasOwn(RELAY_OPS, name) ? RELAY_OPS[name] : undefined;

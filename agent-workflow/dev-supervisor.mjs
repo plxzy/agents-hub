@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { DevelopmentSessions, save } from './dev-sessions.mjs';
 import { serveSocket } from './link-socket.mjs';
 import { validateDevelopment } from './dev-contract.mjs';
+import { createVmControlHost } from './vm-control-host.mjs';
 import { fingerprintText } from './relay-wire.mjs';
 import { publishArtifact } from './run-artifact.mjs';
 
@@ -108,14 +109,19 @@ const health = { schema_version: 1, pid: process.pid, started, process_session: 
   hub_ready: false, last_pong_at: null, fatal: false, updated_at: new Date().toISOString() };
 const writeHealth = patch => save(healthFile, Object.assign(health, patch, { updated_at: new Date().toISOString() }));
 writeHealth({});
+// VM worker control is off unless the runner config has a `vmControl` block; a bad block stops the boot, like a bad endpoint.
+const vmControl = config.vmControl ? createVmControlHost(config.vmControl, { stateDir: path.join(config.state, 'vm-control'), log: console.log }) : null;
+vmControl?.start();
 const controller = new AbortController();
-const stop = () => { sessions.stop(); controller.abort(); };
+const stop = () => { sessions.stop(); vmControl?.stop(); controller.abort(); };
 process.once('SIGTERM', stop); process.once('SIGINT', stop);
 const journal = path.join(config.state, 'host-requests'); fs.mkdirSync(journal, { recursive: true, mode: 0o700 });
 async function execute(message) {
   const { operation, args } = message;
   try {
     validateDevelopment(operation, args, true);
+    if (operation === 'vm_control_submit' || operation === 'vm_control_get') return vmControl ? await vmControl.execute(operation, args)
+      : { ok: false, kind: 'rejected', error: 'VM control is not configured on this runner' };
     if (operation === 'dev_read') return { ok: true, value: sessions.get(args.run_id) };
     if (operation === 'run_lookup') return { ok: true, value: sessions.runLookup(args.target_request_id) };
     if (operation === 'run_read') return { ok: true, value: sessions.runGet(args.run_id) };

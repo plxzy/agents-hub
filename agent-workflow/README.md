@@ -444,7 +444,7 @@ After live acceptance, set `STATE/review-cleanup.json` to `{"enabled":true}` (mo
 checkout/finish. There is no new background service. A stale operation lock is preserved for operator
 inspection rather than guessed safe to remove.
 
-## VM worker control seam (plxzy/vm#806, not wired in)
+## VM worker control (plxzy/vm#806)
 
 `vm-control-contract.mjs`, `vm-control-supervisor.mjs`, `vm-control-projection.mjs` and `vm-control-grants.mjs` implement the supervisor side of
 vm's `docs/AGENTS-HUB-VMSERVICE-CONTRACT.md`: strict request/reply validation, the closed action table, a durable intent
@@ -457,5 +457,44 @@ workers, targets, operations), and a principal asks for a separate `mutate` or `
 `dev-grants.mjs`-style one-use token click. Grants expire, can be revoked at once (reads keep their own grant) and are pinned to
 the enrollment revision. Unlike development grants they are not bound to a supervisor process session, so bounded receipt polls
 survive a restart. State is durable on disk and re-read on every decision; a corrupt or truncated record denies (fails closed). Scope is persisted and enforced per grant: project, principal, mode, and worker/target/operation (a grant may only narrow the enrollment); host, service pin and door reference are enrollment-only and read from the current enrollment at decision time. `provisionGrant` is the restart-safe, revision-bound bootstrap path (reuses an active grant, derives request ids from the enrollment revision so a changed enrollment gets a fresh grant, never re-approves a revoked one). **Limitation: one writer per directory, no cross-process locking; a second process may only read (revocations it did not write are picked up on the next decision). Records are trusted at rest (mode 0600, no MAC). This is not a multi-writer production grant authority.** Nothing here provisions an owner, exposes an
-approval UI or registers the module in `dev-supervisor.mjs`; that wiring is still to do. Tests: `vm-control-supervisor.test.mjs`
-and `vm-control-grants.test.mjs` (fixture helper in `fixtures/`).
+approval UI, so no grant can be created through the Hub yet. Tests: `vm-control-supervisor.test.mjs`,
+`vm-control-grants.test.mjs` and `vm-control-host.test.mjs` (fixture helper in `fixtures/`).
+
+### Hub caller (wired, off by default)
+
+`vm-control-host.mjs` is what `dev-supervisor.mjs` registers when the runner config has a `vmControl` block. It serves two
+relay operations, `vm_control_submit` and `vm_control_get`; the Hub Worker (`agent-readonly-service/src/vm-control.mjs`)
+exposes them as the MCP tools `submit_vm_control` and `get_vm_control`, listed and callable only when the Worker has
+`VM_CONTROL_ENABLED` (`HUB_VM_CONTROL_ENABLED=true` at deploy, or `vmControlEnabled` in `hub.json`).
+
+```
+Hub Worker (Access-verified MCP; the principal is derived from the verified user, never an argument)
+  -> runner relay (machine token, one outbound WebSocket)
+  -> dok supervisor: VmControlHost -> VmControlSupervisor (grants, durable intent, one control call)
+  -> fixed stdio door (vmservice-call, credential on stdin) -> vmservice
+```
+
+- **Authority stays on the runner.** Doors, credentials, service pins and enrollments come from the runner's own config and
+  enrollment, never from a request. No grant, no send: a missing, expired, revoked or mismatched grant is an `admission`
+  refusal with `request: null` and the helper is never launched. The Hub stores nothing and keeps no dedupe state.
+- **Identity.** The Worker derives the grant principal from the Access-verified subject of each MCP call:
+  `hub:` + the first 32 hex of SHA-256(`agents-hub:vm-control:v1:` + subject). It is stable, carries no PII and cannot be set by a
+  tool argument, so a grant for one user never serves another, and request keys, recorded intents and reads are per principal. The
+  owner approves grants for that value (`vmControlPrincipal` in `agent-readonly-service/src/vm-control.mjs`). A call without a
+  verified user is refused before it reaches the runner.
+- **Config.** `vmControl: { owners: [...], doors: { "<ref>": { helper, env: { HOME, ... }, credentialFile } }, waitMs? }`; all paths
+  absolute, `credentialFile` mode 0600, read once at boot. Unknown members or a bad block stop the boot. State lives under
+  `STATE/vm-control/` (`projects/` enrollments and grants, `intents/` dispatch bookkeeping).
+- **Lost answers.** The relay gives a command 20 s and the helper may take longer, so the host answers
+  `{status: "in-flight"}` after `waitMs` (default 12 s, max 15 s) and keeps working. The caller repeats the SAME `request_key`:
+  it joins the running work, or after completion reads the recorded outcome and sends nothing (needs the read grant). A new key is
+  a new action; the same key with a different intent is `request-key-conflict`. A relay answer lost after the send is recovered the
+  same way (`Relay response unavailable ... Repeat the SAME request_key`).
+- **Receipt reads.** After a non-definite answer (unknown, absent) the host runs the supervisor's persisted poll batch in the
+  background (3 reads, 5 s apart, 210 s), and `start()` resumes unfinished batches at boot. `get_vm_control` returns the recorded
+  state without contacting the service; `refresh: true` makes one explicit bounded read. Neither can send a mutation.
+- **Answer shape.** `{response, view}`: `response` is the contract projection; `view` adds the target label, provenance, freshness
+  and polling state for display (null when no intent was recorded).
+
+Still not done for #806: owner provisioning and an approval surface, fresh worker/backing discovery for the caller, cancellation
+beyond grant revoke, Mac-disconnected operation and live acceptance. Nothing is deployed and `VM_CONTROL_ENABLED` stays off.

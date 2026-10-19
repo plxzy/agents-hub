@@ -3,6 +3,6 @@ export { AgentRelay } from '../../src/agent-relay.mjs';
 import { apiFetch, hubFetch } from '../../src/worker-core.mjs';
 export default {
   fetch(request, env) {
-    return new URL(request.url).pathname.startsWith('/relay/') ? hubFetch(request, env) : apiFetch(request, env, '', 'owner');
+    return new URL(request.url).pathname.startsWith('/relay/') ? hubFetch(request, env) : apiFetch(request, env, '', request.headers.get('x-test-owner') ?? 'owner');
   },
 };
