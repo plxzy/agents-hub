@@ -12,6 +12,7 @@ import { pendingMemory, pendingCounts, isMemory, decideMemory } from './memory.m
 import { healthOf, healthTime } from '../../agent-workflow/health.mjs';
 import { DEV_OPS, developmentTools } from '../../agent-workflow/dev-contract.mjs';
 import { developmentCall } from './development.mjs';
+import { vmControlEnabled, submitVmControl, getVmControl } from './vm-control.mjs';
 
 const CAPABILITIES = { discovery: true, status: true, context: true, run: false, mutate: false };
 const MCP_MIME = 'text/html;profile=mcp-app';
@@ -127,7 +128,8 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
     if (method === 'tools/list') return reply({ tools: [...(dokEnabled(env) ? [
       ...toolList.map((t) => t.name === 'open_dashboard' ? { ...t, description: READ_OPS.open_dashboard.description + ' The panel shows runs, agents and the review queue held by the Hub.' } : t),
       ...relayToolList().filter((t) => ['publish_review', 'start_run', 'get_start_status', 'resume_run', ...Object.keys(RUN_CONTROLS), 'list_run_actions', 'decide_recovery', 'get_remote_run', 'panel_data', 'panel_run', 'rate_run', 'review_decide', 'panel_archived', 'archive_runs'].includes(t.name)),
-    ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : [])] });
+    ] : toolList), ...(env.DOK_RELAY_TOKEN && env.DEVELOPMENT_ENABLED === 'true' ? developmentTools() : []),
+    ...(vmControlEnabled(env) ? relayToolList().filter((t) => ['submit_vm_control', 'get_vm_control'].includes(t.name)) : [])] });
     if (method === 'resources/list') return reply({ resources: [{ uri: DASHBOARD_URI, name: 'Agents Hub dashboard', mimeType: MCP_MIME }] });
     if (method === 'resources/read') {
       if (!isDashboardUri(params?.uri)) return json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'unknown resource' } });
@@ -196,6 +198,13 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
           if (params.name === 'panel_run') throw new Error('Unknown run ' + args.run_id);
           if (params.name === 'rate_run') throw new Error('Unknown run ' + args.run_id);
           if (params.name === 'review_decide') throw new Error('Unknown review item ' + args.id);
+        } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
+      }
+      // VM worker control: the runner's grants decide; the Hub only forwards. Listed and callable only with VM_CONTROL_ENABLED.
+      if (['submit_vm_control', 'get_vm_control'].includes(params?.name)) {
+        try {
+          const value = params.name === 'submit_vm_control' ? await submitVmControl(env, params.arguments ?? {}) : await getVmControl(env, params.arguments ?? {});
+          return reply({ content: [{ type: 'text', text: JSON.stringify(value) }] });
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }
       if (dokEnabled(env) && ['start_run', 'get_remote_run', 'get_start_status', 'resume_run', ...Object.keys(RUN_CONTROLS), 'list_run_actions'].includes(params?.name)) {

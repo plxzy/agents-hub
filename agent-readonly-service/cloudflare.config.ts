@@ -32,6 +32,8 @@ export default defineConfig({
 			ACCESS_ISSUER: bindings.text(accessIssuer),
 			ACCESS_AUD: bindings.text(accessAud),
 			DEVELOPMENT_ENABLED: bindings.text(process.env.HUB_DEVELOPMENT_ENABLED ?? String(file?.developmentEnabled ?? true)),
+			// Off unless set: lists submit_vm_control and get_vm_control. The runner's own enrollment and grants still decide (plxzy/vm#806).
+			VM_CONTROL_ENABLED: bindings.text(process.env.HUB_VM_CONTROL_ENABLED ?? String(file?.vmControlEnabled ?? false)),
 			DB: bindings.d1(d1),
 			RUN_ARTIFACTS: bindings.r2({ name: r2Bucket }),
 		},

@@ -10,7 +10,7 @@
 //   store       durable intent store (FileIntentStore here): allocate / get / update / list / recoverable state
 //   doors       doorRef -> door; door.call(body, {timeoutMs}) -> {kind:'bytes', stdout} | {kind:'failure', reason}
 //   clock       {now(), sleep(ms)} plus persisted poll state, so a restart cannot reset the budget
-// This module is NOT registered in dev-supervisor.mjs: wiring it into the live supervisor is a separate step.
+// dev-supervisor.mjs registers it through vm-control-host.mjs when its config has `vmControl`; that host is the only caller.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -257,5 +257,15 @@ export class VmControlSupervisor {
     const response = await this.#receiptRead(access.door, r, this.limits.helperMs);
     this.#record(id, 'receipt', response);
     return response;
+  }
+
+  /** An authorized read of the supervisor's own record: needs the intent's principal and a valid read grant, contacts no
+   *  service and spawns nothing. Returns the contract projection, or the admission refusal of a receipt read. */
+  lookup(principal, id) {
+    const r = typeof id === 'string' && MUTATION_ID.test(id) ? this.store.get(id) : null;
+    if (!r || r.principal !== principal) return { error: { code: 'bad-request', detail: 'unknown intent' } };
+    const verdict = this.enrollment.evaluate({ principal, mode: 'read', intent: intentOf(r.request) });
+    if (!verdict.ok) return projectOutcome(receiptRequest(r.request), { kind: 'admission', code: verdict.code, detail: verdict.detail });
+    return this.response(id);
   }
 }
