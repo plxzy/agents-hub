@@ -39,6 +39,11 @@ the pinned wheels with no per-repo wiring; the outcome shows on the run's depend
 npm results, with skipped files carrying a path-free reason (unpinned lines, missing hashes, non-PyPI sources all
 skip rather than fail the run).
 
+The **node** binary in the sandbox is the runner's own Node (`26.12.0`, the pinned base image), independent of
+any one repository's toolchain. tikkytracker's devcontainer pins Node `26.10.0` exactly, but its `package.json`
+accepts any `>=26.10.0 <27`; the runner does not swap in a repo-specific version, since Node 26.12.0 satisfies
+that range and keeping the runner's interpreter neutral matters more than matching one project's exact pin.
+
 Private Pi extensions are not part of this repo. Compose passes the folder named by `AGENTS_EXTENSIONS` (in
 `~/agents-runner/.env`; default the empty `./extensions`) as the `extensions` build context, and the image copies it to
 `/opt/pi-extensions/`. An accounts module there that exports `accountProvider(slot, name, catalog)` adds extra provider
