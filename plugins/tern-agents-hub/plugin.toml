@@ -1,0 +1,12 @@
+schema = 1
+id = "agents-hub"
+name = "Agents Hub"
+version = "1.0.0"
+description = "Runs, pending reviews and runner status from the Agents Hub operations catalog (read-only)."
+icon = "bot"
+host = "host.luau"
+window = "window.luau"
+
+[[blocks]]
+id = "panel"
+title = "Agents Hub"
