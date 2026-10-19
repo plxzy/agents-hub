@@ -98,13 +98,16 @@ pending-review count and runner status, plus a run detail. Palette command **Age
 snapshot to the plugin's `tern.kv` for a status-line segment (`Hub 1 running · 3 to review`) and the omp
 widget below. Install and keys: `tern-agents-hub/README.md`.
 
-## `omp-agents-hub/`: a widget above omp's input box
+## `omp-agents-hub/`: a widget below omp's input box
 
 An omp extension (`index.ts`): one line per Hub run that is running or finished in the last 10 minutes
 (`Hub  workflow  running  4m43s`, `… completed 4m10s  PR #42`), nothing otherwise. It reads the snapshot
 `tern-agents-hub` writes (`~/Library/Application Support/Tern/plugin-data/agents-hub/kv.json`, or under
 `$TERN_CONFIG_DIR`) every 5 s and starts no poll of its own, so it shows runs only while Tern runs with that
-plugin and hides a snapshot older than 5 minutes. Verified in Tern's native omp view (omp 18.12.2).
+plugin and hides a snapshot older than 5 minutes. Verified in Tern's native omp view (omp 18.12.2): it sits
+below the input box (above it, Tern's context gauge covered its last line). `/hub-widget` hides or shows it
+and remembers the choice (`~/.config/agents-hub/omp-widget-off` exists while it is off); omp's built-in
+`/hub` is a different thing (omp's own hub overlay).
 Enable: add the absolute path of `plugins/omp-agents-hub` to `extensions` in `~/.omp/agent/config.yml`
 (new omp sessions load it), or try it once with `omp -e plugins/omp-agents-hub/index.ts`.
 
