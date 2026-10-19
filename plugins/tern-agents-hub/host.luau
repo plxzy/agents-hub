@@ -6,7 +6,9 @@
 -- `snapshot` it writes to `tern.kv`.
 --
 -- Keys: ↑/↓ (or k/j) move, Enter opens the run detail, q/Esc closes it,
--- r refreshes. Read-only: ratings, decisions and starts stay in the apps.
+-- Keys: ↑/↓ (or k/j) move runs, p pending reviews, Enter opens the selected
+-- item, q/Esc closes detail, r refreshes. Review decisions require a second
+-- press (or y) after `a`/`x` confirmation.
 
 local ui = tern.ui
 
@@ -14,7 +16,7 @@ local ui = tern.ui
 local SHELL = 'PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" exec agent call "$1" "$2"'
 
 local POLL_MS = 5 * 1000 -- while a run is running
-local POLL_MAX_MS = 60 * 1000 -- quiet: the delay doubles up to this
+local QUIET_POLL_MS = 20 * 1000 -- quiet: keep the status reasonably fresh
 local OUTPUT_LINES = 40 -- head of a run's output in the detail
 local RECENT_S = 10 * 60 -- the snapshot lists runs running or finished this recently
 
@@ -35,9 +37,16 @@ type Run = {
 	ended: number?,
 	cost: number?,
 	pr: number?,
+	step: string?,
 }
 
--- The catalog data, shared by every panel on this host.
+type Pending = {
+	id: string,
+	agent: string,
+	kind: string,
+	body: string,
+}
+
 local hub = {
 	runs = nil :: { Run }?,
 	pending = 0,
@@ -46,12 +55,21 @@ local hub = {
 	fetched = nil :: number?,
 	problem = nil :: string?,
 	loading = false,
+	pending_items = nil :: { Pending }?,
+	review_problem = nil :: string?,
+	notifications = {},
+	previous_status = {} :: { [string]: string },
+	had_initial_poll = false,
 }
 
 type State = {
 	cx: BlockCx,
 	cursor: string?,
 	detail: any, -- nil, or { run_id, run?, error? } while the detail is open
+	review: boolean,
+	review_cursor: string?,
+	review_detail: Pending?,
+	confirm: string?,
 }
 
 -- The live state per pane: Restart reuses the pane id, so the old state retires.
@@ -129,7 +147,7 @@ local function call_agent(op: string, json: string, done: (any, string?) -> ())
 				return
 			end
 			local decoded, data = pcall(tern.json.decode, r.stdout)
-			if decoded and type(data) == "table" then
+			if decoded and data ~= nil then
 				done(data)
 			else
 				done(nil, "agent call " .. op .. " printed no JSON: " .. head(r.stdout, 2))
@@ -156,6 +174,7 @@ local function parse_runs(list: any): { Run }
 				ended = ended,
 				cost = tonumber(item.cost_usd),
 				pr = if publication.status == "published" then tonumber(publication.pr_number) else nil,
+				step = nil,
 			})
 		end
 	end
@@ -189,7 +208,94 @@ local function index_of(state: State): number
 	return 0
 end
 
--- Fetches the catalog, writes the status-line snapshot and re-renders every panel.
+local function progress_step(progress: any): string?
+	if type(progress) ~= "table" then
+		return nil
+	end
+	local text = progress.action or progress.phase
+	if type(text) ~= "string" or text == "" then
+		return nil
+	end
+	text = string.gsub(text, "_", " ")
+	return string.sub(text, 1, 40)
+end
+
+-- Enrich running rows serially; the CLI and runner are deliberately not flooded.
+local function enrich_running(runs: { Run }, i: number, done: () -> ())
+	while i <= #runs and runs[i].status ~= "running" do
+		i += 1
+	end
+	if i > #runs then
+		done()
+		return
+	end
+	local run = runs[i]
+	call_agent("get_run", tern.json.encode({ run_id = run.key }), function(data, _err)
+		if data then
+			run.step = progress_step(data.progress)
+		end
+		enrich_running(runs, i + 1, done)
+	end)
+end
+
+local function terminal(status: string): boolean
+	return status ~= "running"
+end
+
+local function publish(data: any, err: string?, relay: any, runs: { Run })
+	hub.problem = err
+	if data then
+		hub.runs = runs
+		hub.fetched = os.time()
+		hub.status_line = status_line(data)
+		hub.pending = if type(data.pending) == "table" then #data.pending else 0
+		hub.running = 0
+		for _, run in runs do
+			if run.status == "running" then
+				hub.running += 1
+			end
+			local old = hub.previous_status[run.key]
+			if hub.had_initial_poll and terminal(run.status) and (old == "running" or old == nil) then
+				table.insert(hub.notifications, { id = run.key, agent = run.agent, status = run.status, pr = run.pr })
+			end
+			hub.previous_status[run.key] = run.status
+		end
+		hub.had_initial_poll = true
+	end
+	local recent = tern.json.array()
+	for _, run in hub.runs or {} :: { Run } do
+		if #recent < 5 and (run.status == "running" or (run.ended and os.time() - run.ended < RECENT_S)) then
+			table.insert(recent, {
+				id = run.key, agent = run.agent, status = run.status, started = run.started,
+				ended = run.ended, pr = run.pr, step = run.step,
+			})
+		end
+	end
+	local notices = tern.json.array()
+	for _, notice in hub.notifications do
+		table.insert(notices, notice)
+	end
+	pcall(tern.kv.set, "snapshot", {
+		running = hub.running,
+		review = hub.pending,
+		runner = relay.runner,
+		online = relay.online == true,
+		updated = os.time(),
+		problem = err ~= nil,
+		runs = recent,
+		notifications = notices,
+	})
+	for _, state in blocks do
+		if alive(state) then
+			if index_of(state) == 0 then
+				state.cursor = if hub.runs and hub.runs[1] then hub.runs[1].key else nil
+			end
+			state.cx:render()
+		end
+	end
+end
+
+-- Fetches the catalog, then one detail record for each running row.
 local function refresh()
 	if hub.loading then
 		return
@@ -197,63 +303,25 @@ local function refresh()
 	hub.loading = true
 	call_agent("open_dashboard", "{}", function(data, err)
 		hub.loading = false
-		hub.problem = err
 		local relay = if data and type(data.relay) == "table" then data.relay else {}
-		if data then
-			local runs = parse_runs(data.runs)
-			hub.runs = runs
-			hub.fetched = os.time()
-			hub.status_line = status_line(data)
-			hub.pending = if type(data.pending) == "table" then #data.pending else 0
-			hub.running = 0
-			for _, run in runs do
-				if run.status == "running" then
-					hub.running += 1
-				end
-			end
+		if not data then
+			publish(nil, err, relay, hub.runs or {})
+			return
 		end
-		-- What the status segment and the omp widget read (`omp-agents-hub`).
-		local recent = tern.json.array()
-		for _, run in hub.runs or {} :: { Run } do
-			if #recent < 5 and (run.status == "running" or (run.ended and os.time() - run.ended < RECENT_S)) then
-				table.insert(recent, { agent = run.agent, status = run.status, started = run.started, ended = run.ended, pr = run.pr })
-			end
-		end
-		pcall(tern.kv.set, "snapshot", {
-			running = hub.running,
-			review = hub.pending,
-			runner = relay.runner,
-			online = relay.online == true,
-			updated = os.time(),
-			problem = err ~= nil,
-			runs = recent,
-		})
-		for _, state in blocks do
-			if alive(state) then
-				if index_of(state) == 0 then
-					state.cursor = if hub.runs and hub.runs[1] then hub.runs[1].key else nil
-				end
-				state.cx:render()
-			end
-		end
+		local runs = parse_runs(data.runs)
+		enrich_running(runs, 1, function()
+			publish(data, err, relay, runs)
+		end)
 	end)
 end
 
--- The one poller, for the whole host (the status line needs it with no panel
--- open): 5 s while a run is running, doubling to 60 s when quiet.
-local delay = POLL_MS
 local timer: TimerHandle? = nil
 local function poll()
 	refresh()
-	timer = tern.timer(delay, function()
-		delay = if hub.running > 0 then POLL_MS else math.min(delay * 2, POLL_MAX_MS)
-		poll()
-	end)
+	timer = tern.timer(if hub.running > 0 then POLL_MS else QUIET_POLL_MS, poll)
 end
 
--- `r` and a newly opened panel: fetch now and restart the backoff.
 local function restart()
-	delay = POLL_MS
 	if timer then
 		timer:cancel()
 	end

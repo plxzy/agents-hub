@@ -468,7 +468,7 @@ exposes them as the MCP tools `submit_vm_control` and `get_vm_control`, listed a
 `VM_CONTROL_ENABLED` (`HUB_VM_CONTROL_ENABLED=true` at deploy, or `vmControlEnabled` in `hub.json`).
 
 ```
-Hub Worker (Access-verified MCP; principal "hub-mcp" asserted by the Worker, never an argument)
+Hub Worker (Access-verified MCP; the principal is derived from the verified user, never an argument)
   -> runner relay (machine token, one outbound WebSocket)
   -> dok supervisor: VmControlHost -> VmControlSupervisor (grants, durable intent, one control call)
   -> fixed stdio door (vmservice-call, credential on stdin) -> vmservice
@@ -477,6 +477,11 @@ Hub Worker (Access-verified MCP; principal "hub-mcp" asserted by the Worker, nev
 - **Authority stays on the runner.** Doors, credentials, service pins and enrollments come from the runner's own config and
   enrollment, never from a request. No grant, no send: a missing, expired, revoked or mismatched grant is an `admission`
   refusal with `request: null` and the helper is never launched. The Hub stores nothing and keeps no dedupe state.
+- **Identity.** The Worker derives the grant principal from the Access-verified subject of each MCP call:
+  `hub:` + the first 32 hex of SHA-256(`agents-hub:vm-control:v1:` + subject). It is stable, carries no PII and cannot be set by a
+  tool argument, so a grant for one user never serves another, and request keys, recorded intents and reads are per principal. The
+  owner approves grants for that value (`vmControlPrincipal` in `agent-readonly-service/src/vm-control.mjs`). A call without a
+  verified user is refused before it reaches the runner.
 - **Config.** `vmControl: { owners: [...], doors: { "<ref>": { helper, env: { HOME, ... }, credentialFile } }, waitMs? }`; all paths
   absolute, `credentialFile` mode 0600, read once at boot. Unknown members or a bad block stop the boot. State lives under
   `STATE/vm-control/` (`projects/` enrollments and grants, `intents/` dispatch bookkeeping).

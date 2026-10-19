@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { encode, PONG } from '../../agent-workflow/relay-wire.mjs';
 import { validateDevelopment } from '../../agent-workflow/dev-contract.mjs';
 import { createVmControlHost } from '../../agent-workflow/vm-control-host.mjs';
+import { vmControlPrincipal } from '../src/vm-control.mjs';
 
 // The Hub side of plxzy/vm#806: the Worker validates, asserts the principal, forwards over the authenticated runner relay,
 // and returns what the supervisor answers. Everything else (grants, intent record, dedupe) is the runner's, tested there.
@@ -23,8 +24,8 @@ async function hub(t, bindings) {
     compatibilityDate: '2026-10-01', d1Databases: ['DB'], durableObjects: { RELAY: { className: 'AgentRelay', useSQLite: true } },
     bindings: { DOK_RELAY_TOKEN: 'dok-test', DEVELOPMENT_ENABLED: 'true', ...bindings } }] }));
   t.after(() => mf.dispose());
-  const rpc = async (method, params = {}) => (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })).json()).result;
-  return { mf, rpc, tool: (name, args = {}) => rpc('tools/call', { name, arguments: args }), tools: async () => (await rpc('tools/list')).tools.map(x => x.name) };
+  const rpc = async (method, params = {}, owner = 'owner') => (await (await mf.dispatchFetch('https://test/mcp', { method: 'POST', headers: { 'x-test-owner': owner }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })).json()).result;
+  return { mf, rpc, tool: (name, args = {}, owner) => rpc('tools/call', { name, arguments: args }, owner), tools: async () => (await rpc('tools/list')).tools.map(x => x.name) };
 }
 async function runner(mf, session = 'vm-control-session') {
   const res = await mf.dispatchFetch('https://test/relay/dok-dev/connect', { headers: { upgrade: 'websocket', authorization: 'Bearer dok-test',
@@ -67,7 +68,9 @@ test('enabled: requests are validated before the relay, the principal is the Wor
   const pending = tool('submit_vm_control', { request_key: KEY, intent });
   const request = await link.next();
   assert.equal(request.operation, 'vm_control_submit');
-  assert.deepEqual(request.args, { principal: 'hub-mcp', request_key: KEY, intent });
+  const principal = await vmControlPrincipal('owner');
+  assert.match(principal, /^hub:[0-9a-f]{32}$/);
+  assert.deepEqual(request.args, { principal, request_key: KEY, intent });
   const mutationId = 'vmc-' + 'b'.repeat(32);
   const value = { response: { format: 1, request: { ...intent, kind: 'control', mutationId }, state: 'confirmed', source: 'service-door', reply: { status: 200, result: {} }, error: null }, view: null };
   link.answer(request, { ok: true, value }); await link.next();
@@ -76,11 +79,19 @@ test('enabled: requests are validated before the relay, the principal is the Wor
   const read = tool('get_vm_control', { mutation_id: mutationId, refresh: true });
   const get = await link.next();
   assert.equal(get.operation, 'vm_control_get');
-  assert.deepEqual(get.args, { principal: 'hub-mcp', mutation_id: mutationId, refresh: true });
+  assert.deepEqual(get.args, { principal, mutation_id: mutationId, refresh: true });
   link.answer(get, { ok: false, kind: 'rejected', error: 'bad-request: unknown intent' }); await link.next();
   const refused = await read;
   assert.equal(refused.isError, true);
   assert.match(text(refused), /unknown intent/);
+  // Another verified user gets another principal, so the runner never maps two users onto one grant.
+  const other = tool('submit_vm_control', { request_key: KEY, intent }, 'user-b');
+  const otherRequest = await link.next();
+  assert.match(otherRequest.args.principal, /^hub:[0-9a-f]{32}$/);
+  assert.notEqual(otherRequest.args.principal, principal);
+  assert.equal(otherRequest.args.principal, await vmControlPrincipal('user-b'));
+  link.answer(otherRequest, { ok: false, kind: 'rejected', error: 'no grant' }); await link.next();
+  assert.equal((await other).isError, true);
   link.ws.close();
 });
 
@@ -116,7 +127,7 @@ test('end to end: Worker, relay, supervisor host, real grants and the stdio door
   host.enrollment.enroll('fixture-owner', 'fixture-project', { hostId: 'fixture-host', service: 'fixture-service', doorRef: 'door-1', workers: ['container'],
     targets: ['backing', 'browser'], operations: ['start', 'stop', 'restart'] });
   for (const mode of ['mutate', 'read']) {
-    const pending = host.enrollment.request('hub-mcp', `req-${mode}`, { projectId: 'fixture-project', mode });
+    const pending = host.enrollment.request(await vmControlPrincipal('owner'), `req-${mode}`, { projectId: 'fixture-project', mode });
     host.enrollment.decide('fixture-owner', pending.grant_id, 'approve', host.enrollment.issue('fixture-owner', pending.grant_id, 'approve'));
   }
   const calls = () => (fs.existsSync(path.join(fixture, 'calls.jsonl')) ? fs.readFileSync(path.join(fixture, 'calls.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l)) : []);
@@ -162,5 +173,19 @@ test('end to end: Worker, relay, supervisor host, real grants and the stdio door
   assert.equal(controls(), 2, 'the repeated key read the original outcome and sent nothing');
   assert.equal(JSON.parse(text(await tool('submit_vm_control', { request_key: KEY, intent: other }))).response.error.code, 'request-key-conflict');
   assert.equal(controls(), 2);
+  // Another verified user holds no grant: refused at admission, the helper is never launched, and the first user's intent is unreadable.
+  const stranger = JSON.parse(text(await tool('submit_vm_control', { request_key: 'request-key-0003', intent }, 'user-b')));
+  assert.equal(stranger.response.source, 'admission');
+  assert.equal(stranger.response.request, null);
+  assert.equal(controls(), 2);
+  assert.equal((await tool('get_vm_control', { mutation_id: id }, 'user-b')).isError, true);
   link.ws.close();
+});
+
+test('the principal is stable per verified user, carries no subject text, and needs a verified user', async () => {
+  const a = await vmControlPrincipal('user-a@example.test');
+  assert.equal(a, await vmControlPrincipal('user-a@example.test'));
+  assert.notEqual(a, await vmControlPrincipal('user-b@example.test'));
+  assert.doesNotMatch(a, /user|example/);
+  for (const none of [null, undefined, '', 7]) await assert.rejects(vmControlPrincipal(none), /authenticated user/);
 });

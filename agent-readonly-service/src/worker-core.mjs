@@ -203,7 +203,7 @@ export async function apiFetch(request, env, dashboardHtml = '', owner = null) {
       // VM worker control: the runner's grants decide; the Hub only forwards. Listed and callable only with VM_CONTROL_ENABLED.
       if (['submit_vm_control', 'get_vm_control'].includes(params?.name)) {
         try {
-          const value = params.name === 'submit_vm_control' ? await submitVmControl(env, params.arguments ?? {}) : await getVmControl(env, params.arguments ?? {});
+          const value = params.name === 'submit_vm_control' ? await submitVmControl(env, owner, params.arguments ?? {}) : await getVmControl(env, owner, params.arguments ?? {});
           return reply({ content: [{ type: 'text', text: JSON.stringify(value) }] });
         } catch (e) { return reply({ content: [{ type: 'text', text: 'error: ' + e.message }], isError: true }); }
       }

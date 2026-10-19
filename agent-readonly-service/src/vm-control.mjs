@@ -5,9 +5,14 @@
 import { validateRelay } from '../../agent-workflow/relay-contract.mjs';
 import { ContractError, validateIntent } from '../../agent-workflow/vm-control-contract.mjs';
 
-/** The principal the runner's grants are keyed by. The Worker asserts it for requests that arrived through the
- *  Access-verified MCP endpoint; a tool argument can never set or change it. */
-export const MCP_PRINCIPAL = 'hub-mcp';
+/** The principal the runner's grants and request keys are scoped to: one stable, non-PII id per Access-verified user,
+ *  `hub:` + 32 hex of SHA-256("agents-hub:vm-control:v1:" + Access subject). The owner approves grants for this value. It
+ *  is derived only from the verified subject, so a tool argument can never set it and one user's grant never serves another. */
+export async function vmControlPrincipal(owner) {
+  if (typeof owner !== 'string' || !owner) throw new Error('VM control needs an authenticated user');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('agents-hub:vm-control:v1:' + owner));
+  return 'hub:' + Array.from(new Uint8Array(digest).subarray(0, 16), n => n.toString(16).padStart(2, '0')).join('');
+}
 export const vmControlEnabled = env => Boolean(env.DOK_RELAY_TOKEN && env.RELAY && env.DEVELOPMENT_ENABLED === 'true' && env.VM_CONTROL_ENABLED === 'true');
 
 async function call(env, operation, args) {
@@ -21,16 +26,18 @@ async function call(env, operation, args) {
   throw new Error(result.error);
 }
 
-export async function submitVmControl(env, args) {
+export async function submitVmControl(env, owner, args) {
+  const principal = await vmControlPrincipal(owner);
   validateRelay('submit_vm_control', args);
   // Strict intent validation here too, so a malformed request never occupies the runner's ordered command queue.
   let intent;
   try { intent = validateIntent(args.intent); }
   catch (e) { throw new Error(e instanceof ContractError ? `Invalid intent: ${e.detail}` : 'Invalid intent'); }
-  return call(env, 'vm_control_submit', { principal: MCP_PRINCIPAL, request_key: args.request_key, intent });
+  return call(env, 'vm_control_submit', { principal, request_key: args.request_key, intent });
 }
 
-export async function getVmControl(env, args) {
+export async function getVmControl(env, owner, args) {
+  const principal = await vmControlPrincipal(owner);
   validateRelay('get_vm_control', args);
-  return call(env, 'vm_control_get', { principal: MCP_PRINCIPAL, mutation_id: args.mutation_id, ...(args.refresh === undefined ? {} : { refresh: args.refresh }) });
+  return call(env, 'vm_control_get', { principal, mutation_id: args.mutation_id, ...(args.refresh === undefined ? {} : { refresh: args.refresh }) });
 }
