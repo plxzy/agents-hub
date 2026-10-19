@@ -90,6 +90,12 @@ while the installation record still pointed to the old cached version; the updat
 visible **Source: Agents Hub** / **Agents** tab establish that the new panel loaded. Evidence:
 `../evidence/2026-10-13-claude-panel-activation/README.md`.
 
+## `tern-agents-hub/`: a native panel in Tern
+
+A read-only Tern block (Luau): runs newest first with status, agent, duration, cost and PR number, the
+pending-review count and runner status, plus a run detail. Palette command **Agents Hub**. Data:
+`agent call open_dashboard | get_run`. Install and keys: `tern-agents-hub/README.md`.
+
 ## Hosted Agents Hub (account App)
 
 ChatGPT, Dots and claude.ai connect to the Hub's `/mcp` URL as an account App /

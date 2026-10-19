@@ -10,20 +10,24 @@ make them.
 ## Install
 
 ```sh
-tern plugin link ~/Development/agents-hub/plugins/tern-agents-hub
+tern plugin link "$PWD/plugins/tern-agents-hub"   # from the repository root
 tern plugin reload
 ```
 
-Open it from the palette: **Agents Hub** (or `⌘⌥⇧H` on macOS). The block polls every 5 s while
-something is running, backing off to 30 s when quiet and 60 s after an error.
+Open it from the palette: **Agents Hub** (or `⌘⌥⇧H` on macOS); it opens beside the current pane, or
+focuses the one already open. The block polls every 5 s while a run is running and doubles the
+delay up to 60 s when nothing is; it stops polling when its pane closes. `agent` is looked up in
+`~/.local/bin`, Homebrew and `PATH`. Errors show inline in the panel.
 
 ## Keys
 
-- `↑/↓` or `k/j` move, `⏎` opens the run's detail (model, usage, PR link, output, progress),
+- `↑/↓` or `k/j` move, `⏎` opens the run's detail (status, model, cost, PR link, progress rows,
+  the head of the output),
 - `q`/`Esc` closes the detail, `r` refreshes.
 
 ## Development
 
-Luau types for luau-lsp: `tern plugin types plugins/tern-agents-hub` (writes `tern.d.luau`,
-git-ignored). After edits: `tern plugin reload`. Layout and idioms follow the SDK's
-`plugins/examples/review-queue`.
+Luau types for luau-lsp: `tern plugin types plugins/tern-agents-hub` writes `tern.d.luau`
+(git-ignored; rerun after a Tern update), then
+`luau-lsp analyze --definitions=tern.d.luau host.luau window.luau` in the plugin folder. After
+edits: `tern plugin reload`. Layout and idioms follow the SDK's `plugins/examples/review-queue`.
