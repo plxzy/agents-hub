@@ -1,7 +1,9 @@
 --!strict
 -- The `panel` block: Agents Hub runs, pending-review count and runner status,
--- read from the operations catalog via `agent call open_dashboard` (one op per
--- poll) and `agent call get_run` for a run's detail.
+-- read from the operations catalog via `agent call open_dashboard` and
+-- `agent call get_run` for a run's detail. One host-wide loop polls; every
+-- open panel renders from its data and the window's status segment reads the
+-- `snapshot` it writes to `tern.kv`.
 --
 -- Keys: ↑/↓ (or k/j) move, Enter opens the run detail, q/Esc closes it,
 -- r refreshes. Read-only: ratings, decisions and starts stay in the apps.
@@ -14,6 +16,7 @@ local SHELL = 'PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" ex
 local POLL_MS = 5 * 1000 -- while a run is running
 local POLL_MAX_MS = 60 * 1000 -- quiet: the delay doubles up to this
 local OUTPUT_LINES = 40 -- head of a run's output in the detail
+local RECENT_S = 10 * 60 -- the snapshot lists runs running or finished this recently
 
 local TONES: { [string]: string } = {
 	completed = "success",
@@ -34,19 +37,21 @@ type Run = {
 	pr: number?,
 }
 
+-- The catalog data, shared by every panel on this host.
+local hub = {
+	runs = nil :: { Run }?,
+	pending = 0,
+	running = 0,
+	status_line = "loading…",
+	fetched = nil :: number?,
+	problem = nil :: string?,
+	loading = false,
+}
+
 type State = {
 	cx: BlockCx,
-	runs: { Run }?,
-	pending: number,
-	running: number,
-	status_line: string,
 	cursor: string?,
 	detail: any, -- nil, or { run_id, run?, error? } while the detail is open
-	loading: boolean,
-	fetched: number?,
-	problem: string?,
-	delay: number,
-	timer: TimerHandle?,
 }
 
 -- The live state per pane: Restart reuses the pane id, so the old state retires.
@@ -162,22 +167,21 @@ local function parse_runs(list: any): { Run }
 end
 
 local function status_line(data: any): string
-	local hub = if data.source == "hub" then "Hub" else "Hub unreachable (local data)"
+	local name = if data.source == "hub" then "Hub" else "Hub unreachable (local data)"
 	local relay = data.relay
 	if type(relay) ~= "table" then
-		return hub
+		return name
 	end
 	local runner = tostring(relay.runner or "runner")
 	if relay.online ~= true then
-		return hub .. " · " .. runner .. " offline"
+		return name .. " · " .. runner .. " offline"
 	end
 	local agents = if type(relay.agents) == "table" then #relay.agents else 0
-	return hub .. " · " .. runner .. " online · " .. agents .. " agents"
+	return name .. " · " .. runner .. " online · " .. agents .. " agents"
 end
 
 local function index_of(state: State): number
-	local runs: { Run } = state.runs or {}
-	for i, run in runs do
+	for i, run in hub.runs or {} :: { Run } do
 		if run.key == state.cursor then
 			return i
 		end
@@ -185,48 +189,75 @@ local function index_of(state: State): number
 	return 0
 end
 
-local function refresh(state: State)
-	if state.loading or not alive(state) then
+-- Fetches the catalog, writes the status-line snapshot and re-renders every panel.
+local function refresh()
+	if hub.loading then
 		return
 	end
-	state.loading = true
+	hub.loading = true
 	call_agent("open_dashboard", "{}", function(data, err)
-		if not alive(state) then
-			return
-		end
-		state.loading = false
-		state.problem = err
+		hub.loading = false
+		hub.problem = err
+		local relay = if data and type(data.relay) == "table" then data.relay else {}
 		if data then
 			local runs = parse_runs(data.runs)
-			state.runs = runs
-			state.fetched = os.time()
-			state.status_line = status_line(data)
-			state.pending = if type(data.pending) == "table" then #data.pending else 0
-			state.running = 0
+			hub.runs = runs
+			hub.fetched = os.time()
+			hub.status_line = status_line(data)
+			hub.pending = if type(data.pending) == "table" then #data.pending else 0
+			hub.running = 0
 			for _, run in runs do
 				if run.status == "running" then
-					state.running += 1
+					hub.running += 1
 				end
 			end
-			if index_of(state) == 0 then
-				state.cursor = if runs[1] then runs[1].key else nil
+		end
+		-- What the status segment and the omp widget read (`omp-agents-hub`).
+		local recent = tern.json.array()
+		for _, run in hub.runs or {} :: { Run } do
+			if #recent < 5 and (run.status == "running" or (run.ended and os.time() - run.ended < RECENT_S)) then
+				table.insert(recent, { agent = run.agent, status = run.status, started = run.started, ended = run.ended, pr = run.pr })
 			end
 		end
-		state.cx:render()
+		pcall(tern.kv.set, "snapshot", {
+			running = hub.running,
+			review = hub.pending,
+			runner = relay.runner,
+			online = relay.online == true,
+			updated = os.time(),
+			problem = err ~= nil,
+			runs = recent,
+		})
+		for _, state in blocks do
+			if alive(state) then
+				if index_of(state) == 0 then
+					state.cursor = if hub.runs and hub.runs[1] then hub.runs[1].key else nil
+				end
+				state.cx:render()
+			end
+		end
 	end)
 end
 
--- One timer per block: 5 s while something runs, doubling to 60 s when quiet.
-local function poll(state: State)
-	state.timer = tern.timer(state.delay, function()
-		state.timer = nil
-		if not alive(state) then
-			return
-		end
-		refresh(state)
-		state.delay = if state.running > 0 then POLL_MS else math.min(state.delay * 2, POLL_MAX_MS)
-		poll(state)
+-- The one poller, for the whole host (the status line needs it with no panel
+-- open): 5 s while a run is running, doubling to 60 s when quiet.
+local delay = POLL_MS
+local timer: TimerHandle? = nil
+local function poll()
+	refresh()
+	timer = tern.timer(delay, function()
+		delay = if hub.running > 0 then POLL_MS else math.min(delay * 2, POLL_MAX_MS)
+		poll()
 	end)
+end
+
+-- `r` and a newly opened panel: fetch now and restart the backoff.
+local function restart()
+	delay = POLL_MS
+	if timer then
+		timer:cancel()
+	end
+	poll()
 end
 
 local function show_detail(state: State, run_id: string)
@@ -244,7 +275,7 @@ end
 local LIST_ID = "main.runs."
 
 local function list_view(state: State): Node
-	local runs = state.runs :: { Run }
+	local runs = hub.runs :: { Run }
 	local items: { Item } = {}
 	for _, run in runs do
 		local value: { Span | string } = {}
@@ -326,17 +357,17 @@ local function detail_view(detail: any): Node
 end
 
 local function dock_view(state: State): Node
-	local line: { Span | string } = { ui.span(state.status_line, "muted") }
-	if state.running > 0 then
-		table.insert(line, ui.span("  " .. state.running .. " running", "accent"))
+	local line: { Span | string } = { ui.span(hub.status_line, "muted") }
+	if hub.running > 0 then
+		table.insert(line, ui.span("  " .. hub.running .. " running", "accent"))
 	end
-	table.insert(line, ui.span("  " .. state.pending .. " to review", if state.pending > 0 then "warning" else "muted"))
-	if state.fetched then
-		table.insert(line, ui.span("  updated " .. os.date("%H:%M", state.fetched), "muted"))
+	table.insert(line, ui.span("  " .. hub.pending .. " to review", if hub.pending > 0 then "warning" else "muted"))
+	if hub.fetched then
+		table.insert(line, ui.span("  updated " .. os.date("%H:%M", hub.fetched), "muted"))
 	end
 	local lines: { Node } = { ui.text(line) }
-	if state.problem then
-		table.insert(lines, ui.text({ ui.span(state.problem, "error") }))
+	if hub.problem then
+		table.insert(lines, ui.text({ ui.span(hub.problem, "error") }))
 	end
 	if not state.detail then
 		table.insert(lines, ui.text({ ui.span("j/k move  ⏎ detail  r refresh", "dim") }))
@@ -346,27 +377,10 @@ end
 
 tern.block.define("panel", {
 	init = function(cx: BlockCx, _args: { string }, _saved: any): State
-		local previous = blocks[cx.pane]
-		if previous and previous.timer then
-			previous.timer:cancel()
-		end
-		local state: State = {
-			cx = cx,
-			runs = nil,
-			pending = 0,
-			running = 0,
-			status_line = "loading…",
-			cursor = nil,
-			detail = nil,
-			loading = false,
-			fetched = nil,
-			problem = nil,
-			delay = POLL_MS,
-			timer = nil,
-		}
+		local first = if hub.runs and hub.runs[1] then hub.runs[1].key else nil
+		local state: State = { cx = cx, cursor = first, detail = nil }
 		blocks[cx.pane] = state
-		refresh(state)
-		poll(state)
+		restart()
 		return state
 	end,
 
@@ -374,15 +388,15 @@ tern.block.define("panel", {
 		local main: Node
 		if state.detail then
 			main = detail_view(state.detail)
-		elseif state.runs then
+		elseif hub.runs then
 			main = list_view(state)
-		elseif state.problem then
-			main = ui.text({ ui.span(state.problem, "error"), ui.span("  r retry", "dim") })
+		elseif hub.problem then
+			main = ui.text({ ui.span(hub.problem, "error"), ui.span("  r retry", "dim") })
 		else
 			main = ui.progress(nil, "Loading Agents Hub…")
 		end
 		-- A region draws its root's children, so wrap the view (see review-queue).
-		return { main = ui.col({ main }), dock = if state.runs then dock_view(state) else nil }
+		return { main = ui.col({ main }), dock = if hub.runs then dock_view(state) else nil }
 	end,
 
 	key = function(state: State, key: Key, _cx: BlockCx): boolean?
@@ -400,7 +414,7 @@ tern.block.define("panel", {
 			end
 			return true
 		end
-		local runs = state.runs or {}
+		local runs = hub.runs or {}
 		local step = if key.name == "up" or k == "k" then -1 elseif key.name == "down" or k == "j" then 1 else 0
 		if step ~= 0 then
 			local run = runs[math.clamp(index_of(state) + step, 1, math.max(1, #runs))]
@@ -410,8 +424,7 @@ tern.block.define("panel", {
 		elseif key.name == "enter" and state.cursor then
 			show_detail(state, state.cursor)
 		elseif k == "r" then
-			state.delay = POLL_MS
-			refresh(state)
+			restart()
 		else
 			return false
 		end
@@ -428,3 +441,5 @@ tern.block.define("panel", {
 		end
 	end,
 })
+
+poll()
