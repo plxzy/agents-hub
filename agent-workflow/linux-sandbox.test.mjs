@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { inside, linuxPolicy, sandboxArgs, sandboxExecute } from './linux-sandbox.mjs';
+import { freezeLinuxTools, inside, linuxPolicy, sandboxArgs, sandboxExecute } from './linux-sandbox.mjs';
 
 test('sandbox mount policy rejects writable tool/runtime roots', () => {
   const p = { workspace: '/home/project', release: '/home/release', runtime: '/home/runtime', sdk: '/home/runtime/index.js', protected: [] };
@@ -42,6 +42,18 @@ test('the sandbox mounts a frozen synthetic passwd identity', () => {
   assert.ok(!mounts.some(([, target]) => target === '/etc'), 'whole host /etc must not be mounted');
   assert.ok(!mounts.some(([source]) => source === '/etc/passwd' || source === '/etc/group'), 'host passwd/group is never the source');
   assert.ok(args.includes('/home/agent'), 'the home the passwd entry records exists');
+});
+
+test('freezeLinuxTools writes the identity files inside the frozen release', () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'linux-sandbox-freeze-'));
+  const { dir: release } = freezeLinuxTools(state);
+  for (const target of ['passwd', 'group']) {
+    const frozen = path.join(release, 'sandbox-identity', target);
+    assert.ok(fs.existsSync(frozen), `frozen identity file ${frozen}`);
+    assert.ok(fs.statSync(frozen).mode & 0o400, 'frozen identity file is readable');
+    assert.ok(fs.readFileSync(frozen, 'utf8').length > 0);
+  }
+  assert.ok(fs.readdirSync(release).includes('sandbox-identity'));
 });
 
 test('restored Python dependencies join the sandbox PYTHONPATH', () => {

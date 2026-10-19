@@ -39,7 +39,10 @@ export function freezeLinuxTools(state) {
     const file = path.join(dir, name);
     if (fs.existsSync(file)) {
       if (!fs.readFileSync(file).equals(data)) throw new Error('Frozen tool release changed');
-    } else fs.writeFileSync(file, data, { flag: 'wx', mode: 0o400 });
+    } else {
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(file, data, { flag: 'wx', mode: 0o400 });
+    }
   }
   return { dir, revision };
 }
