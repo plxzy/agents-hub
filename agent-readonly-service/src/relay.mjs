@@ -83,6 +83,7 @@ export async function dokStatus(env) {
   catch { return { online: false, enabled: false, agents: [], available: false }; }
 }
 const NEXT = 'Poll get_run with this run_id until status is no longer running (usually one to a few minutes). Do not start a duplicate run.';
+const refused = (message) => Object.assign(new Error(message), { refused: true });
 
 /** Starts a run on dok, the always-on runner. */
 export async function startRun(env, args, { mac = false } = {}) {
@@ -92,19 +93,20 @@ export async function startRun(env, args, { mac = false } = {}) {
   validateRelay('start_run', publicArgs);
   const dok = await dokStatus(env);
   if (dok.online && dok.agents.includes(args.agent)) {
-    if (args.continue) throw new Error('continue is not supported on dok yet; start a new run and include the needed context in the task. No action was queued.');
+    if (args.continue) throw refused('continue is not supported on dok yet; start a new run and include the needed context in the task. No action was queued.');
     const result = await env.RELAY.getByName('owner-dok-dev').dispatch('run_start', { request_id: args.request_id, agent: args.agent, task: args.task,
       ...(args.model ? { model: args.model } : {}), ...(args.thinking ? { thinking: args.thinking } : {}),
       ...(args.pr_number ? { pr_number: args.pr_number } : {}), ...(args.issue_number ? { issue_number: args.issue_number } : {}),
       ...(args.repo ? { repo: args.repo } : {}), ...(args.continue_from ? { continue_from: args.continue_from } : {}),
       ...(connection ? { mcp_connection: connection } : {}) });
-    if (!result.ok) throw new Error(result.error);
+    // A runner rejection happens before execution and is final; interrupted or lost answers stay ambiguous.
+    if (!result.ok) throw result.kind === 'rejected' ? refused(result.error) : new Error(result.error);
     try { await storeRun(env, result.value, 'dok'); } catch { /* dok also posts its receipt */ }
     return { run_id: result.value.run_id, agent: args.agent, status: result.value.status, runner: 'dok', ...(result.value.repo ? { repo: result.value.repo } : {}), model: result.value.model, thinking: result.value.thinking, next_step: NEXT };
   }
-  if (args.agent === 'workflow' && !dok.online) throw new Error('workflow runs on dok, which is offline. For interactive development call request_development to show the approval card when dok is online. No task was started.');
+  if (args.agent === 'workflow' && !dok.online) throw refused('workflow runs on dok, which is offline. For interactive development call request_development to show the approval card when dok is online. No task was started.');
   const offered = dok.online ? dok.agents : [];
-  throw new Error(dok.online ? `dok does not run ${args.agent}; it offers: ${offered.join(', ') || 'none'}. No action was queued.`
+  throw refused(dok.online ? `dok does not run ${args.agent}; it offers: ${offered.join(', ') || 'none'}. No action was queued.`
     : 'No runner is online (dok is offline). No action was queued.');
 }
 
@@ -129,7 +131,10 @@ async function macRoute(request, env, pathname, readPanel) {
       const agent = target.agents.find(a => a.name === args.agent);
       if (!target.available || !agent || agent.reason) return json({ error: target.reason ?? agent?.reason ?? 'Agent is not runnable on dok' }, 409);
       try { return json(await startRun(env, { ...args, request_id: 'mac-' + args.request_id }, { mac: true })); }
-      catch { return json({ error: 'Start response unavailable or refused. Check the original request before submitting another task.', request_id: args.request_id }, 503); }
+      catch (e) {
+        if (e.refused) return json({ error: e.message, request_id: args.request_id }, 409);
+        return json({ error: 'Start response unavailable or refused. Check the original request before submitting another task.', request_id: args.request_id }, 503);
+      }
     }
     if (pathname.startsWith('/relay/mac/starts/') && get) {
       const externalId = pathname.slice('/relay/mac/starts/'.length);

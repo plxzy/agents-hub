@@ -67,6 +67,18 @@ test('Mac selected starts use dok admission, scoped identity and read-only recov
     const refused = await call('start', { ...args, request_id: 'selection-bad-follow', ...bad });
     assert.equal(refused.status, 400, JSON.stringify(bad));
   }
+  // A runner rejection is final and keeps its reason; an interrupted answer stays ambiguous.
+  const denied = call('start', { ...args, request_id: 'selection-denied', pr_number: 802 });
+  const d = await next(); assert.equal(d.operation, 'run_start');
+  send({ type: 'result', attempt: d.attempt, id: d.id, result: { ok: false, kind: 'rejected', error: 'PR continuation unavailable; check publication and PR state' } });
+  assert.equal((await next()).type, 'ack');
+  const deniedRes = await denied;
+  assert.equal(deniedRes.status, 409); assert.equal((await deniedRes.json()).error, 'PR continuation unavailable; check publication and PR state');
+  const lost = call('start', { ...args, request_id: 'selection-lost' });
+  const l = await next(); assert.equal(l.operation, 'run_start');
+  send({ type: 'result', attempt: l.attempt, id: l.id, result: { ok: false, kind: 'interrupted', error: 'Local command interrupted; inspect the journal before retrying.' } });
+  assert.equal((await next()).type, 'ack');
+  assert.equal((await lost).status, 503);
   const lookup = call('starts/missing-from-hub');
   const q = await next(); assert.equal(q.operation, 'run_lookup'); assert.equal(q.args.target_request_id, 'mac-missing-from-hub');
   send({ type: 'result', attempt: q.attempt, id: q.id, result: { ok: true, value: { state: 'not_found' } } });
