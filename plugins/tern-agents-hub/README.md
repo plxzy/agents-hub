@@ -1,11 +1,10 @@
 # tern-agents-hub
 
 A [Tern](https://docs.stencil.so/tern) plugin that puts the Agents Hub in a native side panel:
-runs (newest first, with status, agent, duration, cost and PR number), pending-review count and
-runner status. The data comes from the operations catalog — one `agent call open_dashboard`
-per poll, `agent call get_run` for a run's detail — so it reads exactly what the other Agents Hub
-panels read. Read-only: ratings, memory decisions and starting runs stay in the apps where you
-make them.
+runs (newest first, with status, agent, duration, cost, current running step and PR number), pending-review
+count and runner status. The data comes from the operations catalog — one `agent call open_dashboard`
+per poll, then one serial `agent call get_run` per running run for its progress step. The panel also
+lists pending reviews and can accept or reject a selected item after confirmation.
 
 ## Install
 
@@ -20,17 +19,21 @@ focuses the one already open. The status line shows `Hub 1 running · 3 to revie
 panel). Tern's status bar is off by default: turn it on (`status_bar` in Tern's settings) to see it.
 
 One poll loop runs in the host half for as long as the plugin is loaded: every 5 s while a run is
-running, doubling the delay up to 60 s when nothing is (opening a panel or `r` polls at once). It
-writes a small `snapshot` (counts, runner, updated time, runs running or finished in the last 10
-minutes) to the plugin's `tern.kv`, which the status segment and the omp widget (`../omp-agents-hub`)
-read; open panels render from the same fetch. `agent` is looked up in
-`~/.local/bin`, Homebrew and `PATH`. Errors show inline in the panel.
+running, every 20 s when quiet (opening a panel or `r` polls at once). It writes a small `snapshot`
+(counts, runner, updated time, and runs running or finished in the last 10 minutes) to the plugin's
+`tern.kv`, which the status segment and the omp widget (`../omp-agents-hub`) read; each run has `id`,
+`agent`, `status`, `started`, optional `ended`, optional published `pr`, and running `step` (the
+progress action or phase, with underscores replaced and capped at 40 characters). Terminal runs
+transitioning from running produce one window toast. Open panels render from the same fetch. Errors
+show inline in the panel.
 
 ## Keys
 
-- `↑/↓` or `k/j` move, `⏎` opens the run's detail (status, model, cost, PR link, progress rows,
-  the head of the output),
-- `q`/`Esc` closes the detail, `r` refreshes.
+- `↑/↓` or `k/j` move runs; `⏎` opens the selected run's detail (status, model, cost, PR link, current
+  step, progress rows and the head of the output).
+- `p` opens pending reviews; `↑/↓` or `k/j` selects an item, `⏎` shows its full body, `q`/`Esc` goes
+  back, and `a`/`x` then the same key (or `y`) confirms accept/reject. `r` refreshes the current view.
+- `q`/`Esc` closes run detail.
 
 ## Development
 

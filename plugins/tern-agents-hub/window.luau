@@ -58,13 +58,28 @@ tern.chrome.status(function(_pane: StatusPaneInfo): { StatusSegment }?
 	return { { text = "Hub " .. table.concat(parts, " · "), icon = "bot", tone = if snap.problem then "error" else nil, command = ACTION } }
 end)
 
--- Redraw when the host wrote a new snapshot (it polls every 5–60 s).
-local seen: number? = nil
+-- Redraw when the host wrote a new snapshot and notify once for each terminal
+-- run event. The host omits events from its initial terminal-only poll.
+local seen: { [string]: boolean } = {}
+local notifications_ready = false
+local seen_updated: number? = nil
 local function watch()
-	tern.timer(5000, function()
+	tern.timer(5000, function(cx: WindowCx?)
 		local snap = snapshot()
-		if snap and snap.updated ~= seen then
-			seen = snap.updated
+		if snap and snap.updated ~= seen_updated then
+			seen_updated = snap.updated
+			if type(snap.notifications) == "table" then
+				for _, notice in snap.notifications do
+					if type(notice) == "table" and type(notice.id) == "string" then
+						if notifications_ready and cx and not seen[notice.id] then
+							local pr = if notice.pr then "  PR #" .. tostring(notice.pr) else ""
+							cx:toast("info", "Agents Hub: " .. tostring(notice.agent) .. " " .. tostring(notice.status) .. pr, nil)
+						end
+						seen[notice.id] = true
+					end
+				end
+				notifications_ready = true
+			end
 			tern.chrome.refresh()
 		end
 		watch()
