@@ -57,6 +57,7 @@ local hub = {
 	loading = false,
 	pending_items = nil :: { Pending }?,
 	review_problem = nil :: string?,
+	review_result = nil :: string?,
 	notifications = {},
 	previous_status = {} :: { [string]: string },
 	had_initial_poll = false,
@@ -238,9 +239,12 @@ local function enrich_running(runs: { Run }, i: number, done: () -> ())
 	end)
 end
 
-local function terminal(status: string): boolean
-	return status ~= "running"
+-- A transient "unknown" status is not an end.
+local function terminal(status: string?): boolean
+	return status == "completed" or status == "failed" or status == "interrupted" or status == "cancelled"
 end
+local timer: TimerHandle? = nil
+local poll: () -> ()
 
 local function publish(data: any, err: string?, relay: any, runs: { Run })
 	hub.problem = err
@@ -255,8 +259,12 @@ local function publish(data: any, err: string?, relay: any, runs: { Run })
 				hub.running += 1
 			end
 			local old = hub.previous_status[run.key]
-			if hub.had_initial_poll and terminal(run.status) and (old == "running" or old == nil) then
+			if hub.had_initial_poll and terminal(run.status) and not terminal(old) then
 				table.insert(hub.notifications, { id = run.key, agent = run.agent, status = run.status, pr = run.pr })
+				-- The window toasts each id once; it only needs recent events.
+				if #hub.notifications > 20 then
+					table.remove(hub.notifications, 1)
+				end
 			end
 			hub.previous_status[run.key] = run.status
 		end
@@ -293,6 +301,17 @@ local function publish(data: any, err: string?, relay: any, runs: { Run })
 			state.cx:render()
 		end
 	end
+	if timer then
+		timer:cancel()
+	end
+	-- Stay fast while a run is running and for a minute after one ended (publication and PR numbers land then).
+	local active = hub.running > 0
+	for _, run in hub.runs or {} :: { Run } do
+		if run.ended and os.time() - run.ended < 60 then
+			active = true
+		end
+	end
+	timer = tern.timer(if active then POLL_MS else QUIET_POLL_MS, poll)
 end
 
 -- Fetches the catalog, then one detail record for each running row.
@@ -315,10 +334,8 @@ local function refresh()
 	end)
 end
 
-local timer: TimerHandle? = nil
-local function poll()
+poll = function()
 	refresh()
-	timer = tern.timer(if hub.running > 0 then POLL_MS else QUIET_POLL_MS, poll)
 end
 
 local function restart()
@@ -327,6 +344,7 @@ local function restart()
 	end
 	poll()
 end
+
 
 local function show_detail(state: State, run_id: string)
 	local detail = { run_id = run_id }
@@ -339,6 +357,110 @@ local function show_detail(state: State, run_id: string)
 		end
 	end)
 end
+local function parse_pending(data: any): { Pending }
+	local items: { Pending } = {}
+	for _, item in if type(data) == "table" then data else {} do
+		if type(item) == "table" and type(item.id) == "string" then
+			table.insert(items, {
+				id = item.id,
+				agent = tostring(item.agent or "?"),
+				kind = tostring(item.kind or "review"),
+				body = tostring(item.body or item.why or ""),
+			})
+		end
+	end
+	return items
+end
+
+local function load_pending(state: State, result: string?, result_error: string?)
+	state.review = true
+	state.review_detail = nil
+	state.confirm = nil
+	hub.review_problem = result_error
+	hub.review_result = result
+	call_agent("list_pending", "{}", function(data, err)
+		if alive(state) and state.review then
+			hub.pending_items = if data then parse_pending(data) else nil
+			hub.review_problem = err or hub.review_problem
+			if hub.pending_items and #hub.pending_items > 0 then
+				state.review_cursor = hub.pending_items[1].id
+			else
+				state.review_cursor = nil
+			end
+			state.cx:render()
+		end
+	end)
+end
+
+local function pending_index(state: State): number
+	for i, item in hub.pending_items or {} :: { Pending } do
+		if item.id == state.review_cursor then
+			return i
+		end
+	end
+	return 0
+end
+
+local function decide(state: State, decision: string)
+	local item = state.review_detail
+	if not item then
+		return
+	end
+	state.confirm = nil
+	call_agent("review_decide", tern.json.encode({ id = item.id, decision = decision }), function(data, err)
+		if alive(state) then
+			state.review_detail = nil
+			load_pending(state, if err then nil else tostring(data), err)
+		end
+	end)
+end
+
+local REVIEW_ID = "main.review."
+
+local function pending_view(state: State): Node
+	if state.review_detail then
+		local item = state.review_detail
+		local children: { Node } = {
+			ui.kv({ { "id", item.id }, { "agent", item.agent }, { "kind", item.kind } }),
+			ui.rule("body"),
+			ui.md(item.body ~= "" and item.body or "(empty)"),
+		}
+		if state.confirm then
+			table.insert(children, ui.text({ ui.span("press " .. state.confirm .. " again or y to confirm", "warning") }))
+		else
+			table.insert(children, ui.text({ ui.span("a accept  x reject  q back", "dim") }))
+		end
+		return ui.col(children)
+	end
+	if hub.review_problem then
+		return ui.col({ ui.text({ ui.span(hub.review_problem, "error") }), ui.text({ ui.span("r retry  q close", "dim") }) })
+	end
+	if not hub.pending_items then
+		return ui.progress(nil, "Loading reviews…")
+	end
+	local items: { Item } = {}
+	for _, item in hub.pending_items do
+		table.insert(items, {
+			label = { ui.span(item.kind .. "  ", "accent"), ui.span(item.agent .. "  ", "muted"), ui.span(string.match(item.body, "^[^\n]*") or "(empty)") },
+		})
+	end
+	local list = ui.list(items)
+	for i, item in hub.pending_items do
+		local node = (list.c :: { Node })[i]
+		node.p = node.p or {}
+		;(node.p :: any).key = item.id
+	end
+	local p: { [string]: any } = list.p or {}
+	p.key = "review"
+	p.selected = if state.review_cursor then REVIEW_ID .. state.review_cursor else nil
+	p.empty = { ui.span("No pending reviews.", "muted") }
+	p.max = { lines = math.max(4, math.floor((state.cx.rows - 4) * 0.72)) }
+	list.p = p
+	if hub.review_result then
+		return ui.col({ ui.text({ ui.span(hub.review_result, "success") }), list })
+	end
+	return list
+end
 
 local LIST_ID = "main.runs."
 
@@ -347,6 +469,9 @@ local function list_view(state: State): Node
 	local items: { Item } = {}
 	for _, run in runs do
 		local value: { Span | string } = {}
+		if run.step then
+			table.insert(value, ui.span("· " .. run.step .. "  ", "muted"))
+		end
 		if run.pr then
 			table.insert(value, ui.span("PR #" .. run.pr .. "  ", "info"))
 		end
@@ -397,6 +522,12 @@ local function detail_view(detail: any): Node
 			table.insert(rows, { k, tostring(run[k]) })
 		end
 	end
+	if run.status == "running" and type(run.progress) == "table" then
+		local step = progress_step(run.progress)
+		if step then
+			table.insert(rows, { "step", step })
+		end
+	end
 	if type(run.usage) == "table" and tonumber(run.usage.cost) then
 		table.insert(rows, { "cost", string.format("$%.3f", run.usage.cost) })
 	end
@@ -437,8 +568,10 @@ local function dock_view(state: State): Node
 	if hub.problem then
 		table.insert(lines, ui.text({ ui.span(hub.problem, "error") }))
 	end
-	if not state.detail then
-		table.insert(lines, ui.text({ ui.span("j/k move  ⏎ detail  r refresh", "dim") }))
+	if state.review then
+		table.insert(lines, ui.text({ ui.span("review: p close  a accept  x reject", "dim") }))
+	elseif not state.detail then
+		table.insert(lines, ui.text({ ui.span("j/k move  ⏎ detail  p reviews  r refresh", "dim") }))
 	end
 	return ui.col({ ui.lines(lines) })
 end
@@ -446,7 +579,10 @@ end
 tern.block.define("panel", {
 	init = function(cx: BlockCx, _args: { string }, _saved: any): State
 		local first = if hub.runs and hub.runs[1] then hub.runs[1].key else nil
-		local state: State = { cx = cx, cursor = first, detail = nil }
+		local state: State = {
+			cx = cx, cursor = first, detail = nil, review = false, review_cursor = nil,
+			review_detail = nil, confirm = nil,
+		}
 		blocks[cx.pane] = state
 		restart()
 		return state
@@ -456,6 +592,8 @@ tern.block.define("panel", {
 		local main: Node
 		if state.detail then
 			main = detail_view(state.detail)
+		elseif state.review then
+			main = pending_view(state)
 		elseif hub.runs then
 			main = list_view(state)
 		elseif hub.problem then
@@ -482,15 +620,61 @@ tern.block.define("panel", {
 			end
 			return true
 		end
+		if state.review then
+			if state.review_detail then
+				if k == "q" or key.name == "escape" then
+					state.review_detail = nil
+					state.confirm = nil
+				elseif k == "a" or k == "x" then
+					local decision = if k == "a" then "accept" else "reject"
+					if state.confirm == k then
+						decide(state, decision)
+					else
+						state.confirm = k
+					end
+				elseif k == "y" and state.confirm then
+					decide(state, if state.confirm == "a" then "accept" else "reject")
+				else
+					return false
+				end
+				return true
+			end
+			if k == "q" or key.name == "escape" then
+				state.review = false
+			elseif k == "r" then
+				load_pending(state)
+			else
+				local items: { Pending } = hub.pending_items or {}
+				local move = if key.name == "up" or k == "k" then -1 elseif key.name == "down" or k == "j" then 1 else 0
+				if move ~= 0 then
+					local item = items[math.clamp(pending_index(state) + move, 1, math.max(1, #items))]
+					if item then
+						state.review_cursor = item.id
+					end
+				elseif key.name == "enter" and state.review_cursor then
+					for _, item in items do
+						if item.id == state.review_cursor then
+							state.review_detail = item
+							break
+						end
+					end
+				else
+					return false
+				end
+			end
+			return true
+		end
 		local runs = hub.runs or {}
-		local step = if key.name == "up" or k == "k" then -1 elseif key.name == "down" or k == "j" then 1 else 0
-		if step ~= 0 then
-			local run = runs[math.clamp(index_of(state) + step, 1, math.max(1, #runs))]
+		local move = if key.name == "up" or k == "k" then -1 elseif key.name == "down" or k == "j" then 1 else 0
+		if move ~= 0 then
+			local run = runs[math.clamp(index_of(state) + move, 1, math.max(1, #runs))]
 			if run then
 				state.cursor = run.key
 			end
 		elseif key.name == "enter" and state.cursor then
 			show_detail(state, state.cursor)
+		elseif k == "p" then
+			load_pending(state)
 		elseif k == "r" then
 			restart()
 		else
@@ -501,7 +685,22 @@ tern.block.define("panel", {
 
 	-- Mouse: clicking a row selects it, double-click opens its detail.
 	event = function(state: State, ev: UiEvent, _cx: BlockCx)
-		if (ev.ev == "select" or ev.ev == "activate") and type(ev.item) == "string" then
+		if (ev.ev ~= "select" and ev.ev ~= "activate") or type(ev.item) ~= "string" then
+			return
+		end
+		if state.review and not state.review_detail and string.sub(ev.item, 1, #REVIEW_ID) == REVIEW_ID then
+			state.review_cursor = string.sub(ev.item, #REVIEW_ID + 1)
+			if ev.ev == "activate" then
+				for _, item in hub.pending_items or {} :: { Pending } do
+					if item.id == state.review_cursor then
+						state.review_detail = item
+						break
+					end
+				end
+			end
+			return
+		end
+		if not state.review and string.sub(ev.item, 1, #LIST_ID) == LIST_ID then
 			state.cursor = string.sub(ev.item, #LIST_ID + 1)
 			if ev.ev == "activate" then
 				show_detail(state, state.cursor :: string)
