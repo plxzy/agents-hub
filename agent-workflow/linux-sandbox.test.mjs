@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { linuxPolicy, sandboxArgs, sandboxExecute } from './linux-sandbox.mjs';
+import { inside, linuxPolicy, sandboxArgs, sandboxExecute } from './linux-sandbox.mjs';
 
 test('sandbox mount policy rejects writable tool/runtime roots', () => {
   const p = { workspace: '/home/project', release: '/home/release', runtime: '/home/runtime', sdk: '/home/runtime/index.js', protected: [] };
@@ -25,6 +25,23 @@ test('read-only runs mount the workspace read-only and refuse write tools', () =
   assert.ok(!args.some((a, i) => a === '--bind' && args[i + 1] === '/home/project'));
   assert.throws(() => sandboxExecute(p, 'write', { path: 'x', content: 'y' }), /Read-only run/);
   assert.throws(() => sandboxExecute(p, 'edit', { path: 'x', edits: [] }), /Read-only run/);
+});
+
+test('the sandbox mounts a frozen synthetic passwd identity', () => {
+  const policy = { workspace: '/workspace', release: '/release/abc', runtime: '/runtime', sdk: '/runtime/dist/index.js', protected: [] };
+  const args = sandboxArgs(policy);
+  for (const target of ['/etc/passwd', '/etc/group']) {
+    const at = args.indexOf(target);
+    assert.ok(at > 1, `${target} mounted`);
+    assert.equal(args[at - 2], '--ro-bind');
+    const mounted = args[at - 1];
+    assert.ok(mounted.startsWith(policy.release + path.sep), 'identity comes from the frozen release');
+    assert.ok(!inside(policy.workspace, mounted), 'identity is not workspace-writable');
+  }
+  const mounts = args.flatMap((a, i) => (a === '--ro-bind' || a === '--bind') && args[i + 2] ? [[args[i + 1], args[i + 2]]] : []);
+  assert.ok(!mounts.some(([, target]) => target === '/etc'), 'whole host /etc must not be mounted');
+  assert.ok(!mounts.some(([source]) => source === '/etc/passwd' || source === '/etc/group'), 'host passwd/group is never the source');
+  assert.ok(args.includes('/home/agent'), 'the home the passwd entry records exists');
 });
 
 test('restored Python dependencies join the sandbox PYTHONPATH', () => {
@@ -48,6 +65,15 @@ test('real Linux tools isolate secrets, protect files, support loopback and kill
   const write = await sandboxExecute(p, 'write', { path: 'file.txt', content: 'hello' });
   assert.ok(write.content);
   assert.match(JSON.stringify(await sandboxExecute(p, 'read', { path: 'file.txt' })), /hello/);
+  // The sandbox uid resolves to a user and a home even when HOME is unset.
+  const identity = await sandboxExecute(p, 'bash', { command:
+    `env -u HOME python3 -c 'import getpass, os, pathlib, pwd`
+    + `; uid = os.geteuid()`
+    + `; entry = pwd.getpwuid(uid)`
+    + `; assert entry.pw_dir and os.path.isdir(entry.pw_dir)`
+    + `; assert pathlib.Path.home().as_posix() == entry.pw_dir`
+    + `; print("IDENTITY_OK", getpass.getuser(), uid, entry.pw_dir)'` });
+  assert.match(JSON.stringify(identity), /IDENTITY_OK/);
   await assert.rejects(sandboxExecute(p, 'read', { path: secret }));
   await assert.rejects(sandboxExecute(p, 'read', { path: 'escape' }));
   await assert.rejects(sandboxExecute(p, 'write', { path: 'protected', content: 'changed' }));
@@ -84,7 +110,7 @@ test('real Linux tools isolate secrets, protect files, support loopback and kill
   const ticking = `setsid node -e 'const fs=require("fs");setInterval(()=>fs.appendFileSync("crash-ticks","x"),40)' & wait`;
   fs.writeFileSync(worker, `import {sandboxExecute} from ${JSON.stringify(new URL('./linux-sandbox.mjs', import.meta.url).href)}; await sandboxExecute(${JSON.stringify(p)},'bash',${JSON.stringify({command:ticking})});`);
   const supervisor = spawn(process.execPath, ['--input-type=module', '-e',
-    `import {spawn} from 'node:child_process'; spawn('/usr/bin/python3',[${JSON.stringify(helper)},String(process.pid),${JSON.stringify(process.execPath)},${JSON.stringify(worker)}],{stdio:'ignore'});setInterval(()=>{},1000);`], { stdio: 'ignore' });
+    `import {spawn} from 'node:child_process'; spawn('/usr/bin/python3.debian',[${JSON.stringify(helper)},String(process.pid),${JSON.stringify(process.execPath)},${JSON.stringify(worker)}],{stdio:'ignore'});setInterval(()=>{},1000);`], { stdio: 'ignore' });
   try {
     for (let n=0;n<100&&!fs.existsSync(crashTicks);n++) await new Promise(r=>setTimeout(r,100));
     assert.ok(fs.existsSync(crashTicks), 'detached crash-test descendant started');

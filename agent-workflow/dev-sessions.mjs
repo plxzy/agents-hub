@@ -214,7 +214,7 @@ export class DevelopmentSessions extends RecoveryHost {
       const run_id = randomUUID(), file = path.join(this.state, 'runs', run_id + '.json');
       const receipt = { run_id, grant_id, conversation_id, manifest: config.manifest, status: 'running', started_at: Date.now() };
       save(file, receipt); save(requestFile, { fingerprint, run_id });
-      const child = spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), path.join(this.state, 'conversations', conversation_id, 'config.json')],
+      const child = spawn('/usr/bin/python3.debian', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), path.join(this.state, 'conversations', conversation_id, 'config.json')],
         { cwd: source, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
       this.active = { child, run_id, grant_id };
       let stopped = false, output = '', bytes = 0, failure, killTimer, renewing = false, diskChecking = false;
@@ -564,7 +564,7 @@ export class DevelopmentSessions extends RecoveryHost {
       save(path.join(recoveryDir, 'setup.json'), { schema: 1, revision: this.revision, agent, runtime, receipt, config, baseCommit, commit, attempt: 0 });
       }
       if (entry?.stopped) throw new Error(entry.stopped);
-      const child = io.spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), configFile],
+      const child = io.spawn('/usr/bin/python3.debian', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath, path.join(source, 'dev-session-worker.mjs'), configFile],
         { cwd: source, stdio: ['pipe', 'pipe', 'pipe', 'ipc'], env: { HOME: os.homedir(), PATH: process.env.PATH, LANG: 'C.UTF-8' } });
       let stopped = false;
       const stop = reason => {

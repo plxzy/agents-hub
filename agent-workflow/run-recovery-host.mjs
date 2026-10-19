@@ -223,7 +223,7 @@ export class RecoveryHost {
       const uncertain = Object.values(recovery.checkpoint.tools).filter(t => t.state === 'started').map(t => t.name);
       const prompt = `Read-only recovery inspection. The original task was: ${receipt.task}\nA crash interrupted these tools: ${uncertain.join(', ')}. Inspect relevant saved files and propose how to continue from their current state. Do not claim a command completed without evidence. Do not execute changes. Keep the report under 8000 characters.`;
       const output = await new Promise((resolve, reject) => {
-        const child = spawn('/usr/bin/python3', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath,
+        const child = spawn('/usr/bin/python3.debian', [path.join(source, 'parent-exec.py'), String(process.pid), process.execPath,
           path.join(source, 'dev-session-worker.mjs'), path.join(base, 'config.json')], { stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
         let out = '';
         const timer = setTimeout(() => child.kill('SIGKILL'), 120000);

@@ -1,5 +1,8 @@
-#!/usr/bin/python3
-"""Kernel-enforced termination when the trusted supervisor disappears."""
+#!/usr/bin/python3.debian
+"""Kernel-enforced termination when the trusted supervisor disappears.
+
+Debian's interpreter, never the sandbox's pinned build: /usr/bin/python3 is diverted to the
+agent-visible CPython 3.14.8, and this supervisor path must survive independent of that build."""
 import ctypes
 import os
 import signal

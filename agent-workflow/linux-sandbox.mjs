@@ -8,8 +8,25 @@ const source = path.dirname(fileURLToPath(import.meta.url));
 const names = ['linux-sandbox.mjs', 'linux-worker.mjs', 'linux-tools.ts'];
 export const inside = (root, target) => target === root || target.startsWith(root + path.sep);
 
+// A bwrap sandbox has an empty root: nothing defines /etc/passwd, so the sandbox UID fails
+// pwd.getpwuid()/os.path.expanduser('~')/getpass.getuser(). bwrap always maps one unprivileged
+// uid:gid pair (0:0 without --unshare-user, else 65534:65534), so one frozen synthetic identity
+// answers both, the same shape as the writable /tmp/home below. The identity is frozen in the
+// release (the hash covers it) rather than exposing host /etc/passwd or its hashes. /home/agent
+// is only the value the passwd entry records: nothing is mounted there.
+export const SANDBOX_IDENTITY = {
+  // euid is 65534 under --unshare-all's user namespace, 0 when the host user is root (e.g. local
+  // acceptance containers). Both entries point at the synthetic homes so neither resolution throws.
+  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\nsandbox:x:65534:65534:Linux workflow sandbox:/home/agent:/bin/sh\n',
+  '/etc/group': 'root:x:0:\nsandbox:x:65534:\n',
+};
+const identityNames = Object.keys(SANDBOX_IDENTITY).sort();
+
 export function freezeLinuxTools(state) {
-  const files = names.map(name => [name, fs.readFileSync(path.join(source, name))]);
+  const files = [
+    ...names.map(name => [name, fs.readFileSync(path.join(source, name))]),
+    ...identityNames.map(name => [path.join('sandbox-identity', path.basename(name)), Buffer.from(SANDBOX_IDENTITY[name])]),
+  ];
   const revision = createHash('sha256').update(Buffer.concat(files.flatMap(([n, b]) => [Buffer.from(n + '\0'), b]))).digest('hex');
   const dir = path.join(state, 'tool-releases', revision);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -73,6 +90,9 @@ export function sandboxArgs(policy) {
     '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
     // A fresh procfs belongs to --unshare-all's PID namespace; never bind the host's /proc.
     '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--dir', '/tmp/home',
+    // The home the passwd entry records for stripped-environment lookups (HOME=/tmp/home wins when set).
+    '--dir', '/home/agent',
+    ...identityNames.flatMap(name => ['--ro-bind', path.join(policy.release, 'sandbox-identity', path.basename(name)), name]),
     policy.readonly_workspace ? '--ro-bind' : '--bind', policy.workspace, policy.workspace,
     '--ro-bind', policy.release, policy.release, '--ro-bind', policy.runtime, policy.runtime,
     ...(policy.readonly ?? []).flatMap(p => ['--ro-bind', p, p]),

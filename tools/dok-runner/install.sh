@@ -13,7 +13,7 @@ if test -n "$(docker ps -q --filter name=^agents$)"; then
 fi
 cd "$(dirname "$0")"
 # Read through the selected image, including first installs and rollbacks, rather than an obsolete image tag.
-knowledge=${2:-$(docker compose run --rm --no-deps --interactive=false -T --entrypoint python3 runner -c 'import json, os; print(os.path.basename(json.load(open("/home/agent/.config/agent-workflow/dok.json"))["knowledge"]))')}
+knowledge=${2:-$(docker compose run --rm --no-deps --interactive=false -T --entrypoint /usr/bin/python3.debian runner -c 'import json, os; print(os.path.basename(json.load(open("/home/agent/.config/agent-workflow/dok.json"))["knowledge"]))')}
 docker compose run --rm --no-deps --interactive=false --entrypoint bash runner -lc "set -e
   R=/home/agent/repos/agents-hub.git; T=\$(mktemp)
   test -d \$R || git init -q --bare \$R
@@ -21,7 +21,7 @@ docker compose run --rm --no-deps --interactive=false --entrypoint bash runner -
   git --git-dir=\$R show $rev:tools/dok-dev/install-workflow.sh > \$T
   bash \$T \$R /home/agent/.local/share/agent-workflow/knowledge/$knowledge $rev /home/agent/.local/share/agent-workflow/context/current
   rm \$T
-  python3 - <<'PY'
+  /usr/bin/python3.debian - <<'PY'
 import json, os, subprocess
 p = '/home/agent/.config/agent-workflow/dok.json'
 c = json.load(open(p))

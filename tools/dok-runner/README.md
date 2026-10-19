@@ -11,19 +11,29 @@ image. It contains npm 12.2.0, Pi 1.3.0 (from the lockfile), bubblewrap, Git, Py
 and tini. It has no standalone `codex` executable, SSH daemon or editor. The image strips Pi's unused OpenAI Codex
 provider and OAuth/API modules; the ordinary OpenAI provider remains.
 
-Two Pythons live in the image. The one agents get is a pinned CPython **3.14.8**, compiled from the checksum-verified
-python.org source tarball and installed under `/opt/python`; `/usr/local/bin/python3` links to it, and the sandbox
-PATH starts with `/home/agent/.local/bin:/usr/local/bin`. Debian's python3.13 stays at `/usr/bin/python3` for the
-runner's own scripts (`parent-exec.py`, the installer's JSON step) and is second on the sandbox PATH. A writable run
-also restores hashed Python requirements the same way it restores npm lockfiles: before the agent starts, the
-supervisor downloads every pinned artifact from PyPI for each `python-requirements.txt` / `requirements.txt` /
-`requirements-dev.txt` (repository root, `.devcontainer` and other directories up to two levels deep), verifies the
-bytes against every `--hash` in the file, caches them by requirements hash, and the no-network sandbox installs them
-with `python3 -m pip install --no-index --require-hashes` into `<dir>/.deps-python` (kept out of the review commit via
-`.git/info/exclude`). The sandbox policy points `PYTHONPATH` at every restored `.deps-python` near the repository root,
-so `python3 -m yt_dlp --version` and test suites import the pinned wheels with no per-repo wiring; the outcome shows on
-the run's dependency restore section next to the npm results, with skipped files carrying a path-free reason (unpinned
-lines, missing hashes, non-PyPI sources all skip rather than fail the run).
+Two Pythons live in the image. The one agents get is a pinned CPython **3.14.8**, compiled from the
+checksum-verified python.org source tarball and installed under `/opt/python`; it serves **every** agent-visible
+`python3`, including suites that reset `PATH` to `/usr/bin:/bin`: the image diverts Debian's `python3` binary to
+`/usr/bin/python3.debian` and points `/usr/bin/python3` into `/opt/python`, so the pinned build wins ahead of
+`/usr/local/bin` either way a stripped PATH is ordered. Debian's python3.13 remains only at
+`/usr/bin/python3.debian` for the runner's internals (`parent-exec.py`, the installer's JSON step) that must keep
+running on the interpreter the base image manages, independent of the pinned build. The sandbox PATH still starts
+with `/home/agent/.local/bin:/usr/local/bin`. `ffmpeg`/`ffprobe` come from Debian's `ffmpeg` package (Trixie
+7.1.x), the same codec tools tikkytracker's devcontainer installs; the runner does not compile a pinned ffmpeg.
+Because bubblewrap runs with an empty root, the tool sandbox itself pins a frozen synthetic `sandbox` passwd/group
+entry (kept in the frozen tool release next to `linux-worker.mjs`) onto `/etc/passwd` instead of exposing host
+`/etc/passwd`: it covers both user-namespace uid mappings (0 and 65534), records a home directory, and lets
+`pwd.getpwuid`, `os.path.expanduser('~')` and `getpass.getuser()` answer even when a suite strips `HOME`. A
+writable run also restores hashed Python requirements the same way it restores npm lockfiles: before the agent
+starts, the supervisor downloads every pinned artifact from PyPI for each `python-requirements.txt` /
+`requirements.txt` / `requirements-dev.txt` (repository root, `.devcontainer` and other directories up to two
+levels deep), verifies the bytes against every `--hash` in the file, caches them by requirements hash, and the
+no-network sandbox installs them with `python3 -m pip install --no-index --require-hashes` into
+`<dir>/.deps-python` (kept out of the review commit via `.git/info/exclude`). The sandbox policy points `PYTHONPATH`
+at every restored `.deps-python` near the repository root, so `python3 -m yt_dlp --version` and test suites import
+the pinned wheels with no per-repo wiring; the outcome shows on the run's dependency restore section next to the
+npm results, with skipped files carrying a path-free reason (unpinned lines, missing hashes, non-PyPI sources all
+skip rather than fail the run).
 
 Private Pi extensions are not part of this repo. Compose passes the folder named by `AGENTS_EXTENSIONS` (in
 `~/agents-runner/.env`; default the empty `./extensions`) as the `extensions` build context, and the image copies it to

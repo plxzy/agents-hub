@@ -16,18 +16,25 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 FROM node:26.12.0-trixie-slim@sha256:0d1e33586362bb9e608c4e751e7a9e7edb55c9ac11461ed5666af696cc461dd4
 COPY --from=python-build /opt/python /opt/python
 RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap git python3 ca-certificates tini procps mawk \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap git python3 ca-certificates tini procps mawk ffmpeg \
     # The sandbox mounts /usr, but not the host's /etc/alternatives tree.
     && ln -s /usr/bin/mawk /usr/local/bin/awk \
-    # The agent's python3 is the pinned build under /opt/python (the sandbox PATH starts with /usr/local/bin);
-    # Debian's python3.13 stays at /usr/bin/python3 for the supervisor's internal /usr/bin/python3 calls.
+    # Every agent python3 resolves to the pinned 3.14.8 build, including suites that reset
+    # PATH to /usr/bin:/bin: divert Debian's interpreter so /usr/bin/python3 points into
+    # /opt/python (it wins ahead of /usr/local/bin either way a stripped PATH is ordered).
+    && dpkg-divert --rename --divert /usr/bin/python3.debian /usr/bin/python3 \
+    && ln -s /opt/python/bin/python3.14 /usr/bin/python3 \
     && ln -s /opt/python/bin/python3.14 /usr/local/bin/python3 \
     && ln -s /opt/python/bin/python3.14 /usr/local/bin/python3.14 \
     && rm -rf /var/lib/apt/lists/* \
     && usermod -l agent -d /home/agent -m node && groupmod -n agent node
+# Runner internals that must keep running on Debian's interpreter use /usr/bin/python3.debian.
 RUN test "$(python3 --version)" = 'Python 3.14.8' \
+    && test "$(/usr/bin/python3 --version)" = 'Python 3.14.8' \
+    && test "$(env -i PATH=/usr/bin:/bin python3 --version)" = 'Python 3.14.8' \
+    && test "$(/usr/bin/python3.debian --version)" != 'Python 3.14.8' \
     && python3 -c 'import bz2, ctypes, hashlib, lzma, readline, socket, sqlite3, ssl, uuid, venv' \
-    && test "$(/usr/bin/python3 --version)" != "$(python3 --version)"
+    && ffmpeg -version | head -1 && ffprobe -version | head -1
 # npm is pinned independently of the Node image.
 RUN npm install --global npm@12.2.0 --ignore-scripts --no-audit --no-fund && npm cache clean --force
 # Pi is pinned by its lockfile (registry integrity); lifecycle scripts never run.
