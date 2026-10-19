@@ -8,17 +8,22 @@ const source = path.dirname(fileURLToPath(import.meta.url));
 const names = ['linux-sandbox.mjs', 'linux-worker.mjs', 'linux-tools.ts'];
 export const inside = (root, target) => target === root || target.startsWith(root + path.sep);
 
-// A bwrap sandbox has an empty root: nothing defines /etc/passwd, so the sandbox UID fails
-// pwd.getpwuid()/os.path.expanduser('~')/getpass.getuser(). bwrap always maps one unprivileged
-// uid:gid pair (0:0 without --unshare-user, else 65534:65534), so one frozen synthetic identity
-// answers both, the same shape as the writable /tmp/home below. The identity is frozen in the
-// release (the hash covers it) rather than exposing host /etc/passwd or its hashes. /home/agent
-// is only the value the passwd entry records: nothing is mounted there.
+// A bwrap sandbox has an empty root: nothing defines /etc/passwd, so the sandbox uid fails
+// pwd.getpwuid()/os.path.expanduser('~')/getpass.getuser(). bwrap maps the invoking uid:gid
+// one-to-one into its user namespace (1000:1000 for the runner's `agent` user uid on dok; uid 0
+// when invoked as root, e.g. local acceptance containers), so the table names each mapping the
+// policy can produce under the same synthetic identity. The identity is frozen in the release
+// (the hash covers it) rather than exposing host /etc/passwd or its hashes. /home/agent is only
+// the directory the passwd entry records; nothing is mounted there.
 export const SANDBOX_IDENTITY = {
-  // euid is 65534 under --unshare-all's user namespace, 0 when the host user is root (e.g. local
-  // acceptance containers). Both entries point at the synthetic homes so neither resolution throws.
-  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\nsandbox:x:65534:65534:Linux workflow sandbox:/home/agent:/bin/sh\n',
-  '/etc/group': 'root:x:0:\nsandbox:x:65534:\n',
+  // uid 0: acceptance containers invoke bwrap as root. uid 1000: dok's `agent` container user (bwrap maps
+  // the invoking uid into its user namespace unchanged). 65534 is a defensive fallback. Both real runners
+  // land on the `sandbox` record, so `getpass.getuser()`, `pwd.getpwuid()` and `expanduser('~')` resolve
+  // to the same user regardless of which mapping a suite happens to run under.
+  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\n'
+    + 'sandbox:x:1000:1000:Linux workflow sandbox:/home/agent:/bin/sh\n'
+    + 'nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n',
+  '/etc/group': 'root:x:0:\nsandbox:x:1000:\nnogroup:x:65534:\n',
 };
 const identityNames = Object.keys(SANDBOX_IDENTITY).sort();
 
@@ -86,7 +91,10 @@ export function sandboxArgs(policy) {
   for (const key of ['workspace', 'release', 'runtime', 'sdk']) if (!path.isAbsolute(policy[key] ?? '')) throw new Error('Invalid sandbox path');
   if (inside(policy.workspace, policy.release) || inside(policy.workspace, policy.runtime)) throw new Error('Writable trusted runtime');
   return ['--unshare-all', '--die-with-parent', '--new-session', '--clearenv',
-    '--ro-bind', '/usr', '/usr', '--ro-bind', '/opt', '/opt',
+    '--ro-bind', '/usr', '/usr', '--ro-bind', '/opt', '/opt', '--ro-bind', '/usr/lib', '/usr/lib',
+    // ffmpeg's libraries resolve through Debian's /etc/alternatives; the bwrap root has no /etc.
+    // Mount the symlink tree only (20 links into /usr/lib), never the whole /etc.
+    '--ro-bind', '/etc/alternatives', '/etc/alternatives',
     '--symlink', 'usr/bin', '/bin', '--symlink', 'usr/lib', '/lib', '--symlink', 'usr/lib64', '/lib64',
     // A fresh procfs belongs to --unshare-all's PID namespace; never bind the host's /proc.
     '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp', '--dir', '/tmp/home',
